@@ -1,0 +1,1 @@
+console.log('Mercado Favalessa ERP v4.0.0 Alpha');
