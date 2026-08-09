@@ -1,24 +1,6 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
-
-// saldo = valor - total pago; quitado exige pagamento registrado (total_pago > 0), nunca
-// só por saldo <= 0 — um lançamento de valor zero/negativo sem baixa não pode ser tratado
-// como quitado nem sumir da listagem.
-const SELECT_CONTAS_COM_SALDO = `
-  SELECT
-    c.*,
-    f.nome AS fornecedor_nome,
-    COALESCE(p.total_pago, 0) AS total_pago,
-    c.valor - COALESCE(p.total_pago, 0) AS saldo,
-    (COALESCE(p.total_pago, 0) > 0 AND c.valor - COALESCE(p.total_pago, 0) <= 0) AS quitado
-  FROM contas c
-  LEFT JOIN fornecedores f ON f.id = c.fornecedor_id
-  LEFT JOIN (
-    SELECT conta_id, SUM(valor) AS total_pago
-    FROM contas_pagamentos
-    GROUP BY conta_id
-  ) p ON p.conta_id = c.id
-`;
+const { SELECT_CONTAS_COM_SALDO } = require('../db/contasQuery');
 
 async function listar(req, res) {
   const { status } = req.query; // 'pendente' | 'quitado' (opcional)

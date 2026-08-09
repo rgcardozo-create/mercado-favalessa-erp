@@ -7,6 +7,8 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - Autenticação com JWT (login por usuário/senha, sem mais senha única).
 - 3 perfis: `master`, `gerente`, `loja`.
 - Fornecedores e Contas a pagar (cadastro de boleto) com pagamentos parciais (baixas) em tabela filha.
+- Painel do dia (vencidas / vencem hoje / próximos 7 dias), só para Master e Gerente.
+- Importação do backup JSON da v3.
 - Auditoria básica (quem cadastrou/editou/pagou o quê e quando).
 
 ## Regras de permissão implementadas
@@ -17,6 +19,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 | Cadastrar fornecedor / boleto | ✅ | ✅ | ✅ |
 | Editar / excluir conta | ✅ | ✅ | ❌ |
 | Registrar pagamento (baixa) | ✅ | ✅ | ❌ |
+| Ver o Painel do dia | ✅ | ✅ | ❌ |
 
 > Assunção adotada para esta primeira versão: o login "Loja" pode cadastrar boletos mas não dar baixa nem editar/excluir, seguindo a frase da spec "cadastro de boleto pelos funcionários, pagamento só por quem tem permissão". Isso é exatamente um dos "itens em aberto" do `SPEC.md` (seção 6) — ajuste fácil em `src/routes/contas.routes.js` caso a decisão final seja outra (ex: Loja no mesmo nível de Gerente em tudo).
 
@@ -61,6 +64,9 @@ Detalhes de como o backup é interpretado:
 - `POST /api/contas` — cadastra uma conta/boleto
 - `PUT /api/contas/:id` / `DELETE /api/contas/:id`
 - `POST /api/contas/:id/pagamentos` — registra uma baixa (parcial ou total)
+- `GET /api/painel-do-dia` — vencidas, vencem hoje e próximos 7 dias, com totais (Master/Gerente)
+
+O "hoje" do painel é calculado no fuso `America/Sao_Paulo` dentro do banco, não no fuso do servidor — o Railway roda em UTC, e depois das 21h de Brasília a data viraria antes da hora.
 
 Todas as rotas exigem `Authorization: Bearer <token>`, exceto `/api/auth/login` e `/api/health`.
 
@@ -71,6 +77,10 @@ Todas as rotas exigem `Authorization: Bearer <token>`, exceto `/api/auth/login` 
 3. Configurar as variáveis de ambiente do `.env.example` no serviço.
 4. Rodar `npm run migrate` e `npm run seed` uma vez (via Railway shell ou job) para inicializar o banco.
 
-## O que falta para fechar a Fase 1 (ver `SPEC.md`)
+## Fase 1 — concluída
 
-- Painel do dia (dashboard de contas vencendo).
+Backend, autenticação com os 3 perfis, Fornecedores/Contas a pagar, Painel do dia e importação do backup estão prontos e testados com os dados reais.
+
+Falta antes de usar em produção: subir no Railway (banco + serviço), definir as senhas reais dos 3 usuários e rodar a importação do backup mais recente. Conforme o `SPEC.md`, o sistema HTML atual deve seguir rodando em paralelo até a Fase 1 estar validada em uso real.
+
+Próximas fases (ver seção 5 do `SPEC.md`): Despesas fixas, Impostos, Outras despesas, Conciliação e Acumulado (Fase 2).

@@ -55,6 +55,28 @@ button.ativo { background: #059669; }
 .badge.quitado { background: #059669; }
 .badge.pendente { background: #DC2626; }
 
+/* Abas */
+.abas { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #2a2a2a; padding-bottom: 12px; }
+.abas button { background: #242424; }
+.abas button.ativo { background: #2563eb; }
+
+/* Painel do dia */
+.cartoes-resumo { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.cartao-resumo { background: #1f1f1f; padding: 16px; border-radius: 10px; border-left: 4px solid #333; display: flex; flex-direction: column; gap: 4px; }
+.cartao-resumo .rotulo { color: #999; font-size: 12px; text-transform: uppercase; }
+.cartao-resumo strong { font-size: 22px; }
+.cartao-resumo small { color: #777; font-size: 12px; }
+.cartao-resumo.vencidas { border-left-color: #DC2626; }
+.cartao-resumo.hoje { border-left-color: #f59e0b; }
+.cartao-resumo.proximos { border-left-color: #059669; }
+
+.grupo-painel { margin-bottom: 24px; }
+.grupo-cabecalho { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.grupo-cabecalho h2 { font-size: 16px; margin: 0; }
+.grupo-total { color: #ccc; font-size: 14px; }
+.grupo-total small { color: #777; }
+.vazio { color: #777; font-size: 14px; background: #1f1f1f; padding: 12px; border-radius: 8px; margin: 0; }
+
 .alerta { padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 14px; }
 .alerta.erro { background: #3b1414; border: 1px solid #DC2626; color: #fecaca; }
 

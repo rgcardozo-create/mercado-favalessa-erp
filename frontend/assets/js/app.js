@@ -3,8 +3,10 @@ import { brl, dateBR, todayISO } from './helpers.js';
 
 const state = {
   sessao: getSessao(),
+  tab: 'painel',
   contas: [],
   fornecedores: [],
+  painel: null,
   statusFiltro: '',
   carregando: false,
   erro: null,
@@ -18,18 +20,32 @@ function podeGerenciar() {
   return state.sessao && state.sessao.usuario.role !== 'loja';
 }
 
+// Painel do dia é só para Master e Gerente. O backend também bloqueia — esconder
+// a aba aqui é conveniência, não a regra de segurança.
+function podeVerPainel() {
+  return podeGerenciar();
+}
+
+function abaInicial() {
+  return podeVerPainel() ? 'painel' : 'contas';
+}
+
 async function carregarDados() {
   state.carregando = true;
   state.erro = null;
   render();
   try {
-    const query = state.statusFiltro ? `?status=${state.statusFiltro}` : '';
-    const [contas, fornecedores] = await Promise.all([
-      apiFetch(`/contas${query}`),
-      apiFetch('/fornecedores'),
-    ]);
-    state.contas = contas;
-    state.fornecedores = fornecedores;
+    if (state.tab === 'painel') {
+      state.painel = await apiFetch('/painel-do-dia');
+    } else {
+      const query = state.statusFiltro ? `?status=${state.statusFiltro}` : '';
+      const [contas, fornecedores] = await Promise.all([
+        apiFetch(`/contas${query}`),
+        apiFetch('/fornecedores'),
+      ]);
+      state.contas = contas;
+      state.fornecedores = fornecedores;
+    }
   } catch (err) {
     state.erro = err.message;
   } finally {
@@ -97,20 +113,98 @@ function linhaConta(conta) {
   `;
 }
 
-function contasHTML() {
+function cabecalhoHTML(titulo) {
   const { usuario } = state.sessao;
-  const podeGerir = podeGerenciar();
-
   return `
     <div class="topo">
       <div>
-        <h1>Contas a pagar &middot; Fornecedores</h1>
+        <h1>${titulo}</h1>
         <p class="usuario-atual">${usuario.nome} <span class="badge role">${usuario.role}</span></p>
       </div>
       <button id="btn-logout">Sair</button>
     </div>
 
+    <nav class="abas">
+      ${podeVerPainel() ? `<button data-tab="painel" class="${state.tab === 'painel' ? 'ativo' : ''}">Painel do dia</button>` : ''}
+      <button data-tab="contas" class="${state.tab === 'contas' ? 'ativo' : ''}">Contas a pagar</button>
+    </nav>
+
     ${state.erro ? `<div class="alerta erro">${state.erro}</div>` : ''}
+  `;
+}
+
+function grupoPainelHTML(titulo, contas, total, classe) {
+  return `
+    <section class="grupo-painel ${classe}">
+      <div class="grupo-cabecalho">
+        <h2>${titulo}</h2>
+        <span class="grupo-total">${brl(total)} <small>em ${contas.length} conta(s)</small></span>
+      </div>
+      ${
+        contas.length
+          ? `<table class="tabela-contas">
+              <thead><tr><th>Fornecedor</th><th>Descrição</th><th>Vencimento</th><th>Valor</th><th>Saldo</th></tr></thead>
+              <tbody>
+                ${contas
+                  .map(
+                    (c) => `<tr>
+                      <td>${c.fornecedor_nome || '—'}</td>
+                      <td>${c.descricao}</td>
+                      <td>${dateBR(c.vencimento)}</td>
+                      <td>${brl(c.valor)}</td>
+                      <td>${brl(c.saldo)}</td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>`
+          : '<p class="vazio">Nada aqui.</p>'
+      }
+    </section>
+  `;
+}
+
+function painelHTML() {
+  const cabecalho = cabecalhoHTML('Painel do dia');
+
+  if (!state.painel) {
+    return `${cabecalho}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+  }
+
+  const p = state.painel;
+  return `
+    ${cabecalho}
+    <p class="usuario-atual">Referência: ${dateBR(p.hoje)}</p>
+
+    <div class="cartoes-resumo">
+      <div class="cartao-resumo vencidas">
+        <span class="rotulo">Vencidas</span>
+        <strong>${brl(p.totais.vencidas)}</strong>
+        <small>${p.vencidas.length} conta(s)</small>
+      </div>
+      <div class="cartao-resumo hoje">
+        <span class="rotulo">Vencem hoje</span>
+        <strong>${brl(p.totais.vencem_hoje)}</strong>
+        <small>${p.vencem_hoje.length} conta(s)</small>
+      </div>
+      <div class="cartao-resumo proximos">
+        <span class="rotulo">Próximos 7 dias</span>
+        <strong>${brl(p.totais.proximos_7_dias)}</strong>
+        <small>${p.proximos_7_dias.length} conta(s)</small>
+      </div>
+    </div>
+
+    ${grupoPainelHTML('Vencidas', p.vencidas, p.totais.vencidas, 'vencidas')}
+    ${grupoPainelHTML('Vencem hoje', p.vencem_hoje, p.totais.vencem_hoje, 'hoje')}
+    ${grupoPainelHTML('Próximos 7 dias', p.proximos_7_dias, p.totais.proximos_7_dias, 'proximos')}
+  `;
+}
+
+function contasHTML() {
+  const podeGerir = podeGerenciar();
+
+  return `
+    ${cabecalhoHTML('Contas a pagar &middot; Fornecedores')}
 
     <section class="cartoes-form">
       <form data-action="novo-fornecedor" class="form-inline">
@@ -160,8 +254,13 @@ function contasHTML() {
   `;
 }
 
+function telaHTML() {
+  if (!state.sessao) return loginHTML();
+  return state.tab === 'painel' && podeVerPainel() ? painelHTML() : contasHTML();
+}
+
 function render() {
-  root.innerHTML = state.sessao ? contasHTML() : loginHTML();
+  root.innerHTML = telaHTML();
   bind();
 }
 
@@ -176,7 +275,17 @@ function bind() {
     state.sessao = null;
     state.contas = [];
     state.fornecedores = [];
+    state.painel = null;
     render();
+  });
+
+  root.querySelectorAll('[data-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (state.tab === btn.dataset.tab) return;
+      state.tab = btn.dataset.tab;
+      state.baixaAbertaId = null;
+      carregarDados();
+    });
   });
 
   root.querySelectorAll('[data-status]').forEach((btn) => {
@@ -220,6 +329,7 @@ async function onLogin(ev) {
     salvarSessao(token, usuario);
     state.sessao = { token, usuario };
     state.loginErro = null;
+    state.tab = abaInicial();
     render();
     carregarDados();
   } catch (err) {
@@ -295,5 +405,10 @@ async function onExcluir(id) {
   }
 }
 
-render();
-if (state.sessao) carregarDados();
+if (state.sessao) {
+  state.tab = abaInicial();
+  render();
+  carregarDados();
+} else {
+  render();
+}

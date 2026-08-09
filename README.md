@@ -9,4 +9,6 @@ Sistema multiusuário em nuvem do Mercado Favalessa, substituindo a versão sing
 
 ## Status
 
-Fase 1 em andamento: autenticação com 3 perfis (Master/Gerente/Loja) e Fornecedores/Contas a pagar completos no backend. Próximos passos em `backend/README.md` e na seção 5 do `SPEC.md`.
+**Fase 1 concluída**: autenticação com 3 perfis (Master/Gerente/Loja), Fornecedores e Contas a pagar com baixas parciais, Painel do dia (Master/Gerente) e importação do backup JSON da v3 — validada com os dados reais.
+
+Falta o deploy no Railway. Próximos passos em `backend/README.md` e na seção 5 do `SPEC.md`.
