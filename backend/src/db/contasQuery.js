@@ -22,4 +22,15 @@ const SELECT_CONTAS_COM_SALDO = `
 // "Hoje" sempre no fuso da loja, não no fuso do servidor (Railway roda em UTC).
 const HOJE_SP = `(now() AT TIME ZONE 'America/Sao_Paulo')::date`;
 
-module.exports = { SELECT_CONTAS_COM_SALDO, HOJE_SP };
+// Os quatro tipos de conta a pagar da empresa. `pessoal` e `extra` não entram aqui
+// de propósito — ver comentário do enum conta_tipo no schema.
+const TIPOS_VALIDOS = ['fornecedor', 'fixa', 'imposto', 'despesa'];
+
+const ROTULOS_TIPO = {
+  fornecedor: 'Fornecedores',
+  fixa: 'Despesas fixas',
+  imposto: 'Impostos',
+  despesa: 'Outras despesas',
+};
+
+module.exports = { SELECT_CONTAS_COM_SALDO, HOJE_SP, TIPOS_VALIDOS, ROTULOS_TIPO };

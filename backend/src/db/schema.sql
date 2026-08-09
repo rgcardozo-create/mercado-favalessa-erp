@@ -7,6 +7,20 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
+-- As quatro telas de Contas a pagar (Fornecedores, Despesas fixas, Impostos e
+-- Outras despesas) compartilham a mesma estrutura, então vivem na mesma tabela
+-- separadas por `tipo` — saldo, baixas parciais e Painel do dia valem para todas.
+--
+-- `pessoais` e `extras` NÃO entram aqui de propósito: contas pessoais nunca podem
+-- aparecer em nenhum total da empresa, e extras (adiantamentos/vales) já são
+-- descontados na folha. Mantê-las fora desta tabela torna impossível vazarem
+-- para os totais por descuido (SPEC.md, regras 1 e 3).
+DO $$ BEGIN
+  CREATE TYPE conta_tipo AS ENUM ('fornecedor', 'fixa', 'imposto', 'despesa');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 CREATE TABLE IF NOT EXISTS usuarios (
   id             SERIAL PRIMARY KEY,
   nome           VARCHAR(120) NOT NULL,
@@ -33,6 +47,8 @@ CREATE TABLE IF NOT EXISTS fornecedores (
 -- "Contas" = contas a pagar / boletos de fornecedores (Fase 1: Contas a pagar > Fornecedores)
 CREATE TABLE IF NOT EXISTS contas (
   id              SERIAL PRIMARY KEY,
+  tipo            conta_tipo NOT NULL DEFAULT 'fornecedor',
+  categoria       VARCHAR(60),
   fornecedor_id   INTEGER REFERENCES fornecedores(id),
   descricao       VARCHAR(200) NOT NULL,
   valor           NUMERIC(12,2) NOT NULL CHECK (valor >= 0),
@@ -80,6 +96,8 @@ ALTER TABLE fornecedores
   ADD COLUMN IF NOT EXISTS legado_id VARCHAR(40) UNIQUE;
 
 ALTER TABLE contas
+  ADD COLUMN IF NOT EXISTS tipo conta_tipo NOT NULL DEFAULT 'fornecedor',
+  ADD COLUMN IF NOT EXISTS categoria VARCHAR(60),
   ADD COLUMN IF NOT EXISTS prioridade SMALLINT,
   ADD COLUMN IF NOT EXISTS parcela SMALLINT,
   ADD COLUMN IF NOT EXISTS total_parcelas SMALLINT,
@@ -92,6 +110,7 @@ ALTER TABLE contas_pagamentos
   ADD COLUMN IF NOT EXISTS legado_id VARCHAR(40) UNIQUE;
 
 CREATE INDEX IF NOT EXISTS idx_contas_vencimento ON contas(vencimento);
+CREATE INDEX IF NOT EXISTS idx_contas_tipo ON contas(tipo);
 CREATE INDEX IF NOT EXISTS idx_contas_fornecedor ON contas(fornecedor_id);
 CREATE INDEX IF NOT EXISTS idx_contas_pagamentos_conta ON contas_pagamentos(conta_id);
 CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id);

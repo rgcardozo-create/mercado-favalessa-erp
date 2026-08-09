@@ -70,6 +70,22 @@ button.ativo { background: #059669; }
 .cartao-resumo.hoje { border-left-color: #f59e0b; }
 .cartao-resumo.proximos { border-left-color: #059669; }
 
+/* Sub-abas por tipo de conta */
+.sub-abas { display: flex; gap: 6px; margin-bottom: 20px; flex-wrap: wrap; }
+.sub-abas button { background: #242424; font-size: 13px; }
+.sub-abas button.ativo { background: #059669; }
+
+.resumo-lista { margin-left: auto; color: #999; font-size: 13px; align-self: center; }
+.badge.tipo { background: #333; margin-left: 0; }
+
+.por-tipo { margin-bottom: 24px; }
+.por-tipo h2 { font-size: 15px; margin: 0 0 8px; }
+.linha-tipos { display: flex; gap: 12px; flex-wrap: wrap; }
+.chip-tipo { background: #1f1f1f; border-radius: 8px; padding: 10px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 140px; }
+.chip-tipo span { color: #999; font-size: 12px; }
+.chip-tipo strong { font-size: 16px; }
+.chip-tipo small { color: #777; font-size: 11px; }
+
 .grupo-painel { margin-bottom: 24px; }
 .grupo-cabecalho { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
 .grupo-cabecalho h2 { font-size: 16px; margin: 0; }

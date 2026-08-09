@@ -1,9 +1,18 @@
 import { apiFetch, getSessao, salvarSessao, limparSessao } from './api.js';
 import { brl, dateBR, todayISO } from './helpers.js';
 
+// As quatro telas de Contas a pagar. Rótulos iguais aos do sistema atual.
+const TIPOS = [
+  { tipo: 'fornecedor', rotulo: 'Fornecedores' },
+  { tipo: 'fixa', rotulo: 'Despesas fixas' },
+  { tipo: 'imposto', rotulo: 'Impostos' },
+  { tipo: 'despesa', rotulo: 'Outras despesas' },
+];
+
 const state = {
   sessao: getSessao(),
   tab: 'painel',
+  tipo: 'fornecedor',
   contas: [],
   fornecedores: [],
   painel: null,
@@ -15,6 +24,11 @@ const state = {
 };
 
 const root = document.getElementById('app');
+
+function rotuloTipo(tipo) {
+  const t = TIPOS.find((x) => x.tipo === tipo);
+  return t ? t.rotulo : tipo;
+}
 
 function podeGerenciar() {
   return state.sessao && state.sessao.usuario.role !== 'loja';
@@ -38,9 +52,10 @@ async function carregarDados() {
     if (state.tab === 'painel') {
       state.painel = await apiFetch('/painel-do-dia');
     } else {
-      const query = state.statusFiltro ? `?status=${state.statusFiltro}` : '';
+      const params = new URLSearchParams({ tipo: state.tipo });
+      if (state.statusFiltro) params.set('status', state.statusFiltro);
       const [contas, fornecedores] = await Promise.all([
-        apiFetch(`/contas${query}`),
+        apiFetch(`/contas?${params}`),
         apiFetch('/fornecedores'),
       ]);
       state.contas = contas;
@@ -83,7 +98,7 @@ function linhaConta(conta) {
 
   return `
     <tr>
-      <td>${conta.fornecedor_nome || '—'}</td>
+      <td>${(conta.tipo === 'fornecedor' ? conta.fornecedor_nome : conta.categoria) || '—'}</td>
       <td>${conta.descricao}</td>
       <td>${dateBR(conta.vencimento)}</td>
       <td>${brl(conta.valor)}</td>
@@ -143,12 +158,13 @@ function grupoPainelHTML(titulo, contas, total, classe) {
       ${
         contas.length
           ? `<table class="tabela-contas">
-              <thead><tr><th>Fornecedor</th><th>Descrição</th><th>Vencimento</th><th>Valor</th><th>Saldo</th></tr></thead>
+              <thead><tr><th>Tipo</th><th>Fornecedor / Categoria</th><th>Descrição</th><th>Vencimento</th><th>Valor</th><th>Saldo</th></tr></thead>
               <tbody>
                 ${contas
                   .map(
                     (c) => `<tr>
-                      <td>${c.fornecedor_nome || '—'}</td>
+                      <td><span class="badge tipo">${rotuloTipo(c.tipo)}</span></td>
+                      <td>${(c.tipo === 'fornecedor' ? c.fornecedor_nome : c.categoria) || '—'}</td>
                       <td>${c.descricao}</td>
                       <td>${dateBR(c.vencimento)}</td>
                       <td>${brl(c.valor)}</td>
@@ -194,6 +210,25 @@ function painelHTML() {
       </div>
     </div>
 
+    ${
+      p.por_tipo && p.por_tipo.length
+        ? `<section class="por-tipo">
+            <h2>Em aberto por tela</h2>
+            <div class="linha-tipos">
+              ${p.por_tipo
+                .map(
+                  (t) => `<div class="chip-tipo">
+                    <span>${t.rotulo}</span>
+                    <strong>${brl(t.total)}</strong>
+                    <small>${t.quantidade} conta(s)</small>
+                  </div>`
+                )
+                .join('')}
+            </div>
+          </section>`
+        : ''
+    }
+
     ${grupoPainelHTML('Vencidas', p.vencidas, p.totais.vencidas, 'vencidas')}
     ${grupoPainelHTML('Vencem hoje', p.vencem_hoje, p.totais.vencem_hoje, 'hoje')}
     ${grupoPainelHTML('Próximos 7 dias', p.proximos_7_dias, p.totais.proximos_7_dias, 'proximos')}
@@ -202,29 +237,50 @@ function painelHTML() {
 
 function contasHTML() {
   const podeGerir = podeGerenciar();
+  const ehFornecedor = state.tipo === 'fornecedor';
+  const ehDespesa = state.tipo === 'despesa';
+  const totalEmAberto = state.contas.reduce(
+    (acc, c) => (c.quitado ? acc : acc + Number(c.saldo)),
+    0
+  );
 
   return `
-    ${cabecalhoHTML('Contas a pagar &middot; Fornecedores')}
+    ${cabecalhoHTML(`Contas a pagar &middot; ${rotuloTipo(state.tipo)}`)}
+
+    <div class="sub-abas">
+      ${TIPOS.map(
+        (t) => `<button data-tipo="${t.tipo}" class="${state.tipo === t.tipo ? 'ativo' : ''}">${t.rotulo}</button>`
+      ).join('')}
+    </div>
 
     <section class="cartoes-form">
-      <form data-action="novo-fornecedor" class="form-inline">
-        <h2>Novo fornecedor</h2>
-        <label>Nome <input type="text" name="nome" required /></label>
-        <button type="submit">Adicionar</button>
-      </form>
+      ${
+        ehFornecedor
+          ? `<form data-action="novo-fornecedor" class="form-inline">
+              <h2>Novo fornecedor</h2>
+              <label>Nome <input type="text" name="nome" required /></label>
+              <button type="submit">Adicionar</button>
+            </form>`
+          : ''
+      }
 
       <form data-action="nova-conta" class="form-inline">
-        <h2>Novo boleto</h2>
-        <label>Fornecedor
-          <select name="fornecedor_id">
-            <option value="">— sem fornecedor —</option>
-            ${state.fornecedores.map((f) => `<option value="${f.id}">${f.nome}</option>`).join('')}
-          </select>
-        </label>
+        <h2>Novo lançamento &middot; ${rotuloTipo(state.tipo)}</h2>
+        ${
+          ehFornecedor
+            ? `<label>Fornecedor
+                <select name="fornecedor_id">
+                  <option value="">— sem fornecedor —</option>
+                  ${state.fornecedores.map((f) => `<option value="${f.id}">${f.nome}</option>`).join('')}
+                </select>
+              </label>`
+            : ''
+        }
         <label>Descrição <input type="text" name="descricao" required /></label>
+        ${ehDespesa ? '<label>Categoria <input type="text" name="categoria" placeholder="Manutenção, Outros..." /></label>' : ''}
         <label>Valor <input type="number" step="0.01" min="0" name="valor" required /></label>
-        <label>Vencimento <input type="date" name="vencimento" required /></label>
-        <button type="submit">Cadastrar boleto</button>
+        <label>${ehDespesa ? 'Data' : 'Vencimento'} <input type="date" name="vencimento" required /></label>
+        <button type="submit">Cadastrar</button>
       </form>
     </section>
 
@@ -232,6 +288,7 @@ function contasHTML() {
       <button data-status="" class="${state.statusFiltro === '' ? 'ativo' : ''}">Todas</button>
       <button data-status="pendente" class="${state.statusFiltro === 'pendente' ? 'ativo' : ''}">Pendentes</button>
       <button data-status="quitado" class="${state.statusFiltro === 'quitado' ? 'ativo' : ''}">Quitadas</button>
+      <span class="resumo-lista">${state.contas.length} lançamento(s) &middot; em aberto <strong>${brl(totalEmAberto)}</strong></span>
     </div>
 
     ${state.carregando ? '<p>Carregando…</p>' : ''}
@@ -239,7 +296,8 @@ function contasHTML() {
     <table class="tabela-contas">
       <thead>
         <tr>
-          <th>Fornecedor</th><th>Descrição</th><th>Vencimento</th><th>Valor</th><th>Saldo</th><th>Status</th>
+          <th>${ehFornecedor ? 'Fornecedor' : 'Categoria'}</th>
+          <th>Descrição</th><th>${ehDespesa ? 'Data' : 'Vencimento'}</th><th>Valor</th><th>Saldo</th><th>Status</th>
           <th${podeGerir ? '' : ' style="display:none"'}>Ações</th>
         </tr>
       </thead>
@@ -247,7 +305,7 @@ function contasHTML() {
         ${
           state.contas.length
             ? state.contas.map(linhaConta).join('')
-            : '<tr><td colspan="7">Nenhuma conta cadastrada.</td></tr>'
+            : '<tr><td colspan="7">Nenhum lançamento cadastrado.</td></tr>'
         }
       </tbody>
     </table>
@@ -283,6 +341,15 @@ function bind() {
     btn.addEventListener('click', () => {
       if (state.tab === btn.dataset.tab) return;
       state.tab = btn.dataset.tab;
+      state.baixaAbertaId = null;
+      carregarDados();
+    });
+  });
+
+  root.querySelectorAll('[data-tipo]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (state.tipo === btn.dataset.tipo) return;
+      state.tipo = btn.dataset.tipo;
       state.baixaAbertaId = null;
       carregarDados();
     });
@@ -360,7 +427,9 @@ async function onNovaConta(ev) {
     await apiFetch('/contas', {
       method: 'POST',
       body: JSON.stringify({
+        tipo: state.tipo,
         fornecedor_id: fd.get('fornecedor_id') || null,
+        categoria: fd.get('categoria') || null,
         descricao: fd.get('descricao'),
         valor: fd.get('valor'),
         vencimento: fd.get('vencimento'),

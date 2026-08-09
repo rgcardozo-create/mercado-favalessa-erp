@@ -1,12 +1,14 @@
 const pool = require('../db/pool');
-const { SELECT_CONTAS_COM_SALDO, HOJE_SP } = require('../db/contasQuery');
+const { SELECT_CONTAS_COM_SALDO, HOJE_SP, TIPOS_VALIDOS, ROTULOS_TIPO } = require('../db/contasQuery');
 
 // Painel do dia: o que precisa ser pago hoje, o que já venceu e o que vence na semana.
 //
-// Só entram contas de fornecedores (Fase 1). Quando as demais coleções chegarem, elas
-// precisam respeitar as regras do SPEC.md — contas pessoais nunca entram em nenhum total
-// da empresa, e `extras[]` (adiantamentos/vales) fica fora das somas de despesa porque
-// já é descontado na folha.
+// Cobre as quatro telas de Contas a pagar (Fornecedores, Despesas fixas, Impostos e
+// Outras despesas), que vivem na tabela `contas` separadas por tipo.
+//
+// Contas pessoais e extras de funcionários não aparecem aqui e nunca podem aparecer:
+// pessoais nunca entram em nenhum total da empresa, e extras (adiantamentos/vales) já
+// são descontados na folha. Por isso ficam fora da tabela `contas` (SPEC.md, regras 1 e 3).
 async function painelDoDia(req, res) {
   const sql = `
     WITH contas_com_saldo AS (${SELECT_CONTAS_COM_SALDO}),
@@ -30,6 +32,14 @@ async function painelDoDia(req, res) {
 
   const somar = (lista) => lista.reduce((acc, c) => acc + Number(c.saldo), 0);
 
+  // Quanto está em aberto por tela (Fornecedores, Fixas, Impostos, Outras),
+  // considerando tudo que já venceu ou vence nos próximos 7 dias.
+  const aVencer = [...painel.vencidas, ...painel.vencem_hoje, ...painel.proximos_7_dias];
+  const porTipo = TIPOS_VALIDOS.map((tipo) => {
+    const doTipo = aVencer.filter((c) => c.tipo === tipo);
+    return { tipo, rotulo: ROTULOS_TIPO[tipo], quantidade: doTipo.length, total: somar(doTipo) };
+  }).filter((t) => t.quantidade > 0);
+
   return res.json({
     hoje: painel.hoje,
     vencidas: painel.vencidas,
@@ -40,6 +50,7 @@ async function painelDoDia(req, res) {
       vencem_hoje: somar(painel.vencem_hoje),
       proximos_7_dias: somar(painel.proximos_7_dias),
     },
+    por_tipo: porTipo,
   });
 }
 
