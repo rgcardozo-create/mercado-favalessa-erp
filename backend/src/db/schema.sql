@@ -78,6 +78,67 @@ CREATE TABLE IF NOT EXISTS contas_pagamentos (
   criado_em        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── Conciliação ────────────────────────────────────────────────────────────────
+-- Transações das maquininhas/adquirentes. Os quatro extratos (Cielo, Stone, Itaú
+-- e Tickets/Rede Compras) têm exatamente os mesmos campos, então ficam na mesma
+-- tabela separados por `adquirente`.
+--
+-- `hora` fica como texto de propósito: os extratos vêm em formatos diferentes
+-- ("08:21", "9:45:46") e converter perderia informação do arquivo original.
+DO $$ BEGIN
+  CREATE TYPE adquirente_tipo AS ENUM ('cielo', 'stone', 'itau', 'tickets');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS conciliacao_transacoes (
+  id             SERIAL PRIMARY KEY,
+  adquirente     adquirente_tipo NOT NULL,
+  data           DATE NOT NULL,
+  hora           VARCHAR(12),
+  forma          VARCHAR(60),
+  bandeira       VARCHAR(60),
+  valor_bruto    NUMERIC(12,2) NOT NULL DEFAULT 0,
+  tarifa         NUMERIC(12,6) NOT NULL DEFAULT 0,
+  valor_liquido  NUMERIC(12,6) NOT NULL DEFAULT 0,
+  categoria      VARCHAR(30),
+  status         VARCHAR(30),
+  lote           VARCHAR(60),
+  arquivo        VARCHAR(160),
+  importado_em   TIMESTAMPTZ,
+  legado_id      VARCHAR(40) UNIQUE,
+  criado_em      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Dinheiro é conferido por PDV, não vem de extrato de adquirente.
+CREATE TABLE IF NOT EXISTS conciliacao_dinheiro (
+  id          SERIAL PRIMARY KEY,
+  data        DATE NOT NULL,
+  pdv         VARCHAR(10),
+  valor       NUMERIC(12,2) NOT NULL DEFAULT 0,
+  legado_id   VARCHAR(40) UNIQUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── Acumulado (conferência de caixa) ───────────────────────────────────────────
+-- Visível apenas para Master e Gerente (SPEC.md, seção 3).
+CREATE TABLE IF NOT EXISTS acumulados (
+  id            SERIAL PRIMARY KEY,
+  data          DATE NOT NULL UNIQUE,
+  dinheiro      NUMERIC(12,2) NOT NULL DEFAULT 0,
+  cartao        NUMERIC(12,2) NOT NULL DEFAULT 0,
+  pix           NUMERIC(12,2) NOT NULL DEFAULT 0,
+  tickets       NUMERIC(12,2) NOT NULL DEFAULT 0,
+  pos_sistema   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  pos_maquina   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  outras        NUMERIC(12,2) NOT NULL DEFAULT 0,
+  observacoes   TEXT,
+  legado_id     VARCHAR(40) UNIQUE,
+  criado_por    INTEGER REFERENCES usuarios(id),
+  criado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Auditoria: quem cadastrou/editou/pagou o quê e quando (novo requisito multiusuário)
 CREATE TABLE IF NOT EXISTS auditoria (
   id           SERIAL PRIMARY KEY,
@@ -114,3 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_contas_tipo ON contas(tipo);
 CREATE INDEX IF NOT EXISTS idx_contas_fornecedor ON contas(fornecedor_id);
 CREATE INDEX IF NOT EXISTS idx_contas_pagamentos_conta ON contas_pagamentos(conta_id);
 CREATE INDEX IF NOT EXISTS idx_auditoria_entidade ON auditoria(entidade, entidade_id);
+CREATE INDEX IF NOT EXISTS idx_concil_data ON conciliacao_transacoes(data);
+CREATE INDEX IF NOT EXISTS idx_concil_adquirente_data ON conciliacao_transacoes(adquirente, data);
+CREATE INDEX IF NOT EXISTS idx_concil_dinheiro_data ON conciliacao_dinheiro(data);
+CREATE INDEX IF NOT EXISTS idx_acumulados_data ON acumulados(data);

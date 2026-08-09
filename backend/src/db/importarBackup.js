@@ -4,12 +4,48 @@ const path = require('path');
 const pool = require('./pool');
 
 // Importa um backup JSON exportado pelo sistema v3 (single-user, localStorage) para
-// o banco novo. Escopo Fase 1: fornecedores, contas a pagar e seus pagamentos.
+// o banco novo: fornecedores, contas a pagar (nas quatro telas), conciliação das
+// maquininhas e acumulados.
 //
 // É idempotente: cada registro carrega o `legado_id` do sistema antigo, então rodar
 // duas vezes atualiza em vez de duplicar.
 //
 // Uso: node src/db/importarBackup.js caminho/do/backup.json [--dry-run]
+
+// Insere em lotes para não fazer milhares de round-trips (a conciliação sozinha
+// traz ~4,5 mil transações).
+async function inserirEmLote(client, { tabela, colunas, linhas, chaveConflito, tamanhoLote = 500 }) {
+  let inseridas = 0;
+
+  for (let i = 0; i < linhas.length; i += tamanhoLote) {
+    const lote = linhas.slice(i, i + tamanhoLote);
+    const params = [];
+    const grupos = lote.map((linha) => {
+      const marcadores = linha.map((valor) => {
+        params.push(valor);
+        return `$${params.length}`;
+      });
+      return `(${marcadores.join(', ')})`;
+    });
+
+    const atualizacoes = colunas
+      .filter((c) => c !== chaveConflito)
+      .map((c) => `${c} = EXCLUDED.${c}`)
+      .join(', ');
+
+    await client.query(
+      `INSERT INTO ${tabela} (${colunas.join(', ')})
+       VALUES ${grupos.join(', ')}
+       ON CONFLICT (${chaveConflito}) DO UPDATE SET ${atualizacoes}`,
+      params
+    );
+    inseridas += lote.length;
+  }
+
+  return inseridas;
+}
+
+const ADQUIRENTES = ['cielo', 'stone', 'itau', 'tickets'];
 
 function normalizarNome(nome) {
   return String(nome || '').trim();
@@ -136,6 +172,8 @@ async function importar(caminho, { dryRun = false } = {}) {
     contasImportadas: { fornecedor: 0, fixa: 0, imposto: 0, despesa: 0 },
     pagamentosImportados: 0,
     contasSemFornecedor: 0,
+    conciliacao: { cielo: 0, stone: 0, itau: 0, tickets: 0, dinheiro: 0 },
+    acumulados: 0,
   };
 
   const client = await pool.connect();
@@ -222,6 +260,85 @@ async function importar(caminho, { dryRun = false } = {}) {
       });
     }
 
+    // 4) Conciliação: transações das maquininhas + conferência de dinheiro por PDV.
+    const conciliacoes = backup.conciliacoes || {};
+    const transacoes = [];
+    for (const adquirente of ADQUIRENTES) {
+      for (const t of conciliacoes[adquirente] || []) {
+        transacoes.push([
+          adquirente,
+          t.data,
+          textoOuNull(t.hora),
+          textoOuNull(t.forma),
+          textoOuNull(t.bandeira),
+          paraNumero(t.valorBruto),
+          paraNumero(t.tarifa),
+          paraNumero(t.valorLiquido),
+          textoOuNull(t.categoria),
+          textoOuNull(t.status),
+          textoOuNull(t.lote),
+          textoOuNull(t.arquivo),
+          t.importadoEm || null,
+          t.id,
+        ]);
+        resumo.conciliacao[adquirente] += 1;
+      }
+    }
+
+    if (transacoes.length) {
+      await inserirEmLote(client, {
+        tabela: 'conciliacao_transacoes',
+        colunas: [
+          'adquirente', 'data', 'hora', 'forma', 'bandeira', 'valor_bruto', 'tarifa',
+          'valor_liquido', 'categoria', 'status', 'lote', 'arquivo', 'importado_em', 'legado_id',
+        ],
+        linhas: transacoes,
+        chaveConflito: 'legado_id',
+      });
+    }
+
+    const dinheiro = (conciliacoes.dinheiro || []).map((d) => [
+      d.data,
+      textoOuNull(d.pdv),
+      paraNumero(d.valor),
+      d.id,
+    ]);
+    if (dinheiro.length) {
+      await inserirEmLote(client, {
+        tabela: 'conciliacao_dinheiro',
+        colunas: ['data', 'pdv', 'valor', 'legado_id'],
+        linhas: dinheiro,
+        chaveConflito: 'legado_id',
+      });
+      resumo.conciliacao.dinheiro = dinheiro.length;
+    }
+
+    // 5) Acumulados (conferência de caixa)
+    const acumulados = (backup.acumulados || []).map((a) => [
+      a.data,
+      paraNumero(a.dinheiro),
+      paraNumero(a.cartao),
+      paraNumero(a.pix),
+      paraNumero(a.tickets),
+      paraNumero(a.posSistema),
+      paraNumero(a.posMaquina),
+      paraNumero(a.outras),
+      textoOuNull(a.obs),
+      a.id,
+    ]);
+    if (acumulados.length) {
+      await inserirEmLote(client, {
+        tabela: 'acumulados',
+        colunas: [
+          'data', 'dinheiro', 'cartao', 'pix', 'tickets', 'pos_sistema',
+          'pos_maquina', 'outras', 'observacoes', 'legado_id',
+        ],
+        linhas: acumulados,
+        chaveConflito: 'legado_id',
+      });
+      resumo.acumulados = acumulados.length;
+    }
+
     if (dryRun) {
       await client.query('ROLLBACK');
       console.log('DRY RUN — nada foi gravado.');
@@ -259,6 +376,13 @@ async function main() {
   console.log(`  Outras despesas:                     ${c.despesa}`);
   console.log(`  Pagamentos (baixas):                 ${resumo.pagamentosImportados}`);
   console.log(`  Contas sem fornecedor informado:     ${resumo.contasSemFornecedor}`);
+  const cc = resumo.conciliacao;
+  console.log(`  Conciliação — Cielo:                 ${cc.cielo}`);
+  console.log(`  Conciliação — Stone:                 ${cc.stone}`);
+  console.log(`  Conciliação — Itaú:                  ${cc.itau}`);
+  console.log(`  Conciliação — Tickets:               ${cc.tickets}`);
+  console.log(`  Conciliação — Dinheiro (PDV):        ${cc.dinheiro}`);
+  console.log(`  Acumulados:                          ${resumo.acumulados}`);
   await pool.end();
 }
 

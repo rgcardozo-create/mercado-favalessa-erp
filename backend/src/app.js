@@ -5,6 +5,8 @@ const authRoutes = require('./routes/auth.routes');
 const fornecedoresRoutes = require('./routes/fornecedores.routes');
 const contasRoutes = require('./routes/contas.routes');
 const painelRoutes = require('./routes/painel.routes');
+const conciliacaoRoutes = require('./routes/conciliacao.routes');
+const acumuladosRoutes = require('./routes/acumulados.routes');
 
 const app = express();
 
@@ -17,6 +19,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/fornecedores', fornecedoresRoutes);
 app.use('/api/contas', contasRoutes);
 app.use('/api/painel-do-dia', painelRoutes);
+app.use('/api/conciliacao', conciliacaoRoutes);
+app.use('/api/acumulados', acumuladosRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 app.use(errorHandler);
