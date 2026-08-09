@@ -34,6 +34,23 @@ npm run dev        # inicia o servidor com reload automático
 
 Health check: `GET /api/health`.
 
+## Importando o backup do sistema antigo
+
+```bash
+npm run importar-backup -- caminho/do/backup.json            # importa
+npm run importar-backup -- caminho/do/backup.json --dry-run  # simula, sem gravar
+```
+
+Importa `fornecedores`, `contas` e os `pagamentos[]` de cada conta do JSON exportado pela v3. Rodar mais de uma vez **não duplica** nada: cada registro guarda o `legado_id` do sistema antigo e é atualizado no lugar.
+
+Detalhes de como o backup é interpretado:
+
+- No sistema antigo `conta.fornecedor` é o **nome**, não um id. Nomes que aparecem em contas mas não estão no cadastro geram um fornecedor novo (marcado nas observações), em vez de perder o vínculo.
+- `pagamentos[]` vira uma linha por baixa em `contas_pagamentos`. O status quitado/pendente é sempre **calculado** a partir dessas baixas — o campo `pago` do JSON antigo é ignorado de propósito.
+- Campos preservados: parcela/total de parcelas, prioridade, observações, forma e origem do pagamento.
+
+> Os arquivos de backup **não devem ser commitados**: além dos dados financeiros, o bloco `meta` contém as senhas da Folha e das Contas particulares. O `.gitignore` já bloqueia os nomes usuais.
+
 ## Endpoints
 
 - `POST /api/auth/login` — `{ email, senha }` → `{ token, usuario }`
@@ -57,5 +74,3 @@ Todas as rotas exigem `Authorization: Bearer <token>`, exceto `/api/auth/login` 
 ## O que falta para fechar a Fase 1 (ver `SPEC.md`)
 
 - Painel do dia (dashboard de contas vencendo).
-- Importação do backup JSON atual para popular o banco novo.
-- Frontend (PWA) consumindo esta API — o scaffold estático em `frontend/` ainda não está conectado ao backend.
