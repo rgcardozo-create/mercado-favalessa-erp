@@ -78,6 +78,59 @@ CREATE TABLE IF NOT EXISTS contas_pagamentos (
   criado_em        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── Cadastros ──────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS clientes (
+  id          SERIAL PRIMARY KEY,
+  codigo      VARCHAR(20) UNIQUE,
+  nome        VARCHAR(160) NOT NULL,
+  telefone    VARCHAR(30),
+  cpf_cnpj    VARCHAR(20),
+  observacoes TEXT,
+  legado_id   VARCHAR(40) UNIQUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS funcionarios (
+  id          SERIAL PRIMARY KEY,
+  codigo      VARCHAR(20),
+  nome        VARCHAR(160) NOT NULL,
+  telefone    VARCHAR(30),
+  cpf         VARCHAR(20),
+  pix         VARCHAR(140),
+  observacoes TEXT,
+  ativo       BOOLEAN NOT NULL DEFAULT true,
+  legado_id   VARCHAR(40) UNIQUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS bancos (
+  id          SERIAL PRIMARY KEY,
+  nome        VARCHAR(120) NOT NULL,
+  padrao      BOOLEAN NOT NULL DEFAULT false,
+  legado_id   VARCHAR(40) UNIQUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ── Venda a prazo ──────────────────────────────────────────────────────────────
+-- Movimentos do caderno de fiado: compras do cliente e pagamentos que ele faz.
+DO $$ BEGIN
+  CREATE TYPE mov_prazo_tipo AS ENUM ('compra', 'pagamento');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+CREATE TABLE IF NOT EXISTS mov_prazo (
+  id          SERIAL PRIMARY KEY,
+  cliente_id  INTEGER REFERENCES clientes(id),
+  tipo        mov_prazo_tipo NOT NULL DEFAULT 'compra',
+  valor       NUMERIC(12,2) NOT NULL CHECK (valor >= 0),
+  data        DATE NOT NULL,
+  observacoes TEXT,
+  legado_id   VARCHAR(40) UNIQUE,
+  criado_por  INTEGER REFERENCES usuarios(id),
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ── Conciliação ────────────────────────────────────────────────────────────────
 -- Transações das maquininhas/adquirentes. Os quatro extratos (Cielo, Stone, Itaú
 -- e Tickets/Rede Compras) têm exatamente os mesmos campos, então ficam na mesma
@@ -139,6 +192,78 @@ CREATE TABLE IF NOT EXISTS acumulados (
   atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ── Folha de pagamento ─────────────────────────────────────────────────────────
+-- Master apenas, e ainda por trás de uma senha adicional (SPEC.md, seção 3).
+--
+-- O líquido nunca é armazenado: sai de salario + bonificacao - compras -
+-- adiantamento - outras - descontos. Guardar o total deixaria o número defasado
+-- quando alguém corrigisse uma das parcelas.
+CREATE TABLE IF NOT EXISTS folha (
+  id            SERIAL PRIMARY KEY,
+  funcionario_id INTEGER REFERENCES funcionarios(id),
+  nome          VARCHAR(160) NOT NULL,
+  tipo          VARCHAR(30),
+  data_ref      DATE,
+  salario       NUMERIC(12,2) NOT NULL DEFAULT 0,
+  bonificacao   NUMERIC(12,2) NOT NULL DEFAULT 0,
+  compras       NUMERIC(12,2) NOT NULL DEFAULT 0,
+  adiantamento  NUMERIC(12,2) NOT NULL DEFAULT 0,
+  outras        NUMERIC(12,2) NOT NULL DEFAULT 0,
+  descontos     NUMERIC(12,2) NOT NULL DEFAULT 0,
+  dias_ferias   SMALLINT,
+  observacoes   TEXT,
+  legado_id     VARCHAR(40) UNIQUE,
+  criado_por    INTEGER REFERENCES usuarios(id),
+  criado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS folha_pagamentos (
+  id              SERIAL PRIMARY KEY,
+  folha_id        INTEGER NOT NULL REFERENCES folha(id) ON DELETE CASCADE,
+  valor           NUMERIC(12,2) NOT NULL CHECK (valor > 0),
+  data_pagamento  DATE NOT NULL,
+  forma_pagamento VARCHAR(40),
+  observacoes     TEXT,
+  legado_id       VARCHAR(40) UNIQUE,
+  pago_por        INTEGER REFERENCES usuarios(id),
+  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Extras = adiantamentos/vales de funcionário. Ficam FORA de qualquer soma de
+-- despesa da empresa: já são descontados na folha, e contar de novo duplicaria
+-- (SPEC.md, regra 3). Por isso não vivem na tabela `contas`.
+CREATE TABLE IF NOT EXISTS extras (
+  id             SERIAL PRIMARY KEY,
+  funcionario_id INTEGER REFERENCES funcionarios(id),
+  nome           VARCHAR(160) NOT NULL,
+  codigo         VARCHAR(20),
+  tipo           VARCHAR(30),
+  valor          NUMERIC(12,2) NOT NULL DEFAULT 0,
+  data           DATE NOT NULL,
+  observacoes    TEXT,
+  legado_id      VARCHAR(40) UNIQUE,
+  criado_por     INTEGER REFERENCES usuarios(id),
+  criado_em      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS extras_baixas (
+  id          SERIAL PRIMARY KEY,
+  extra_id    INTEGER NOT NULL REFERENCES extras(id) ON DELETE CASCADE,
+  valor       NUMERIC(12,2) NOT NULL CHECK (valor > 0),
+  data        DATE NOT NULL,
+  observacoes TEXT,
+  legado_id   VARCHAR(40) UNIQUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Configurações chave/valor (ex.: hash da senha adicional da Folha).
+CREATE TABLE IF NOT EXISTS configuracoes (
+  chave      VARCHAR(60) PRIMARY KEY,
+  valor      TEXT,
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Auditoria: quem cadastrou/editou/pagou o quê e quando (novo requisito multiusuário)
 CREATE TABLE IF NOT EXISTS auditoria (
   id           SERIAL PRIMARY KEY,
@@ -179,3 +304,7 @@ CREATE INDEX IF NOT EXISTS idx_concil_data ON conciliacao_transacoes(data);
 CREATE INDEX IF NOT EXISTS idx_concil_adquirente_data ON conciliacao_transacoes(adquirente, data);
 CREATE INDEX IF NOT EXISTS idx_concil_dinheiro_data ON conciliacao_dinheiro(data);
 CREATE INDEX IF NOT EXISTS idx_acumulados_data ON acumulados(data);
+CREATE INDEX IF NOT EXISTS idx_mov_prazo_cliente ON mov_prazo(cliente_id);
+CREATE INDEX IF NOT EXISTS idx_mov_prazo_data ON mov_prazo(data);
+CREATE INDEX IF NOT EXISTS idx_folha_pagamentos_folha ON folha_pagamentos(folha_id);
+CREATE INDEX IF NOT EXISTS idx_extras_baixas_extra ON extras_baixas(extra_id);

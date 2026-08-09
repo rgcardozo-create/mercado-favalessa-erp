@@ -13,4 +13,6 @@ Sistema multiusuário em nuvem do Mercado Favalessa, substituindo a versão sing
 
 **Fase 2 concluída**: Despesas fixas, Impostos, Outras despesas, Conciliação das maquininhas e Acumulado — todos importados do backup real. Fica pendente o upload de novos extratos (detalhes em `backend/README.md`).
 
+**Fase 3 concluída**: Venda a prazo, Cadastros, Relatórios e Folha/Extras (Master, com senha adicional).
+
 Falta o deploy no Railway. Próximos passos em `backend/README.md` e na seção 5 do `SPEC.md`.

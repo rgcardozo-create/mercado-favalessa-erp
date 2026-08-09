@@ -106,7 +106,7 @@ Regras de visibilidade herdadas do sistema atual (item 1, 2 e 3 da seção anter
 - Folha de pagamento + Extras de funcionários (Master apenas).
 
 ### Fase 4
-- Contas pessoais (Master apenas — nunca visível a outros perfis).
+- ~~Contas pessoais (Master apenas — nunca visível a outros perfis).~~ **Retirado do escopo** por decisão do usuário: será tratado fora deste sistema, possivelmente em um aplicativo separado. A regra de nunca misturar valores pessoais com os totais da empresa continua valendo — nada pessoal entra neste banco.
 - Refinamentos de UX/PWA, auditoria, exportação de backup.
 
 > Observação sobre a pasta `EXTRATOS\`: a versão atual do sistema lê essa pasta local via File System Access API do navegador (só funciona rodando localmente). Num sistema em nuvem isso precisa ser repensado — provavelmente upload manual do arquivo pela tela (Gerente ou Master), já que o servidor não tem acesso ao disco do computador da loja. Avaliar na Fase 2.

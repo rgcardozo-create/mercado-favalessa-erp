@@ -1,4 +1,4 @@
-import { apiFetch, getSessao, salvarSessao, limparSessao } from './api.js';
+import { apiFetch, getSessao, salvarSessao, limparSessao, setFolhaToken, getFolhaToken } from './api.js';
 import { brl, dateBR, todayISO } from './helpers.js';
 
 // As quatro telas de Contas a pagar. Rótulos iguais aos do sistema atual.
@@ -18,6 +18,14 @@ const state = {
   painel: null,
   conciliacao: null,
   acumulados: null,
+  vendaPrazo: null,
+  cadastros: null,
+  cadastroTipo: 'clientes',
+  folha: null,
+  extras: null,
+  folhaErro: null,
+  relatorio: null,
+  periodo: { de: '', ate: '' },
   statusFiltro: '',
   carregando: false,
   erro: null,
@@ -47,8 +55,26 @@ function podeVerAcumulado() {
   return podeGerenciar();
 }
 
+// Folha e Extras: Master apenas, e ainda por trás da senha adicional.
+function podeVerFolha() {
+  return state.sessao && state.sessao.usuario.role === 'master';
+}
+
+function podeVerRelatorios() {
+  return podeGerenciar();
+}
+
 function abaInicial() {
   return podeVerPainel() ? 'painel' : 'contas';
+}
+
+// Período padrão dos relatórios: mês corrente.
+function periodoOuPadrao() {
+  if (state.periodo.de && state.periodo.ate) return state.periodo;
+  const hoje = todayISO();
+  const [ano, mes] = hoje.split('-');
+  const ultimoDia = new Date(Number(ano), Number(mes), 0).getDate();
+  return { de: `${ano}-${mes}-01`, ate: `${ano}-${mes}-${String(ultimoDia).padStart(2, '0')}` };
 }
 
 async function carregarDados() {
@@ -62,6 +88,23 @@ async function carregarDados() {
       state.conciliacao = await apiFetch('/conciliacao');
     } else if (state.tab === 'acumulado') {
       state.acumulados = await apiFetch('/acumulados');
+    } else if (state.tab === 'venda-prazo') {
+      state.vendaPrazo = await apiFetch('/venda-prazo');
+    } else if (state.tab === 'cadastros') {
+      state.cadastros = await apiFetch(`/cadastros/${state.cadastroTipo}`);
+    } else if (state.tab === 'folha') {
+      // Sem token da folha a API responde 423 — a tela então pede a senha.
+      if (getFolhaToken()) {
+        const [folha, extras] = await Promise.all([apiFetch('/folha'), apiFetch('/folha/extras')]);
+        state.folha = folha;
+        state.extras = extras;
+      } else {
+        state.folha = null;
+        state.extras = null;
+      }
+    } else if (state.tab === 'relatorios') {
+      const p = periodoOuPadrao();
+      state.relatorio = await apiFetch(`/relatorios?de=${p.de}&ate=${p.ate}`);
     } else {
       const params = new URLSearchParams({ tipo: state.tipo });
       if (state.statusFiltro) params.set('status', state.statusFiltro);
@@ -153,8 +196,12 @@ function cabecalhoHTML(titulo) {
     <nav class="abas">
       ${podeVerPainel() ? `<button data-tab="painel" class="${state.tab === 'painel' ? 'ativo' : ''}">Painel do dia</button>` : ''}
       <button data-tab="contas" class="${state.tab === 'contas' ? 'ativo' : ''}">Contas a pagar</button>
+      <button data-tab="venda-prazo" class="${state.tab === 'venda-prazo' ? 'ativo' : ''}">Venda a prazo</button>
       <button data-tab="conciliacao" class="${state.tab === 'conciliacao' ? 'ativo' : ''}">Conciliação</button>
       ${podeVerAcumulado() ? `<button data-tab="acumulado" class="${state.tab === 'acumulado' ? 'ativo' : ''}">Acumulado</button>` : ''}
+      <button data-tab="cadastros" class="${state.tab === 'cadastros' ? 'ativo' : ''}">Cadastros</button>
+      ${podeVerRelatorios() ? `<button data-tab="relatorios" class="${state.tab === 'relatorios' ? 'ativo' : ''}">Relatórios</button>` : ''}
+      ${podeVerFolha() ? `<button data-tab="folha" class="${state.tab === 'folha' ? 'ativo' : ''}">Folha</button>` : ''}
     </nav>
 
     ${state.erro ? `<div class="alerta erro">${state.erro}</div>` : ''}
@@ -379,6 +426,314 @@ function acumuladoHTML() {
   `;
 }
 
+function vendaPrazoHTML() {
+  const cabecalho = cabecalhoHTML('Venda a prazo');
+  if (!state.vendaPrazo) return `${cabecalho}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+
+  const { clientes, totais } = state.vendaPrazo;
+  const comSaldo = clientes.filter((c) => c.saldo !== 0 || c.movimentos > 0);
+
+  return `
+    ${cabecalho}
+
+    <div class="cartoes-resumo">
+      <div class="cartao-resumo vencidas">
+        <span class="rotulo">A receber</span>
+        <strong>${brl(totais.saldo)}</strong>
+        <small>${totais.clientes_com_saldo} cliente(s) devendo</small>
+      </div>
+      <div class="cartao-resumo proximos">
+        <span class="rotulo">Compras lançadas</span>
+        <strong>${brl(totais.compras)}</strong>
+      </div>
+      <div class="cartao-resumo hoje">
+        <span class="rotulo">Já pago</span>
+        <strong>${brl(totais.pago)}</strong>
+      </div>
+    </div>
+
+    <section class="cartoes-form">
+      <form data-action="novo-mov-prazo" class="form-inline">
+        <h2>Lançar movimento</h2>
+        <label>Cliente
+          <select name="cliente_id" required>
+            ${clientes.map((c) => `<option value="${c.id}">${c.codigo ? `${c.codigo} — ` : ''}${c.nome}</option>`).join('')}
+          </select>
+        </label>
+        <label>Tipo
+          <select name="tipo">
+            <option value="compra">Compra (fiado)</option>
+            <option value="pagamento">Pagamento do cliente</option>
+          </select>
+        </label>
+        <label>Valor <input type="number" step="0.01" min="0" name="valor" required /></label>
+        <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
+        <button type="submit">Lançar</button>
+      </form>
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Clientes</h2></div>
+      <table class="tabela-contas">
+        <thead><tr><th>Código</th><th>Cliente</th><th>Compras</th><th>Pago</th><th>Saldo</th><th>Movs</th><th>Último</th></tr></thead>
+        <tbody>
+          ${
+            comSaldo.length
+              ? comSaldo
+                  .map(
+                    (c) => `<tr>
+                      <td>${c.codigo || '—'}</td>
+                      <td>${c.nome}</td>
+                      <td>${brl(c.total_compras)}</td>
+                      <td>${brl(c.total_pago)}</td>
+                      <td><strong>${brl(c.saldo)}</strong></td>
+                      <td>${c.movimentos}</td>
+                      <td>${c.ultimo_movimento ? dateBR(c.ultimo_movimento) : '—'}</td>
+                    </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="7">Nenhum movimento lançado.</td></tr>'
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+const CADASTROS = [
+  { chave: 'clientes', rotulo: 'Clientes' },
+  { chave: 'funcionarios', rotulo: 'Funcionários' },
+  { chave: 'bancos', rotulo: 'Bancos' },
+];
+
+function cadastrosHTML() {
+  const cabecalho = cabecalhoHTML('Cadastros');
+  const tipo = state.cadastroTipo;
+  const registros = state.cadastros || [];
+
+  const colunas = {
+    clientes: ['codigo', 'nome', 'telefone', 'cpf_cnpj'],
+    funcionarios: ['codigo', 'nome', 'telefone', 'cpf', 'pix'],
+    bancos: ['nome'],
+  }[tipo];
+
+  const rotulos = {
+    codigo: 'Código', nome: 'Nome', telefone: 'Telefone',
+    cpf_cnpj: 'CPF/CNPJ', cpf: 'CPF', pix: 'PIX',
+  };
+
+  return `
+    ${cabecalho}
+
+    <div class="sub-abas">
+      ${CADASTROS.map(
+        (c) => `<button data-cadastro="${c.chave}" class="${tipo === c.chave ? 'ativo' : ''}">${c.rotulo}</button>`
+      ).join('')}
+    </div>
+
+    <section class="cartoes-form">
+      <form data-action="novo-cadastro" class="form-inline">
+        <h2>Novo</h2>
+        ${colunas
+          .map(
+            (c) => `<label>${rotulos[c] || c} <input type="text" name="${c}" ${c === 'nome' ? 'required' : ''} /></label>`
+          )
+          .join('')}
+        <button type="submit">Adicionar</button>
+      </form>
+    </section>
+
+    ${state.carregando ? '<p>Carregando…</p>' : ''}
+
+    <table class="tabela-contas">
+      <thead><tr>${colunas.map((c) => `<th>${rotulos[c] || c}</th>`).join('')}<th>Ações</th></tr></thead>
+      <tbody>
+        ${
+          registros.length
+            ? registros
+                .map(
+                  (r) => `<tr>
+                    ${colunas.map((c) => `<td>${r[c] || '—'}</td>`).join('')}
+                    <td>${podeGerenciar() ? `<button data-action="excluir-cadastro" data-id="${r.id}" class="perigo">Excluir</button>` : ''}</td>
+                  </tr>`
+                )
+                .join('')
+            : `<tr><td colspan="${colunas.length + 1}">Nenhum registro.</td></tr>`
+        }
+      </tbody>
+    </table>
+  `;
+}
+
+function folhaHTML() {
+  const cabecalho = cabecalhoHTML('Folha de pagamento');
+
+  // Sem a senha adicional a folha nem carrega — nenhum nome ou valor aparece.
+  if (!getFolhaToken() || !state.folha) {
+    return `
+      ${cabecalho}
+      <div class="login-wrap" style="min-height:auto;padding:40px 0">
+        <form id="form-folha-senha" class="login-card">
+          <h1>Folha trancada</h1>
+          <p class="subtitulo">Informe a senha da folha para ver salários e extras.</p>
+          ${state.folhaErro ? `<div class="alerta erro">${state.folhaErro}</div>` : ''}
+          <label>Senha da folha</label>
+          <input type="password" name="senha" required autocomplete="off" />
+          <button type="submit">Destravar</button>
+        </form>
+      </div>
+    `;
+  }
+
+  const { lancamentos, totais } = state.folha;
+  const extras = state.extras || { extras: [], totais: { valor: 0, saldo: 0 } };
+
+  return `
+    ${cabecalho}
+
+    <div class="cartoes-resumo">
+      <div class="cartao-resumo proximos">
+        <span class="rotulo">Líquido total</span><strong>${brl(totais.liquido)}</strong>
+      </div>
+      <div class="cartao-resumo hoje">
+        <span class="rotulo">Já pago</span><strong>${brl(totais.pago)}</strong>
+      </div>
+      <div class="cartao-resumo vencidas">
+        <span class="rotulo">Em aberto</span><strong>${brl(totais.saldo)}</strong>
+      </div>
+    </div>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Lançamentos</h2>
+        <button id="btn-trancar-folha">Trancar folha</button>
+      </div>
+      <table class="tabela-contas">
+        <thead><tr><th>Funcionário</th><th>Ref.</th><th>Salário</th><th>Bonif.</th><th>Compras</th><th>Líquido</th><th>Pago</th><th>Saldo</th><th>Status</th></tr></thead>
+        <tbody>
+          ${lancamentos
+            .map(
+              (l) => `<tr>
+                <td>${l.nome}</td>
+                <td>${l.data_ref ? dateBR(l.data_ref) : '—'}</td>
+                <td>${brl(l.salario)}</td>
+                <td>${brl(l.bonificacao)}</td>
+                <td>${brl(l.compras)}</td>
+                <td><strong>${brl(l.liquido)}</strong></td>
+                <td>${brl(l.total_pago)}</td>
+                <td>${brl(l.saldo)}</td>
+                <td>${l.quitado ? '<span class="badge quitado">Quitado</span>' : '<span class="badge pendente">Pendente</span>'}</td>
+              </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Extras / adiantamentos</h2>
+        <span class="grupo-total">${brl(extras.totais.valor)} <small>em aberto ${brl(extras.totais.saldo)}</small></span>
+      </div>
+      <p class="vazio">Extras não entram nas despesas da empresa — já são descontados na folha.</p>
+      ${
+        extras.extras.length
+          ? `<table class="tabela-contas">
+              <thead><tr><th>Funcionário</th><th>Tipo</th><th>Data</th><th>Valor</th><th>Baixado</th><th>Saldo</th></tr></thead>
+              <tbody>
+                ${extras.extras
+                  .map(
+                    (e) => `<tr>
+                      <td>${e.nome}</td><td>${e.tipo || '—'}</td><td>${dateBR(e.data)}</td>
+                      <td>${brl(e.valor)}</td><td>${brl(e.total_baixado)}</td><td>${brl(e.saldo)}</td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>`
+          : ''
+      }
+    </section>
+  `;
+}
+
+function relatoriosHTML() {
+  const cabecalho = cabecalhoHTML('Relatórios');
+  const p = periodoOuPadrao();
+
+  const filtro = `
+    <section class="cartoes-form">
+      <form data-action="filtro-periodo" class="form-inline">
+        <h2>Período</h2>
+        <label>De <input type="date" name="de" value="${p.de}" required /></label>
+        <label>Até <input type="date" name="ate" value="${p.ate}" required /></label>
+        <button type="submit">Gerar</button>
+      </form>
+    </section>
+  `;
+
+  if (!state.relatorio) return `${cabecalho}${filtro}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+
+  const r = state.relatorio;
+  const folha = r.despesas.folha;
+
+  return `
+    ${cabecalho}
+    ${filtro}
+
+    <div class="cartoes-resumo">
+      <div class="cartao-resumo vencidas">
+        <span class="rotulo">Despesas pagas</span><strong>${brl(r.despesas.total)}</strong>
+        <small>${dateBR(r.periodo.de)} a ${dateBR(r.periodo.ate)}</small>
+      </div>
+      <div class="cartao-resumo proximos">
+        <span class="rotulo">Cartões (líquido)</span><strong>${brl(r.entradas.cartoes.liquido)}</strong>
+        <small>${r.entradas.cartoes.transacoes} transações</small>
+      </div>
+      <div class="cartao-resumo hoje">
+        <span class="rotulo">Dinheiro conferido</span><strong>${brl(r.entradas.dinheiro)}</strong>
+      </div>
+    </div>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Despesas por tela</h2><span class="grupo-total">${brl(r.despesas.total)}</span></div>
+      <table class="tabela-contas">
+        <thead><tr><th>Tela</th><th>Lançamentos</th><th>Pago</th></tr></thead>
+        <tbody>
+          ${r.despesas.por_tipo
+            .map((t) => `<tr><td>${t.rotulo}</td><td>${t.lancamentos}</td><td>${brl(t.pago)}</td></tr>`)
+            .join('')}
+          ${
+            folha.destravada
+              ? folha.por_funcionario
+                  .map((f) => `<tr><td>Folha — ${f.nome}</td><td>—</td><td>${brl(f.pago)}</td></tr>`)
+                  .join('')
+              : `<tr><td>${folha.rotulo}</td><td>—</td><td>${brl(folha.total)}</td></tr>`
+          }
+        </tbody>
+      </table>
+      ${
+        folha.destravada
+          ? ''
+          : '<p class="vazio">A folha entra no total, mas os nomes só aparecem com a folha destravada.</p>'
+      }
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Venda a prazo no período</h2></div>
+      <table class="tabela-contas">
+        <thead><tr><th>Compras lançadas</th><th>Pagamentos recebidos</th></tr></thead>
+        <tbody><tr><td>${brl(r.venda_prazo.compras)}</td><td>${brl(r.venda_prazo.pagamentos)}</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Extras (informativo)</h2><span class="grupo-total">${brl(r.extras_informativo.total)}</span></div>
+      <p class="vazio">${r.extras_informativo.nota}</p>
+    </section>
+  `;
+}
+
 function contasHTML() {
   const podeGerir = podeGerenciar();
   const ehFornecedor = state.tipo === 'fornecedor';
@@ -461,6 +816,10 @@ function telaHTML() {
   if (state.tab === 'painel' && podeVerPainel()) return painelHTML();
   if (state.tab === 'conciliacao') return conciliacaoHTML();
   if (state.tab === 'acumulado' && podeVerAcumulado()) return acumuladoHTML();
+  if (state.tab === 'venda-prazo') return vendaPrazoHTML();
+  if (state.tab === 'cadastros') return cadastrosHTML();
+  if (state.tab === 'folha' && podeVerFolha()) return folhaHTML();
+  if (state.tab === 'relatorios' && podeVerRelatorios()) return relatoriosHTML();
   return contasHTML();
 }
 
@@ -477,10 +836,13 @@ function bind() {
 
   root.querySelector('#btn-logout').addEventListener('click', () => {
     limparSessao();
+    setFolhaToken(null); // sair sempre tranca a folha de novo
     state.sessao = null;
     state.contas = [];
     state.fornecedores = [];
     state.painel = null;
+    state.folha = null;
+    state.extras = null;
     render();
   });
 
@@ -534,6 +896,33 @@ function bind() {
   const formAcumulado = root.querySelector('[data-action="novo-acumulado"]');
   if (formAcumulado) formAcumulado.addEventListener('submit', onNovoAcumulado);
 
+  const formPrazo = root.querySelector('[data-action="novo-mov-prazo"]');
+  if (formPrazo) formPrazo.addEventListener('submit', onNovoMovPrazo);
+
+  const formCadastro = root.querySelector('[data-action="novo-cadastro"]');
+  if (formCadastro) formCadastro.addEventListener('submit', onNovoCadastro);
+
+  const formFolhaSenha = root.querySelector('#form-folha-senha');
+  if (formFolhaSenha) formFolhaSenha.addEventListener('submit', onDestravarFolha);
+
+  const btnTrancar = root.querySelector('#btn-trancar-folha');
+  if (btnTrancar) btnTrancar.addEventListener('click', onTrancarFolha);
+
+  const formPeriodo = root.querySelector('[data-action="filtro-periodo"]');
+  if (formPeriodo) formPeriodo.addEventListener('submit', onFiltroPeriodo);
+
+  root.querySelectorAll('[data-cadastro]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (state.cadastroTipo === btn.dataset.cadastro) return;
+      state.cadastroTipo = btn.dataset.cadastro;
+      carregarDados();
+    });
+  });
+
+  root.querySelectorAll('[data-action="excluir-cadastro"]').forEach((btn) => {
+    btn.addEventListener('click', () => onExcluirCadastro(Number(btn.dataset.id)));
+  });
+
   root.querySelectorAll('[data-action="excluir-acumulado"]').forEach((btn) => {
     btn.addEventListener('click', () => onExcluirAcumulado(Number(btn.dataset.id)));
   });
@@ -559,6 +948,89 @@ async function onNovoAcumulado(ev) {
     state.erro = err.message;
     render();
   }
+}
+
+async function onNovoMovPrazo(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch('/venda-prazo/movimentos', {
+      method: 'POST',
+      body: JSON.stringify({
+        cliente_id: Number(fd.get('cliente_id')),
+        tipo: fd.get('tipo'),
+        valor: fd.get('valor'),
+        data: fd.get('data'),
+      }),
+    });
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onNovoCadastro(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const corpo = {};
+  for (const [k, v] of fd.entries()) corpo[k] = v || null;
+
+  try {
+    await apiFetch(`/cadastros/${state.cadastroTipo}`, {
+      method: 'POST',
+      body: JSON.stringify(corpo),
+    });
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onExcluirCadastro(id) {
+  if (!confirm('Excluir este cadastro?')) return;
+  try {
+    await apiFetch(`/cadastros/${state.cadastroTipo}/${id}`, { method: 'DELETE' });
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onDestravarFolha(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  try {
+    const { folhaToken } = await apiFetch('/folha/desbloquear', {
+      method: 'POST',
+      body: JSON.stringify({ senha: fd.get('senha') }),
+      // Senha da folha errada responde 401, mas isso não é sessão expirada:
+      // sem isso, errar a senha derrubaria o login do usuário.
+      manterSessaoEm401: true,
+    });
+    setFolhaToken(folhaToken);
+    state.folhaErro = null;
+    carregarDados();
+  } catch (err) {
+    state.folhaErro = err.message;
+    render();
+  }
+}
+
+function onTrancarFolha() {
+  setFolhaToken(null);
+  state.folha = null;
+  state.extras = null;
+  render();
+}
+
+async function onFiltroPeriodo(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  state.periodo = { de: fd.get('de'), ate: fd.get('ate') };
+  carregarDados();
 }
 
 async function onExcluirAcumulado(id) {

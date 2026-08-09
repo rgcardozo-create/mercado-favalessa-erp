@@ -10,6 +10,10 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - Painel do dia (vencidas / vencem hoje / próximos 7 dias, com quebra por tela), só para Master e Gerente.
 - **Conciliação** das maquininhas (Cielo, Stone, Itaú, Tickets) e do dinheiro por PDV.
 - **Acumulado** (conferência de caixa), só para Master e Gerente.
+- **Venda a prazo** com saldo devedor por cliente e extrato individual.
+- **Cadastros** de clientes, funcionários e bancos.
+- **Relatórios** por período.
+- **Folha de pagamento e Extras**, só para Master e ainda atrás de uma senha adicional.
 - Importação do backup JSON da v3.
 - Auditoria básica (quem cadastrou/editou/pagou o quê e quando).
 
@@ -30,6 +34,11 @@ As quatro compartilham a mesma estrutura, então vivem na tabela `contas` separa
 | Ver o Painel do dia | ✅ | ✅ | ❌ |
 | Ver a Conciliação | ✅ | ✅ | ✅ |
 | Ver / lançar Acumulado | ✅ | ✅ | ❌ |
+| Venda a prazo (ver e lançar) | ✅ | ✅ | ✅ |
+| Cadastros (ver, criar, editar) | ✅ | ✅ | ✅ |
+| Cadastros (excluir) | ✅ | ✅ | ❌ |
+| Relatórios | ✅ | ✅ | ❌ |
+| Folha e Extras | ✅ (+ senha) | ❌ | ❌ |
 
 > Assunção adotada para esta primeira versão: o login "Loja" pode cadastrar boletos mas não dar baixa nem editar/excluir, seguindo a frase da spec "cadastro de boleto pelos funcionários, pagamento só por quem tem permissão". Isso é exatamente um dos "itens em aberto" do `SPEC.md` (seção 6) — ajuste fácil em `src/routes/contas.routes.js` caso a decisão final seja outra (ex: Loja no mesmo nível de Gerente em tudo).
 
@@ -82,6 +91,20 @@ Detalhes de como o backup é interpretado:
 - `GET /api/conciliacao` — resumo por adquirente e dinheiro por PDV (aceita `?de=&ate=`)
 - `GET /api/conciliacao/transacoes` — listagem paginada (`?adquirente=&de=&ate=&pagina=&limite=`)
 - `GET /api/acumulados` (aceita `?de=&ate=`) / `POST /api/acumulados` / `DELETE /api/acumulados/:id` — Master e Gerente
+- `GET /api/venda-prazo` — saldo devedor por cliente; `GET /api/venda-prazo/clientes/:id` — extrato
+- `POST /api/venda-prazo/movimentos` — lança compra ou pagamento do cliente
+- `GET|POST /api/cadastros/{clientes,funcionarios,bancos}` (+ `PUT`/`DELETE` por id)
+- `GET /api/relatorios?de=&ate=` — consolidado do período (Master e Gerente)
+- `POST /api/folha/desbloquear` — troca a senha da folha por um token curto
+- `GET|POST /api/folha`, `POST /api/folha/:id/pagamentos`, `GET|POST /api/folha/extras` — Master, com folha destravada
+
+### A senha adicional da Folha
+
+Além de ser Master, é preciso informar a senha da folha (`FOLHA_SENHA`). O desbloqueio devolve um **token separado do token de sessão**, enviado no header `X-Folha-Token` e válido por 30 minutos (`FOLHA_TOKEN_EXPIRES_IN`). O frontend guarda esse token só em memória, então fechar a aba tranca a folha de novo.
+
+Esse token é amarrado ao usuário que o gerou: o token da folha do Master não destrava nada para outro usuário.
+
+Nos **relatórios** a folha se comporta como o `SPEC.md` manda: com a folha trancada, ela aparece como uma linha genérica "Folha de pagamento" — o valor entra normalmente nos totais, mas nenhum nome de funcionário é exposto.
 
 O "hoje" do painel é calculado no fuso `America/Sao_Paulo` dentro do banco, não no fuso do servidor — o Railway roda em UTC, e depois das 21h de Brasília a data viraria antes da hora.
 
@@ -98,7 +121,10 @@ Todas as rotas exigem `Authorization: Bearer <token>`, exceto `/api/auth/login` 
 
 - **Fase 1 — concluída.** Autenticação com os 3 perfis, Fornecedores/Contas a pagar, Painel do dia e importação do backup, testados com os dados reais.
 - **Fase 2 — concluída.** Despesas fixas, Impostos, Outras despesas, Conciliação e Acumulado, todos importados do backup real. Fica pendente a **importação de novos extratos** (ver abaixo).
-- **Fases 3 e 4** — não iniciadas: Venda a prazo, Cadastros, Relatórios, Folha/Extras (Master) e Contas pessoais (Master).
+- **Fase 3 — concluída.** Venda a prazo, Cadastros, Relatórios e Folha/Extras (Master + senha), todos importados do backup real.
+- **Fase 4 — em andamento.** PWA, auditoria e exportação de backup.
+
+> **Contas pessoais saiu do escopo** por decisão do usuário: será tratada fora deste sistema. A regra de nunca misturar valores pessoais com totais da empresa continua valendo — nada pessoal entra no banco.
 
 ### Importação de novos extratos — em aberto
 

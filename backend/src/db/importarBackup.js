@@ -174,6 +174,15 @@ async function importar(caminho, { dryRun = false } = {}) {
     contasSemFornecedor: 0,
     conciliacao: { cielo: 0, stone: 0, itau: 0, tickets: 0, dinheiro: 0 },
     acumulados: 0,
+    clientes: 0,
+    funcionarios: 0,
+    bancos: 0,
+    movPrazo: 0,
+    movPrazoSemCliente: 0,
+    folha: 0,
+    folhaPagamentos: 0,
+    extras: 0,
+    extrasBaixas: 0,
   };
 
   const client = await pool.connect();
@@ -313,7 +322,189 @@ async function importar(caminho, { dryRun = false } = {}) {
       resumo.conciliacao.dinheiro = dinheiro.length;
     }
 
-    // 5) Acumulados (conferência de caixa)
+    // 5) Cadastros: clientes, funcionários e bancos
+    const clientes = (backup.clientes || []).map((c) => [
+      textoOuNull(c.codigo),
+      normalizarNome(c.nome) || '(sem nome)',
+      textoOuNull(c.telefone),
+      textoOuNull(c.doc),
+      textoOuNull(c.obs),
+      c.id,
+    ]);
+    if (clientes.length) {
+      await inserirEmLote(client, {
+        tabela: 'clientes',
+        colunas: ['codigo', 'nome', 'telefone', 'cpf_cnpj', 'observacoes', 'legado_id'],
+        linhas: clientes,
+        chaveConflito: 'legado_id',
+      });
+      resumo.clientes = clientes.length;
+    }
+
+    const funcionarios = (backup.funcionarios || []).map((f) => [
+      textoOuNull(f.codigo),
+      normalizarNome(f.nome) || '(sem nome)',
+      textoOuNull(f.telefone),
+      textoOuNull(f.cpf),
+      textoOuNull(f.pix),
+      textoOuNull(f.obs),
+      f.id,
+    ]);
+    if (funcionarios.length) {
+      await inserirEmLote(client, {
+        tabela: 'funcionarios',
+        colunas: ['codigo', 'nome', 'telefone', 'cpf', 'pix', 'observacoes', 'legado_id'],
+        linhas: funcionarios,
+        chaveConflito: 'legado_id',
+      });
+      resumo.funcionarios = funcionarios.length;
+    }
+
+    const bancos = (backup.bancos || []).map((b) => [
+      normalizarNome(b.nome) || '(sem nome)',
+      Boolean(b.padrao),
+      b.id,
+    ]);
+    if (bancos.length) {
+      await inserirEmLote(client, {
+        tabela: 'bancos',
+        colunas: ['nome', 'padrao', 'legado_id'],
+        linhas: bancos,
+        chaveConflito: 'legado_id',
+      });
+      resumo.bancos = bancos.length;
+    }
+
+    // 6) Venda a prazo. No sistema antigo o movimento aponta para o CÓDIGO do
+    // cliente, não para um id — resolvemos aqui para virar chave estrangeira.
+    const { rows: clientesGravados } = await client.query('SELECT id, codigo FROM clientes');
+    const idPorCodigo = new Map(clientesGravados.map((c) => [String(c.codigo), c.id]));
+
+    const movimentos = (backup.movPrazo || []).map((m) => [
+      idPorCodigo.get(String(m.codigo)) || null,
+      m.tipo === 'pagamento' ? 'pagamento' : 'compra',
+      paraNumero(m.valor),
+      m.data,
+      textoOuNull(m.obs),
+      m.id,
+    ]);
+    if (movimentos.length) {
+      await inserirEmLote(client, {
+        tabela: 'mov_prazo',
+        colunas: ['cliente_id', 'tipo', 'valor', 'data', 'observacoes', 'legado_id'],
+        linhas: movimentos,
+        chaveConflito: 'legado_id',
+      });
+      resumo.movPrazo = movimentos.length;
+      resumo.movPrazoSemCliente = movimentos.filter((m) => m[0] === null).length;
+    }
+
+    // 7) Folha e Extras. Vinculamos ao funcionário pelo nome quando der — no
+    // sistema antigo a folha guarda só o nome digitado, que nem sempre bate
+    // exatamente com o cadastro (ex.: "MARIA DA PENHA" vs "MARIA DA PENHA FAVALESSA").
+    const { rows: funcsGravados } = await client.query('SELECT id, nome, codigo FROM funcionarios');
+    const acharFuncionario = (nome, codigo) => {
+      if (codigo) {
+        const porCodigo = funcsGravados.find((f) => String(f.codigo) === String(codigo));
+        if (porCodigo) return porCodigo.id;
+      }
+      const alvo = chaveNome(nome);
+      if (!alvo) return null;
+      const exato = funcsGravados.find((f) => chaveNome(f.nome) === alvo);
+      if (exato) return exato.id;
+      const parcial = funcsGravados.find(
+        (f) => alvo.startsWith(chaveNome(f.nome)) || chaveNome(f.nome).startsWith(alvo)
+      );
+      return parcial ? parcial.id : null;
+    };
+
+    for (const f of backup.folha || []) {
+      const { rows } = await client.query(
+        `INSERT INTO folha
+           (funcionario_id, nome, tipo, data_ref, salario, bonificacao, compras,
+            adiantamento, outras, descontos, dias_ferias, observacoes, legado_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (legado_id) DO UPDATE
+           SET funcionario_id = EXCLUDED.funcionario_id, nome = EXCLUDED.nome,
+               tipo = EXCLUDED.tipo, data_ref = EXCLUDED.data_ref,
+               salario = EXCLUDED.salario, bonificacao = EXCLUDED.bonificacao,
+               compras = EXCLUDED.compras, adiantamento = EXCLUDED.adiantamento,
+               outras = EXCLUDED.outras, descontos = EXCLUDED.descontos,
+               dias_ferias = EXCLUDED.dias_ferias, observacoes = EXCLUDED.observacoes,
+               atualizado_em = now()
+         RETURNING id`,
+        [
+          acharFuncionario(f.nome, null),
+          normalizarNome(f.nome) || '(sem nome)',
+          textoOuNull(f.tipo),
+          f.dataRef || null,
+          paraNumero(f.salario),
+          paraNumero(f.bonificacao),
+          paraNumero(f.compras),
+          paraNumero(f.adiantamento),
+          paraNumero(f.outras),
+          paraNumero(f.descontos),
+          paraInteiroOuNull(f.diasFerias),
+          textoOuNull(f.obs),
+          f.id,
+        ]
+      );
+      resumo.folha += 1;
+
+      for (const b of baixasDoRegistro(f)) {
+        if (b.valor <= 0 || !b.data) continue;
+        await client.query(
+          `INSERT INTO folha_pagamentos (folha_id, valor, data_pagamento, forma_pagamento, observacoes, legado_id)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (legado_id) DO UPDATE
+             SET folha_id = EXCLUDED.folha_id, valor = EXCLUDED.valor,
+                 data_pagamento = EXCLUDED.data_pagamento,
+                 forma_pagamento = EXCLUDED.forma_pagamento,
+                 observacoes = EXCLUDED.observacoes`,
+          [rows[0].id, b.valor, b.data, textoOuNull(b.forma), textoOuNull(b.obs), b.legadoId]
+        );
+        resumo.folhaPagamentos += 1;
+      }
+    }
+
+    for (const e of backup.extras || []) {
+      const { rows } = await client.query(
+        `INSERT INTO extras (funcionario_id, nome, codigo, tipo, valor, data, observacoes, legado_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (legado_id) DO UPDATE
+           SET funcionario_id = EXCLUDED.funcionario_id, nome = EXCLUDED.nome,
+               codigo = EXCLUDED.codigo, tipo = EXCLUDED.tipo, valor = EXCLUDED.valor,
+               data = EXCLUDED.data, observacoes = EXCLUDED.observacoes
+         RETURNING id`,
+        [
+          acharFuncionario(e.funcionarioNome, e.funcionarioCodigo),
+          normalizarNome(e.funcionarioNome) || '(sem nome)',
+          textoOuNull(e.funcionarioCodigo),
+          textoOuNull(e.tipo),
+          paraNumero(e.valor),
+          e.data,
+          textoOuNull(e.obs),
+          e.id,
+        ]
+      );
+      resumo.extras += 1;
+
+      for (const b of e.baixas || []) {
+        const valor = paraNumero(b.valor);
+        if (valor <= 0 || !b.data) continue;
+        await client.query(
+          `INSERT INTO extras_baixas (extra_id, valor, data, observacoes, legado_id)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (legado_id) DO UPDATE
+             SET extra_id = EXCLUDED.extra_id, valor = EXCLUDED.valor,
+                 data = EXCLUDED.data, observacoes = EXCLUDED.observacoes`,
+          [rows[0].id, valor, b.data, textoOuNull(b.obs), b.id]
+        );
+        resumo.extrasBaixas += 1;
+      }
+    }
+
+    // 8) Acumulados (conferência de caixa)
     const acumulados = (backup.acumulados || []).map((a) => [
       a.data,
       paraNumero(a.dinheiro),
@@ -383,6 +574,15 @@ async function main() {
   console.log(`  Conciliação — Tickets:               ${cc.tickets}`);
   console.log(`  Conciliação — Dinheiro (PDV):        ${cc.dinheiro}`);
   console.log(`  Acumulados:                          ${resumo.acumulados}`);
+  console.log(`  Clientes:                            ${resumo.clientes}`);
+  console.log(`  Funcionários:                        ${resumo.funcionarios}`);
+  console.log(`  Bancos:                              ${resumo.bancos}`);
+  console.log(`  Venda a prazo (movimentos):          ${resumo.movPrazo}` +
+    (resumo.movPrazoSemCliente ? ` (${resumo.movPrazoSemCliente} sem cliente)` : ''));
+  console.log(`  Folha (lançamentos):                 ${resumo.folha}`);
+  console.log(`  Folha (pagamentos):                  ${resumo.folhaPagamentos}`);
+  console.log(`  Extras de funcionários:              ${resumo.extras}`);
+  console.log(`  Extras (baixas):                     ${resumo.extrasBaixas}`);
   await pool.end();
 }
 

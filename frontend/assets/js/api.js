@@ -26,14 +26,31 @@ export function limparSessao() {
   localStorage.removeItem(USUARIO_KEY);
 }
 
+// Token da folha vive só em memória: fechar a aba tranca a folha de novo,
+// que é o comportamento esperado para uma senha adicional.
+let folhaToken = null;
+
+export function setFolhaToken(token) {
+  folhaToken = token;
+}
+
+export function getFolhaToken() {
+  return folhaToken;
+}
+
+// `manterSessaoEm401` marca as chamadas em que 401 significa "credencial errada
+// agora", não "sessão expirada" — sem isso, errar a senha da folha derrubaria o
+// login inteiro do usuário.
 export async function apiFetch(path, opts = {}) {
+  const { manterSessaoEm401 = false, ...fetchOpts } = opts;
   const sessao = getSessao();
-  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const headers = { 'Content-Type': 'application/json', ...(fetchOpts.headers || {}) };
   if (sessao) headers.Authorization = `Bearer ${sessao.token}`;
+  if (folhaToken) headers['X-Folha-Token'] = folhaToken;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+  const res = await fetch(`${API_BASE}${path}`, { ...fetchOpts, headers });
 
-  if (res.status === 401 && sessao) {
+  if (res.status === 401 && sessao && !manterSessaoEm401) {
     limparSessao();
     window.location.reload();
     throw new Error('Sessão expirada.');
