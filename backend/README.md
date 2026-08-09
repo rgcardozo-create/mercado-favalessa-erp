@@ -14,8 +14,9 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - **Cadastros** de clientes, funcionários e bancos.
 - **Relatórios** por período.
 - **Folha de pagamento e Extras**, só para Master e ainda atrás de uma senha adicional.
+- **Administração** (Master): trilha de auditoria e exportação de backup em JSON.
 - Importação do backup JSON da v3.
-- Auditoria básica (quem cadastrou/editou/pagou o quê e quando).
+- Auditoria de quem cadastrou/editou/pagou o quê e quando.
 
 ### Como as quatro telas são modeladas
 
@@ -39,6 +40,7 @@ As quatro compartilham a mesma estrutura, então vivem na tabela `contas` separa
 | Cadastros (excluir) | ✅ | ✅ | ❌ |
 | Relatórios | ✅ | ✅ | ❌ |
 | Folha e Extras | ✅ (+ senha) | ❌ | ❌ |
+| Auditoria e exportar backup | ✅ | ❌ | ❌ |
 
 > Assunção adotada para esta primeira versão: o login "Loja" pode cadastrar boletos mas não dar baixa nem editar/excluir, seguindo a frase da spec "cadastro de boleto pelos funcionários, pagamento só por quem tem permissão". Isso é exatamente um dos "itens em aberto" do `SPEC.md` (seção 6) — ajuste fácil em `src/routes/contas.routes.js` caso a decisão final seja outra (ex: Loja no mesmo nível de Gerente em tudo).
 
@@ -97,6 +99,8 @@ Detalhes de como o backup é interpretado:
 - `GET /api/relatorios?de=&ate=` — consolidado do período (Master e Gerente)
 - `POST /api/folha/desbloquear` — troca a senha da folha por um token curto
 - `GET|POST /api/folha`, `POST /api/folha/:id/pagamentos`, `GET|POST /api/folha/extras` — Master, com folha destravada
+- `GET /api/admin/auditoria` — trilha paginada (`?entidade=&de=&ate=&pagina=&limite=`) — Master
+- `GET /api/admin/backup` — exporta tudo em JSON — Master. **A folha só entra no arquivo se estiver destravada**, para um backup baixado por engano não expor salários.
 
 ### A senha adicional da Folha
 
@@ -122,7 +126,7 @@ Todas as rotas exigem `Authorization: Bearer <token>`, exceto `/api/auth/login` 
 - **Fase 1 — concluída.** Autenticação com os 3 perfis, Fornecedores/Contas a pagar, Painel do dia e importação do backup, testados com os dados reais.
 - **Fase 2 — concluída.** Despesas fixas, Impostos, Outras despesas, Conciliação e Acumulado, todos importados do backup real. Fica pendente a **importação de novos extratos** (ver abaixo).
 - **Fase 3 — concluída.** Venda a prazo, Cadastros, Relatórios e Folha/Extras (Master + senha), todos importados do backup real.
-- **Fase 4 — em andamento.** PWA, auditoria e exportação de backup.
+- **Fase 4 — concluída.** PWA instalável, tela de auditoria e exportação de backup.
 
 > **Contas pessoais saiu do escopo** por decisão do usuário: será tratada fora deste sistema. A regra de nunca misturar valores pessoais com totais da empresa continua valendo — nada pessoal entra no banco.
 

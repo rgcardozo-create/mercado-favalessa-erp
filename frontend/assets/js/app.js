@@ -25,6 +25,7 @@ const state = {
   extras: null,
   folhaErro: null,
   relatorio: null,
+  auditoria: null,
   periodo: { de: '', ate: '' },
   statusFiltro: '',
   carregando: false,
@@ -105,6 +106,8 @@ async function carregarDados() {
     } else if (state.tab === 'relatorios') {
       const p = periodoOuPadrao();
       state.relatorio = await apiFetch(`/relatorios?de=${p.de}&ate=${p.ate}`);
+    } else if (state.tab === 'admin') {
+      state.auditoria = await apiFetch('/admin/auditoria?limite=50');
     } else {
       const params = new URLSearchParams({ tipo: state.tipo });
       if (state.statusFiltro) params.set('status', state.statusFiltro);
@@ -202,6 +205,7 @@ function cabecalhoHTML(titulo) {
       <button data-tab="cadastros" class="${state.tab === 'cadastros' ? 'ativo' : ''}">Cadastros</button>
       ${podeVerRelatorios() ? `<button data-tab="relatorios" class="${state.tab === 'relatorios' ? 'ativo' : ''}">Relatórios</button>` : ''}
       ${podeVerFolha() ? `<button data-tab="folha" class="${state.tab === 'folha' ? 'ativo' : ''}">Folha</button>` : ''}
+      ${podeVerFolha() ? `<button data-tab="admin" class="${state.tab === 'admin' ? 'ativo' : ''}">Administração</button>` : ''}
     </nav>
 
     ${state.erro ? `<div class="alerta erro">${state.erro}</div>` : ''}
@@ -734,6 +738,67 @@ function relatoriosHTML() {
   `;
 }
 
+const ROTULOS_ACAO = {
+  create: 'Cadastrou',
+  update: 'Editou',
+  delete: 'Excluiu',
+  pagamento: 'Pagou',
+  baixa: 'Baixou',
+  desbloqueio: 'Destravou a folha',
+};
+
+function adminHTML() {
+  const cabecalho = cabecalhoHTML('Administração');
+  const a = state.auditoria;
+
+  const backup = `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Exportar backup</h2></div>
+      <p class="vazio">
+        Baixa todos os dados em JSON, para guardar fora do sistema.
+        ${getFolhaToken()
+          ? 'A folha está destravada, então <strong>entra no arquivo</strong>.'
+          : 'A folha está trancada, então <strong>fica fora do arquivo</strong> — destrave antes se quiser incluí-la.'}
+      </p>
+      <button id="btn-exportar-backup">Baixar backup JSON</button>
+    </section>
+  `;
+
+  if (!a) return `${cabecalho}${backup}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+
+  return `
+    ${cabecalho}
+    ${backup}
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Auditoria</h2>
+        <span class="grupo-total">${a.total} registro(s) <small>mostrando ${a.registros.length}</small></span>
+      </div>
+      <table class="tabela-contas">
+        <thead><tr><th>Quando</th><th>Quem</th><th>Ação</th><th>Onde</th><th>Registro</th></tr></thead>
+        <tbody>
+          ${
+            a.registros.length
+              ? a.registros
+                  .map(
+                    (r) => `<tr>
+                      <td>${new Date(r.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</td>
+                      <td>${r.usuario_nome || '—'} ${r.usuario_role ? `<span class="badge role">${r.usuario_role}</span>` : ''}</td>
+                      <td>${ROTULOS_ACAO[r.acao] || r.acao}</td>
+                      <td>${r.entidade}</td>
+                      <td>${r.entidade_id || '—'}</td>
+                    </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="5">Nenhum registro de auditoria ainda.</td></tr>'
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
 function contasHTML() {
   const podeGerir = podeGerenciar();
   const ehFornecedor = state.tipo === 'fornecedor';
@@ -820,6 +885,7 @@ function telaHTML() {
   if (state.tab === 'cadastros') return cadastrosHTML();
   if (state.tab === 'folha' && podeVerFolha()) return folhaHTML();
   if (state.tab === 'relatorios' && podeVerRelatorios()) return relatoriosHTML();
+  if (state.tab === 'admin' && podeVerFolha()) return adminHTML();
   return contasHTML();
 }
 
@@ -910,6 +976,9 @@ function bind() {
 
   const formPeriodo = root.querySelector('[data-action="filtro-periodo"]');
   if (formPeriodo) formPeriodo.addEventListener('submit', onFiltroPeriodo);
+
+  const btnBackup = root.querySelector('#btn-exportar-backup');
+  if (btnBackup) btnBackup.addEventListener('click', onExportarBackup);
 
   root.querySelectorAll('[data-cadastro]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1024,6 +1093,22 @@ function onTrancarFolha() {
   state.folha = null;
   state.extras = null;
   render();
+}
+
+async function onExportarBackup() {
+  try {
+    const backup = await apiFetch('/admin/backup');
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `mercado_favalessa_backup_${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 async function onFiltroPeriodo(ev) {

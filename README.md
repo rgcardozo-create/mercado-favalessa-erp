@@ -4,15 +4,28 @@ Sistema multiusuário em nuvem do Mercado Favalessa, substituindo a versão sing
 
 ## Estrutura do repositório
 
-- `backend/` — API Node.js/Express + PostgreSQL (autenticação JWT, RBAC, regras de negócio). Ver `backend/README.md`.
-- `frontend/` — scaffold estático inicial da interface (PWA), ainda não conectado ao backend.
+- `backend/` — API Node.js/Express + PostgreSQL (autenticação JWT, RBAC, regras de negócio). Ver [`backend/README.md`](./backend/README.md).
+- `frontend/` — interface web (PWA instalável), em JavaScript puro. Ver [`frontend/README.md`](./frontend/README.md).
 
 ## Status
 
-**Fase 1 concluída**: autenticação com 3 perfis (Master/Gerente/Loja), Contas a pagar com baixas parciais, Painel do dia (Master/Gerente) e importação do backup JSON da v3 — validada com os dados reais.
+Todas as quatro fases do `SPEC.md` estão implementadas e validadas com o backup real de 08/08/2026:
 
-**Fase 2 concluída**: Despesas fixas, Impostos, Outras despesas, Conciliação das maquininhas e Acumulado — todos importados do backup real. Fica pendente o upload de novos extratos (detalhes em `backend/README.md`).
+| Fase | O que entrou |
+|---|---|
+| 1 | Autenticação com 3 perfis, Contas a pagar > Fornecedores, Painel do dia, importação do backup |
+| 2 | Despesas fixas, Impostos, Outras despesas, Conciliação das maquininhas, Acumulado |
+| 3 | Venda a prazo, Cadastros, Relatórios, Folha e Extras (Master + senha adicional) |
+| 4 | PWA instalável, trilha de auditoria, exportação de backup |
 
-**Fase 3 concluída**: Venda a prazo, Cadastros, Relatórios e Folha/Extras (Master, com senha adicional).
+**Contas pessoais foi retirada do escopo** por decisão do usuário — será tratada fora deste sistema.
 
-Falta o deploy no Railway. Próximos passos em `backend/README.md` e na seção 5 do `SPEC.md`.
+## O que falta para usar em produção
+
+1. Subir no Railway (banco Postgres + serviço do backend) e servir o frontend no mesmo domínio.
+2. Definir as senhas reais dos 3 usuários e a senha da Folha.
+3. Rodar a importação com o backup mais recente.
+
+Conforme o `SPEC.md`, o sistema HTML atual deve seguir rodando em paralelo até isso estar validado em uso real.
+
+Uma pendência conhecida: **carregar novos extratos de cartão** ainda não é possível pela tela — a conciliação hoje mostra o histórico importado. Detalhes em `backend/README.md`.

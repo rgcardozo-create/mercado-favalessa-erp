@@ -11,6 +11,7 @@ const cadastrosRoutes = require('./routes/cadastros.routes');
 const vendaPrazoRoutes = require('./routes/vendaPrazo.routes');
 const folhaRoutes = require('./routes/folha.routes');
 const relatoriosRoutes = require('./routes/relatorios.routes');
+const adminRoutes = require('./routes/admin.routes');
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use('/api/cadastros', cadastrosRoutes);
 app.use('/api/venda-prazo', vendaPrazoRoutes);
 app.use('/api/folha', folhaRoutes);
 app.use('/api/relatorios', relatoriosRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Rota não encontrada.' }));
 app.use(errorHandler);
