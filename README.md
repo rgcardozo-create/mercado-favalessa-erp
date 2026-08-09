@@ -20,12 +20,21 @@ Todas as quatro fases do `SPEC.md` estão implementadas e validadas com o backup
 
 **Contas pessoais foi retirada do escopo** por decisão do usuário — será tratada fora deste sistema.
 
-## O que falta para usar em produção
+## Colocando no ar
 
-1. Subir no Railway (banco Postgres + serviço do backend) e servir o frontend no mesmo domínio.
-2. Definir as senhas reais dos 3 usuários e a senha da Folha.
-3. Rodar a importação com o backup mais recente.
+Passo a passo em [`DEPLOY.md`](./DEPLOY.md). Em produção o backend serve também o frontend, então **um serviço só** no Railway coloca o sistema inteiro no ar, com a interface e a API no mesmo endereço.
+
+Resumo: criar o Postgres, criar o serviço a partir deste repositório, configurar as variáveis (senhas e `JWT_SECRET`), rodar `npm run migrate` e `npm run seed`, e importar o backup mais recente.
 
 Conforme o `SPEC.md`, o sistema HTML atual deve seguir rodando em paralelo até isso estar validado em uso real.
+
+## Rodando localmente
+
+```bash
+npm install          # instala o backend
+cp backend/.env.example backend/.env   # preencha as variáveis
+npm run migrate && npm run seed
+npm start            # sistema completo em http://localhost:3000
+```
 
 Uma pendência conhecida: **carregar novos extratos de cartão** ainda não é possível pela tela — a conciliação hoje mostra o histórico importado. Detalhes em `backend/README.md`.

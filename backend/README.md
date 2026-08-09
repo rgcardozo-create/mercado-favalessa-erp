@@ -114,12 +114,11 @@ O "hoje" do painel é calculado no fuso `America/Sao_Paulo` dentro do banco, nã
 
 Todas as rotas exigem `Authorization: Bearer <token>`, exceto `/api/auth/login` e `/api/health`.
 
-## Deploy no Railway
+## Deploy
 
-1. Criar um serviço PostgreSQL no Railway e copiar a `DATABASE_URL` gerada.
-2. Criar um serviço a partir deste diretório `backend/` (build automático via `package.json`).
-3. Configurar as variáveis de ambiente do `.env.example` no serviço.
-4. Rodar `npm run migrate` e `npm run seed` uma vez (via Railway shell ou job) para inicializar o banco.
+Passo a passo completo em [`DEPLOY.md`](../DEPLOY.md) na raiz do repositório.
+
+Em produção este backend **também serve o frontend** (`../frontend`), então um serviço só coloca o sistema inteiro no ar e o `/api` do frontend resolve no mesmo domínio. Por isso o CORS fica desligado quando `NODE_ENV=production`, a menos que `CORS_ORIGIN` seja definido — útil apenas se a interface for hospedada em outro domínio.
 
 ## Status por fase
 
