@@ -1,0 +1,17 @@
+{
+  "name": "mercado-favalessa-erp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema financeiro multiusuário do Mercado Favalessa",
+  "scripts": {
+    "postinstall": "npm install --prefix backend --omit=dev",
+    "start": "npm start --prefix backend",
+    "dev": "npm run dev --prefix backend",
+    "migrate": "npm run migrate --prefix backend",
+    "seed": "npm run seed --prefix backend",
+    "importar-backup": "npm run importar-backup --prefix backend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

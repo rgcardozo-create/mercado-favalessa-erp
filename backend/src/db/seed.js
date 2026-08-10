@@ -41,6 +41,20 @@ async function seed() {
     );
     console.log(`Usuário ${u.email} (${u.role}) criado/atualizado.`);
   }
+
+  // Senha adicional da Folha (segunda camada, além do perfil Master).
+  if (process.env.FOLHA_SENHA) {
+    const hash = await bcrypt.hash(process.env.FOLHA_SENHA, 12);
+    await pool.query(
+      `INSERT INTO configuracoes (chave, valor) VALUES ('folha_senha_hash', $1)
+       ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = now()`,
+      [hash]
+    );
+    console.log('Senha da Folha configurada.');
+  } else {
+    console.log('FOLHA_SENHA não definida — a tela de Folha ficará inacessível até configurá-la.');
+  }
+
   await pool.end();
 }
 

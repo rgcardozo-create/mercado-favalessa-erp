@@ -1,37 +1,28 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
-
-// saldo = valor - total pago; quitado exige pagamento registrado (total_pago > 0), nunca
-// só por saldo <= 0 — um lançamento de valor zero/negativo sem baixa não pode ser tratado
-// como quitado nem sumir da listagem.
-const SELECT_CONTAS_COM_SALDO = `
-  SELECT
-    c.*,
-    f.nome AS fornecedor_nome,
-    COALESCE(p.total_pago, 0) AS total_pago,
-    c.valor - COALESCE(p.total_pago, 0) AS saldo,
-    (COALESCE(p.total_pago, 0) > 0 AND c.valor - COALESCE(p.total_pago, 0) <= 0) AS quitado
-  FROM contas c
-  LEFT JOIN fornecedores f ON f.id = c.fornecedor_id
-  LEFT JOIN (
-    SELECT conta_id, SUM(valor) AS total_pago
-    FROM contas_pagamentos
-    GROUP BY conta_id
-  ) p ON p.conta_id = c.id
-`;
+const { SELECT_CONTAS_COM_SALDO, TIPOS_VALIDOS } = require('../db/contasQuery');
 
 async function listar(req, res) {
-  const { status } = req.query; // 'pendente' | 'quitado' (opcional)
-  let query = SELECT_CONTAS_COM_SALDO;
+  const { status, tipo } = req.query; // status: pendente|quitado — tipo: fornecedor|fixa|imposto|despesa
+  const filtros = [];
   const params = [];
 
   if (status === 'pendente' || status === 'quitado') {
-    const quitadoBool = status === 'quitado';
-    query = `SELECT * FROM (${SELECT_CONTAS_COM_SALDO}) t WHERE t.quitado = $1`;
-    params.push(quitadoBool);
+    params.push(status === 'quitado');
+    filtros.push(`t.quitado = $${params.length}`);
   }
 
-  query += params.length ? ' ORDER BY vencimento' : ' ORDER BY c.vencimento';
+  if (tipo) {
+    if (!TIPOS_VALIDOS.includes(tipo)) {
+      return res.status(400).json({ error: `tipo inválido. Use um de: ${TIPOS_VALIDOS.join(', ')}.` });
+    }
+    params.push(tipo);
+    filtros.push(`t.tipo = $${params.length}`);
+  }
+
+  const where = filtros.length ? ` WHERE ${filtros.join(' AND ')}` : '';
+  const query = `SELECT * FROM (${SELECT_CONTAS_COM_SALDO}) t${where} ORDER BY t.vencimento`;
+
   const { rows } = await pool.query(query, params);
   return res.json(rows);
 }
@@ -52,18 +43,26 @@ async function obter(req, res) {
 }
 
 async function criar(req, res) {
-  const { fornecedor_id, descricao, valor, vencimento } = req.body;
+  const { fornecedor_id, descricao, valor, vencimento, categoria } = req.body;
+  const tipo = req.body.tipo || 'fornecedor';
+
   if (!descricao || valor === undefined || !vencimento) {
     return res.status(400).json({ error: 'descricao, valor e vencimento são obrigatórios.' });
   }
   if (Number(valor) < 0) {
     return res.status(400).json({ error: 'valor não pode ser negativo.' });
   }
+  if (!TIPOS_VALIDOS.includes(tipo)) {
+    return res.status(400).json({ error: `tipo inválido. Use um de: ${TIPOS_VALIDOS.join(', ')}.` });
+  }
+
+  // Fornecedor só faz sentido em conta do tipo fornecedor.
+  const fornecedorId = tipo === 'fornecedor' ? fornecedor_id || null : null;
 
   const { rows } = await pool.query(
-    `INSERT INTO contas (fornecedor_id, descricao, valor, vencimento, criado_por)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [fornecedor_id || null, descricao, valor, vencimento, req.user.id]
+    `INSERT INTO contas (tipo, categoria, fornecedor_id, descricao, valor, vencimento, criado_por)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [tipo, categoria || null, fornecedorId, descricao, valor, vencimento, req.user.id]
   );
   const conta = rows[0];
 
@@ -80,18 +79,21 @@ async function criar(req, res) {
 
 async function atualizar(req, res) {
   const { id } = req.params;
-  const { fornecedor_id, descricao, valor, vencimento } = req.body;
+  const { fornecedor_id, descricao, valor, vencimento, categoria } = req.body;
 
+  // `tipo` não é editável: mudar o tipo de uma conta já lançada bagunçaria o
+  // histórico e os totais por tela. Para trocar, exclua e lance de novo.
   const { rows } = await pool.query(
     `UPDATE contas
      SET fornecedor_id = COALESCE($1, fornecedor_id),
          descricao = COALESCE($2, descricao),
          valor = COALESCE($3, valor),
          vencimento = COALESCE($4, vencimento),
+         categoria = COALESCE($5, categoria),
          atualizado_em = now()
-     WHERE id = $5
+     WHERE id = $6
      RETURNING *`,
-    [fornecedor_id, descricao, valor, vencimento, id]
+    [fornecedor_id, descricao, valor, vencimento, categoria, id]
   );
 
   if (!rows[0]) {

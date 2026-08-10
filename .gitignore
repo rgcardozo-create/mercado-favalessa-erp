@@ -1,3 +1,10 @@
 node_modules/
 .env
 *.log
+
+# Backups exportados do sistema v3 — contêm dados do negócio e as senhas da Folha
+# e das Contas particulares em `meta`. Nunca versionar.
+*.json.bkp
+backup*.json
+mercado_favalessa_backup*.json
+/backups/
