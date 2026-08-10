@@ -160,8 +160,12 @@ async function gravarConta(client, { registro, tipo, fornecedorId = null, vencim
   return contaId;
 }
 
-async function importar(caminho, { dryRun = false } = {}) {
-  const backup = JSON.parse(fs.readFileSync(caminho, 'utf8'));
+// Recebe o backup já em objeto. É esta função que a tela de Administração usa,
+// para não depender de o arquivo estar no disco do servidor.
+async function importarDados(backup, { dryRun = false } = {}) {
+  if (!backup || typeof backup !== 'object') {
+    throw new Error('Backup inválido: esperado um objeto JSON.');
+  }
 
   const fornecedoresBackup = backup.fornecedores || [];
   const contasBackup = backup.contas || [];
@@ -546,6 +550,11 @@ async function importar(caminho, { dryRun = false } = {}) {
   return resumo;
 }
 
+// Versão por arquivo, usada pela linha de comando.
+async function importar(caminho, opts = {}) {
+  return importarDados(JSON.parse(fs.readFileSync(caminho, 'utf8')), opts);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
@@ -593,4 +602,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { importar };
+module.exports = { importar, importarDados };

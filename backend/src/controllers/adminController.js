@@ -1,4 +1,6 @@
 const pool = require('../db/pool');
+const { importarDados } = require('../db/importarBackup');
+const { registrarAuditoria } = require('../utils/auditoria');
 
 // Trilha de auditoria: quem cadastrou/editou/pagou o quê e quando. Não existia
 // necessidade disso na versão single-user; com três pessoas mexendo no mesmo
@@ -86,4 +88,50 @@ async function exportarBackup(req, res) {
   });
 }
 
-module.exports = { auditoria, exportarBackup };
+// Importa um backup JSON enviado pela tela, sem depender de o arquivo estar no
+// disco do servidor — em nuvem o arquivo está no computador do usuário.
+//
+// Continua idempotente: cada registro carrega o `legado_id` do sistema antigo,
+// então reimportar um backup mais novo atualiza no lugar em vez de duplicar.
+// Isso é o que permite conviver com o sistema antigo durante a validação.
+async function importarBackupEnviado(req, res) {
+  const dryRun = req.query.dry_run === 'true' || req.query['dry-run'] === 'true';
+
+  // O corpo pode vir como o backup inteiro, ou embrulhado em { backup: ... }.
+  const backup = req.body && req.body.backup ? req.body.backup : req.body;
+
+  if (!backup || typeof backup !== 'object' || Array.isArray(backup)) {
+    return res.status(400).json({ error: 'Envie o conteúdo do arquivo de backup em JSON.' });
+  }
+
+  const colecoesConhecidas = [
+    'contas', 'fornecedores', 'fixas', 'impostos', 'despesas', 'clientes',
+    'funcionarios', 'bancos', 'movPrazo', 'folha', 'extras', 'acumulados', 'conciliacoes',
+  ];
+  if (!colecoesConhecidas.some((c) => backup[c] !== undefined)) {
+    return res.status(400).json({
+      error: 'Este arquivo não parece um backup do Mercado Favalessa — nenhuma coleção conhecida foi encontrada.',
+    });
+  }
+
+  let resumo;
+  try {
+    resumo = await importarDados(backup, { dryRun });
+  } catch (err) {
+    return res.status(400).json({ error: `Falha ao importar: ${err.message}` });
+  }
+
+  if (!dryRun) {
+    await registrarAuditoria({
+      usuarioId: req.user.id,
+      acao: 'importacao',
+      entidade: 'backup',
+      entidadeId: 0,
+      dados: resumo,
+    });
+  }
+
+  return res.json({ dry_run: dryRun, resumo });
+}
+
+module.exports = { auditoria, exportarBackup, importarBackupEnviado };

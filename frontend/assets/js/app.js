@@ -26,6 +26,11 @@ const state = {
   folhaErro: null,
   relatorio: null,
   auditoria: null,
+  importacao: null,
+  importando: false,
+  // O conteúdo do arquivo fica aqui porque o input é recriado a cada render:
+  // sem isso, o arquivo escolhido some depois da simulação.
+  arquivoImportacao: null,
   periodo: { de: '', ate: '' },
   statusFiltro: '',
   carregando: false,
@@ -745,7 +750,43 @@ const ROTULOS_ACAO = {
   pagamento: 'Pagou',
   baixa: 'Baixou',
   desbloqueio: 'Destravou a folha',
+  importacao: 'Importou backup',
 };
+
+function resultadoImportacaoHTML({ dry_run, resumo }) {
+  const c = resumo.contasImportadas;
+  const cc = resumo.conciliacao;
+  const linhas = [
+    ['Fornecedores', resumo.fornecedoresImportados + resumo.fornecedoresCriadosPorReferencia],
+    ['Contas de fornecedor', c.fornecedor],
+    ['Despesas fixas', c.fixa],
+    ['Impostos', c.imposto],
+    ['Outras despesas', c.despesa],
+    ['Pagamentos (baixas)', resumo.pagamentosImportados],
+    ['Conciliação (cartões)', cc.cielo + cc.stone + cc.itau + cc.tickets],
+    ['Conciliação (dinheiro)', cc.dinheiro],
+    ['Acumulados', resumo.acumulados],
+    ['Clientes', resumo.clientes],
+    ['Funcionários', resumo.funcionarios],
+    ['Bancos', resumo.bancos],
+    ['Venda a prazo', resumo.movPrazo],
+    ['Folha', resumo.folha],
+    ['Extras', resumo.extras],
+  ].filter(([, n]) => n > 0);
+
+  return `
+    <div class="alerta ${dry_run ? 'aviso' : 'sucesso'}">
+      <strong>${dry_run ? 'Simulação — nada foi gravado.' : 'Importação concluída.'}</strong>
+      ${dry_run ? ' Confira os números abaixo e, se estiver certo, clique em "Importar de verdade".' : ''}
+    </div>
+    <table class="tabela-contas">
+      <thead><tr><th>O que</th><th>Registros</th></tr></thead>
+      <tbody>
+        ${linhas.map(([rotulo, n]) => `<tr><td>${rotulo}</td><td>${n}</td></tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+}
 
 function adminHTML() {
   const cabecalho = cabecalhoHTML('Administração');
@@ -761,6 +802,26 @@ function adminHTML() {
           : 'A folha está trancada, então <strong>fica fora do arquivo</strong> — destrave antes se quiser incluí-la.'}
       </p>
       <button id="btn-exportar-backup">Baixar backup JSON</button>
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Importar backup do sistema antigo</h2></div>
+      <p class="vazio">
+        Carrega um backup JSON exportado pela versão antiga. Pode repetir quantas vezes
+        quiser: registros já importados são <strong>atualizados</strong>, não duplicados.
+      </p>
+      <form data-action="importar-backup" class="form-inline">
+        <label>Arquivo <input type="file" name="arquivo" accept=".json,application/json" /></label>
+        <button type="submit" data-modo="simular" ${state.arquivoImportacao ? '' : 'disabled'}>Simular</button>
+        <button type="submit" data-modo="importar" ${state.arquivoImportacao ? '' : 'disabled'}>Importar de verdade</button>
+      </form>
+      ${
+        state.arquivoImportacao
+          ? `<p class="vazio">Arquivo carregado: <strong>${state.arquivoImportacao.nome}</strong></p>`
+          : '<p class="vazio">Escolha o arquivo para liberar os botões.</p>'
+      }
+      ${state.importacao ? resultadoImportacaoHTML(state.importacao) : ''}
+      ${state.importando ? '<p>Processando o arquivo…</p>' : ''}
     </section>
   `;
 
@@ -980,6 +1041,18 @@ function bind() {
   const btnBackup = root.querySelector('#btn-exportar-backup');
   if (btnBackup) btnBackup.addEventListener('click', onExportarBackup);
 
+  const formImportar = root.querySelector('[data-action="importar-backup"]');
+  if (formImportar) {
+    formImportar.querySelector('input[name=arquivo]').addEventListener('change', onEscolherArquivo);
+    // Guardamos qual botão foi clicado para saber se é simulação ou importação.
+    formImportar.querySelectorAll('button[data-modo]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        formImportar.dataset.modoEscolhido = btn.dataset.modo;
+      });
+    });
+    formImportar.addEventListener('submit', onImportarBackup);
+  }
+
   root.querySelectorAll('[data-cadastro]').forEach((btn) => {
     btn.addEventListener('click', () => {
       if (state.cadastroTipo === btn.dataset.cadastro) return;
@@ -1108,6 +1181,65 @@ async function onExportarBackup() {
   } catch (err) {
     state.erro = err.message;
     render();
+  }
+}
+
+async function onEscolherArquivo(ev) {
+  const arquivo = ev.target.files[0];
+  state.importacao = null;
+  state.erro = null;
+
+  if (!arquivo) {
+    state.arquivoImportacao = null;
+    render();
+    return;
+  }
+
+  try {
+    const conteudo = JSON.parse(await arquivo.text());
+    state.arquivoImportacao = { nome: arquivo.name, conteudo };
+  } catch {
+    state.arquivoImportacao = null;
+    state.erro = 'O arquivo não é um JSON válido.';
+  }
+  render();
+}
+
+async function onImportarBackup(ev) {
+  ev.preventDefault();
+
+  if (!state.arquivoImportacao) {
+    state.erro = 'Escolha um arquivo de backup primeiro.';
+    render();
+    return;
+  }
+
+  const simular = ev.target.dataset.modoEscolhido !== 'importar';
+
+  if (!simular && !confirm('Importar este backup para o banco? Registros já existentes serão atualizados.')) {
+    return;
+  }
+
+  state.importando = true;
+  state.importacao = null;
+  state.erro = null;
+  render();
+
+  try {
+    state.importacao = await apiFetch(`/admin/importar${simular ? '?dry_run=true' : ''}`, {
+      method: 'POST',
+      body: JSON.stringify(state.arquivoImportacao.conteudo),
+    });
+  } catch (err) {
+    state.erro = err.message;
+  } finally {
+    state.importando = false;
+    // Depois de importar de verdade, recarrega a auditoria para o registro aparecer.
+    if (!simular && !state.erro) {
+      carregarDados();
+    } else {
+      render();
+    }
   }
 }
 
