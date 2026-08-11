@@ -2,9 +2,13 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const { authenticate, authorize } = require('../middleware/auth');
 const { detectarFolhaDestravada } = require('../middleware/folha');
-const { auditoria, exportarBackup } = require('../controllers/adminController');
+const { auditoria, exportarBackup, importarBackupEnviado } = require('../controllers/adminController');
 
 const router = express.Router();
+
+// O backup do sistema atual passa de 2 MB, acima do limite global de 1 MB —
+// esta rota (e só ela) aceita corpos grandes.
+const corpoGrande = express.json({ limit: process.env.LIMITE_IMPORTACAO || '25mb' });
 
 // Trilha de auditoria e backup completo são de supervisão: Master apenas.
 // `detectarFolhaDestravada` não bloqueia nada aqui — só decide se a folha entra
@@ -13,5 +17,6 @@ router.use(authenticate, authorize('master'), detectarFolhaDestravada);
 
 router.get('/auditoria', asyncHandler(auditoria));
 router.get('/backup', asyncHandler(exportarBackup));
+router.post('/importar', corpoGrande, asyncHandler(importarBackupEnviado));
 
 module.exports = router;

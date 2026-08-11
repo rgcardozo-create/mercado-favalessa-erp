@@ -95,6 +95,10 @@ button.ativo { background: #059669; }
 
 .alerta { padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; font-size: 14px; }
 .alerta.erro { background: #3b1414; border: 1px solid #DC2626; color: #fecaca; }
+.alerta.aviso { background: #3b2f14; border: 1px solid #f59e0b; color: #fde68a; }
+.alerta.sucesso { background: #10281f; border: 1px solid #059669; color: #a7f3d0; }
+
+input[type="file"] { padding: 6px; font-size: 13px; }
 
 /* Formulários */
 .cartoes-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }

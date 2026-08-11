@@ -48,13 +48,15 @@ npm run seed      # cria os 3 usuários e grava a senha da Folha
 
 ## 5. Importar os dados atuais
 
-Envie o backup JSON mais recente do sistema antigo para o serviço e rode:
+Pela tela, sem terminal: entre como Master → aba **Administração** → seção **Importar backup do sistema antigo**.
 
-```bash
-npm run importar-backup -- caminho/do/backup.json
-```
+1. Escolha o arquivo JSON exportado pela versão antiga.
+2. Clique em **Simular** — nada é gravado, só mostra quantos registros de cada tipo seriam importados. Confira se os números fazem sentido.
+3. Se estiver certo, clique em **Importar de verdade**.
 
-Pode rodar quantas vezes quiser: a importação é idempotente e atualiza no lugar em vez de duplicar. Na prática, dá para repetir o comando com um backup mais novo até o dia em que o sistema antigo for desligado.
+Pode repetir quantas vezes quiser: a importação é idempotente e **atualiza no lugar em vez de duplicar**. Na prática, dá para reimportar um backup mais novo sempre que quiser, até o dia em que o sistema antigo for desligado.
+
+> Também existe o caminho por linha de comando, se preferir: `npm run importar-backup -- caminho/do/backup.json` (aceita `--dry-run`).
 
 ## 6. Publicar o endereço
 

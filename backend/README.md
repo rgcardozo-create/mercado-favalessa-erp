@@ -60,6 +60,10 @@ Health check: `GET /api/health`.
 
 ## Importando o backup do sistema antigo
 
+**Pela tela** (recomendado): Administração → *Importar backup do sistema antigo*. Escolha o arquivo, clique em **Simular** para conferir os números sem gravar nada e depois em **Importar de verdade**. É o caminho que funciona em nuvem, onde o arquivo está no computador do usuário e não no disco do servidor.
+
+**Por linha de comando** (para uso local):
+
 ```bash
 npm run importar-backup -- caminho/do/backup.json            # importa
 npm run importar-backup -- caminho/do/backup.json --dry-run  # simula, sem gravar
@@ -101,6 +105,7 @@ Detalhes de como o backup é interpretado:
 - `GET|POST /api/folha`, `POST /api/folha/:id/pagamentos`, `GET|POST /api/folha/extras` — Master, com folha destravada
 - `GET /api/admin/auditoria` — trilha paginada (`?entidade=&de=&ate=&pagina=&limite=`) — Master
 - `GET /api/admin/backup` — exporta tudo em JSON — Master. **A folha só entra no arquivo se estiver destravada**, para um backup baixado por engano não expor salários.
+- `POST /api/admin/importar` — importa um backup enviado pela tela (aceita `?dry_run=true` para simular) — Master. Esta rota tem limite de corpo próprio (`LIMITE_IMPORTACAO`, padrão 25 MB), porque o backup passa dos 2 MB e o limite global é 1 MB.
 
 ### A senha adicional da Folha
 
