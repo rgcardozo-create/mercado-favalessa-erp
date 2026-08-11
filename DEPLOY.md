@@ -37,14 +37,21 @@ Não é preciso definir `PORT` — o Railway injeta sozinho.
 
 > As senhas ficam **só** nas variáveis do Railway. Nunca as coloque em arquivo no repositório.
 
-## 4. Inicializar o banco
+## 4. Inicializar o banco — automático
 
-Depois do primeiro deploy, no serviço do sistema abra o terminal do Railway e rode:
+Não precisa fazer nada: **o sistema prepara o banco sozinho ao subir**. A cada deploy ele cria/atualiza as tabelas e configura os acessos a partir das variáveis acima.
 
-```bash
-npm run migrate   # cria as tabelas
-npm run seed      # cria os 3 usuários e grava a senha da Folha
+Nos logs do serviço você deve ver:
+
 ```
+Banco: schema aplicado.
+Banco: acessos configurados (master, gerente, loja).
+Mercado Favalessa ERP rodando na porta 3000
+```
+
+Se aparecer um aviso de senha não definida, é porque falta alguma variável `SEED_*_SENHA` ou `FOLHA_SENHA` — preencha e o serviço se ajusta no próximo reinício.
+
+> É por aqui que se **redefine uma senha**: mude a variável no Railway e reinicie o serviço. Ainda não existe troca de senha pela interface.
 
 ## 5. Importar os dados atuais
 
@@ -90,6 +97,8 @@ Conforme o `SPEC.md`, o HTML atual deve seguir em uso em paralelo até este sist
 
 **Erro de SSL no banco.** O padrão já é SSL ligado, que é o que o Railway usa. Só defina `DATABASE_SSL=false` se estiver rodando num Postgres local sem SSL.
 
-**A folha não destrava.** `FOLHA_SENHA` precisa estar definida **antes** de rodar `npm run seed` — é o seed que grava o hash. Se definiu depois, rode o seed de novo.
+**A folha não destrava.** Confira se `FOLHA_SENHA` está definida e reinicie o serviço — o hash é gravado no boot.
 
-**Deploy sobe mas o health check falha.** O health check aponta para `/api/health`. Se ele não responde, o serviço não conseguiu conectar no banco — confira `DATABASE_URL`.
+**Deploy sobe mas o health check falha.** O health check aponta para `/api/health`. Se ele não responde, o serviço não conseguiu conectar no banco — confira `DATABASE_URL` nos logs.
+
+**Erro de conexão com o banco no primeiro deploy.** A rede interna do Railway às vezes demora a ficar disponível. Reinicie o serviço; se persistir, troque `DATABASE_URL` para `${{Postgres.DATABASE_PUBLIC_URL}}` temporariamente.
