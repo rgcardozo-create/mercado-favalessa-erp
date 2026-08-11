@@ -123,6 +123,10 @@ Todas as rotas exigem `Authorization: Bearer <token>`, exceto `/api/auth/login` 
 
 Passo a passo completo em [`DEPLOY.md`](../DEPLOY.md) na raiz do repositório.
 
+**O banco é preparado no boot** (`src/db/bootstrap.js`): o servidor aplica o schema e configura os acessos a partir das variáveis de ambiente antes de aceitar requisições. Em PaaS não há terminal para rodar migração à mão, e subir com o schema desatualizado só produziria erro na primeira tela aberta. Repetir é seguro — o schema é todo `IF NOT EXISTS` e os usuários entram com `ON CONFLICT DO UPDATE`.
+
+Os comandos `npm run migrate` e `npm run seed` continuam existindo para uso local.
+
 Em produção este backend **também serve o frontend** (`../frontend`), então um serviço só coloca o sistema inteiro no ar e o `/api` do frontend resolve no mesmo domínio. Por isso o CORS fica desligado quando `NODE_ENV=production`, a menos que `CORS_ORIGIN` seja definido — útil apenas se a interface for hospedada em outro domínio.
 
 ## Status por fase
