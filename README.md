@@ -37,4 +37,4 @@ npm run migrate && npm run seed
 npm start            # sistema completo em http://localhost:3000
 ```
 
-Uma pendência conhecida: **carregar novos extratos de cartão** ainda não é possível pela tela — a conciliação hoje mostra o histórico importado. Detalhes em `backend/README.md`.
+Extratos de cartão são carregados pela tela de Conciliação, com conferência antes de gravar. Detalhes em `backend/README.md`.

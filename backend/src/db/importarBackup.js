@@ -638,4 +638,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { importar, importarDados };
+module.exports = { importar, importarDados, impressaoDigital };

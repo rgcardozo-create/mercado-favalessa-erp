@@ -31,6 +31,11 @@ const state = {
   // O conteúdo do arquivo fica aqui porque o input é recriado a cada render:
   // sem isso, o arquivo escolhido some depois da simulação.
   arquivoImportacao: null,
+  extrato: null,
+  extratoArquivo: null,
+  extratoAdquirente: 'cielo',
+  extratoCarregando: false,
+  extratoResultado: null,
   periodo: { de: '', ate: '' },
   statusFiltro: '',
   carregando: false,
@@ -304,6 +309,113 @@ function painelHTML() {
   `;
 }
 
+const ADQUIRENTES_UI = [
+  { valor: 'cielo', rotulo: 'Cielo' },
+  { valor: 'stone', rotulo: 'Stone' },
+  { valor: 'itau', rotulo: 'Rede / Itaú' },
+  { valor: 'tickets', rotulo: 'Tickets / Parceiros' },
+];
+
+function importarExtratoHTML() {
+  const e = state.extrato;
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Importar extrato</h2></div>
+      <p class="vazio">
+        Baixe o relatório de vendas no site do adquirente e carregue aqui (.xlsx ou .csv).
+        Vendas de voucher vão para <strong>Tickets</strong> automaticamente, mesmo vindo
+        do arquivo da Stone ou da Rede. Recarregar um período já importado
+        <strong>atualiza</strong>, não duplica.
+      </p>
+
+      <form data-action="extrato-analisar" class="form-inline">
+        <label>Adquirente
+          <select name="adquirente">
+            ${ADQUIRENTES_UI.map(
+              (a) => `<option value="${a.valor}" ${state.extratoAdquirente === a.valor ? 'selected' : ''}>${a.rotulo}</option>`
+            ).join('')}
+          </select>
+        </label>
+        <label>Arquivo <input type="file" name="arquivo" accept=".xlsx,.csv" /></label>
+        <button type="submit" ${state.extratoArquivo ? '' : 'disabled'}>Conferir antes de importar</button>
+      </form>
+
+      ${state.extratoArquivo ? `<p class="vazio">Arquivo: <strong>${state.extratoArquivo.nome}</strong></p>` : ''}
+      ${state.extratoCarregando ? '<p>Lendo a planilha…</p>' : ''}
+
+      ${
+        e && !e.reconhecido
+          ? `<div class="alerta erro">
+              Não reconheci as colunas desta planilha. Colunas encontradas:
+              ${e.colunas.map((c) => `<code>${c.titulo || '(vazia)'}</code>`).join(', ')}.
+              Me mande esse arquivo que eu ajusto o sistema para ele.
+            </div>`
+          : ''
+      }
+
+      ${
+        e && e.reconhecido && e.previa
+          ? `<div class="alerta aviso">
+              <strong>Confira antes de gravar.</strong> Nada foi importado ainda.
+            </div>
+            <table class="tabela-contas">
+              <thead><tr><th>Coluna do arquivo</th><th>Entendi como</th></tr></thead>
+              <tbody>
+                ${Object.entries(e.mapa)
+                  .map(([campo, indice]) => {
+                    const col = e.colunas[indice];
+                    return `<tr><td>${col ? col.titulo : `coluna ${indice}`}</td><td>${ROTULO_CAMPO[campo] || campo}</td></tr>`;
+                  })
+                  .join('')}
+              </tbody>
+            </table>
+            <p class="vazio">
+              <strong>${e.previa.total}</strong> transações
+              ${e.previa.periodo ? `de ${dateBR(e.previa.periodo.de)} a ${dateBR(e.previa.periodo.ate)}` : ''}
+              ${e.previa.ignoradas ? ` &middot; ${e.previa.ignoradas} linha(s) sem data ignorada(s)` : ''}
+            </p>
+            <table class="tabela-contas">
+              <thead><tr><th>Vai para</th><th>Transações</th><th>Bruto</th></tr></thead>
+              <tbody>
+                ${Object.entries(e.previa.por_tipo)
+                  .map(([tipo, v]) => `<tr><td>${rotuloAdquirente(tipo)}</td><td>${v.quantidade}</td><td>${brl(v.bruto)}</td></tr>`)
+                  .join('')}
+              </tbody>
+            </table>
+            <button id="btn-extrato-importar">Importar de verdade</button>`
+          : ''
+      }
+
+      ${
+        state.extratoResultado
+          ? `<div class="alerta sucesso">
+              <strong>Importado.</strong>
+              ${state.extratoResultado.novas} nova(s) e
+              ${state.extratoResultado.atualizadas} já existente(s) atualizada(s).
+            </div>`
+          : ''
+      }
+    </section>
+  `;
+}
+
+const ROTULO_CAMPO = {
+  data: 'Data da venda',
+  hora: 'Hora',
+  forma: 'Forma de pagamento',
+  bandeira: 'Bandeira',
+  valorBruto: 'Valor bruto',
+  tarifa: 'Taxa / tarifa',
+  valorLiquido: 'Valor líquido',
+  status: 'Status',
+};
+
+function rotuloAdquirente(tipo) {
+  const a = ADQUIRENTES_UI.find((x) => x.valor === tipo);
+  return a ? a.rotulo : tipo;
+}
+
 function conciliacaoHTML() {
   const cabecalho = cabecalhoHTML('Conciliação');
   if (!state.conciliacao) {
@@ -313,6 +425,7 @@ function conciliacaoHTML() {
   const c = state.conciliacao;
   return `
     ${cabecalho}
+    ${podeGerenciar() ? importarExtratoHTML() : ''}
 
     <div class="cartoes-resumo">
       <div class="cartao-resumo proximos">
@@ -1041,6 +1154,20 @@ function bind() {
   const btnBackup = root.querySelector('#btn-exportar-backup');
   if (btnBackup) btnBackup.addEventListener('click', onExportarBackup);
 
+  const formExtrato = root.querySelector('[data-action="extrato-analisar"]');
+  if (formExtrato) {
+    formExtrato.querySelector('input[name=arquivo]').addEventListener('change', onEscolherExtrato);
+    formExtrato.querySelector('select[name=adquirente]').addEventListener('change', (ev) => {
+      state.extratoAdquirente = ev.target.value;
+      state.extrato = null;
+      state.extratoResultado = null;
+    });
+    formExtrato.addEventListener('submit', onAnalisarExtrato);
+  }
+
+  const btnImportarExtrato = root.querySelector('#btn-extrato-importar');
+  if (btnImportarExtrato) btnImportarExtrato.addEventListener('click', onImportarExtrato);
+
   const formImportar = root.querySelector('[data-action="importar-backup"]');
   if (formImportar) {
     formImportar.querySelector('input[name=arquivo]').addEventListener('change', onEscolherArquivo);
@@ -1166,6 +1293,93 @@ function onTrancarFolha() {
   state.folha = null;
   state.extras = null;
   render();
+}
+
+// O arquivo vai em base64 no corpo JSON — evita depender de upload multipart
+// só para esta tela.
+function paraBase64(arquivo) {
+  return new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onload = () => resolve(String(leitor.result).split(',')[1]);
+    leitor.onerror = () => reject(new Error('Não consegui ler o arquivo.'));
+    leitor.readAsDataURL(arquivo);
+  });
+}
+
+async function onEscolherExtrato(ev) {
+  const arquivo = ev.target.files[0];
+  state.extrato = null;
+  state.extratoResultado = null;
+  state.erro = null;
+
+  if (!arquivo) {
+    state.extratoArquivo = null;
+    render();
+    return;
+  }
+
+  try {
+    state.extratoArquivo = { nome: arquivo.name, base64: await paraBase64(arquivo) };
+  } catch (err) {
+    state.extratoArquivo = null;
+    state.erro = err.message;
+  }
+  render();
+}
+
+async function onAnalisarExtrato(ev) {
+  ev.preventDefault();
+  if (!state.extratoArquivo) return;
+
+  state.extratoCarregando = true;
+  state.extrato = null;
+  state.extratoResultado = null;
+  state.erro = null;
+  render();
+
+  try {
+    state.extrato = await apiFetch('/conciliacao/extratos/analisar', {
+      method: 'POST',
+      body: JSON.stringify({
+        arquivo_base64: state.extratoArquivo.base64,
+        nome_arquivo: state.extratoArquivo.nome,
+        adquirente: state.extratoAdquirente,
+      }),
+    });
+  } catch (err) {
+    state.erro = err.message;
+  } finally {
+    state.extratoCarregando = false;
+    render();
+  }
+}
+
+async function onImportarExtrato() {
+  if (!state.extratoArquivo || !state.extrato) return;
+  if (!confirm('Importar estas transações para a conciliação?')) return;
+
+  state.extratoCarregando = true;
+  state.erro = null;
+  render();
+
+  try {
+    state.extratoResultado = await apiFetch('/conciliacao/extratos', {
+      method: 'POST',
+      body: JSON.stringify({
+        arquivo_base64: state.extratoArquivo.base64,
+        nome_arquivo: state.extratoArquivo.nome,
+        adquirente: state.extratoAdquirente,
+        mapa: state.extrato.mapa,
+      }),
+    });
+    state.extrato = null;
+    state.extratoArquivo = null;
+  } catch (err) {
+    state.erro = err.message;
+  } finally {
+    state.extratoCarregando = false;
+    carregarDados(); // atualiza os totais da tela
+  }
 }
 
 async function onExportarBackup() {
