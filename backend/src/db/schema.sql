@@ -144,33 +144,47 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
+-- `impressao_digital` identifica a transação pelo CONTEÚDO (adquirente, data,
+-- hora, valor, bandeira, forma), não pelo id do sistema antigo.
+--
+-- Motivo: ao recarregar um extrato, a v3 gera ids novos para tudo. Uma segunda
+-- importação cobrindo o mesmo período traria as mesmas vendas com ids diferentes
+-- e o faturamento apareceria em dobro. Pelo conteúdo, a mesma venda é
+-- reconhecida sempre.
+--
+-- Vendas genuinamente idênticas (mesmo minuto, mesmo valor, mesma bandeira)
+-- existem e são legítimas: o importador diferencia acrescentando "#2", "#3" à
+-- impressão digital, então nenhuma delas se perde.
 CREATE TABLE IF NOT EXISTS conciliacao_transacoes (
-  id             SERIAL PRIMARY KEY,
-  adquirente     adquirente_tipo NOT NULL,
-  data           DATE NOT NULL,
-  hora           VARCHAR(12),
-  forma          VARCHAR(60),
-  bandeira       VARCHAR(60),
-  valor_bruto    NUMERIC(12,2) NOT NULL DEFAULT 0,
-  tarifa         NUMERIC(12,6) NOT NULL DEFAULT 0,
-  valor_liquido  NUMERIC(12,6) NOT NULL DEFAULT 0,
-  categoria      VARCHAR(30),
-  status         VARCHAR(30),
-  lote           VARCHAR(60),
-  arquivo        VARCHAR(160),
-  importado_em   TIMESTAMPTZ,
-  legado_id      VARCHAR(40) UNIQUE,
-  criado_em      TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                 SERIAL PRIMARY KEY,
+  adquirente         adquirente_tipo NOT NULL,
+  data               DATE NOT NULL,
+  hora               VARCHAR(12),
+  forma              VARCHAR(60),
+  bandeira           VARCHAR(60),
+  valor_bruto        NUMERIC(12,2) NOT NULL DEFAULT 0,
+  tarifa             NUMERIC(12,6) NOT NULL DEFAULT 0,
+  valor_liquido      NUMERIC(12,6) NOT NULL DEFAULT 0,
+  categoria          VARCHAR(30),
+  status             VARCHAR(30),
+  lote               VARCHAR(60),
+  arquivo            VARCHAR(160),
+  importado_em       TIMESTAMPTZ,
+  legado_id          VARCHAR(40),
+  impressao_digital  TEXT UNIQUE,
+  criado_em          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Dinheiro é conferido por PDV, não vem de extrato de adquirente.
+-- Dinheiro é conferido por PDV, não vem de extrato de adquirente. Mesma ideia:
+-- identificado por data + PDV + valor, para reimportar não duplicar.
 CREATE TABLE IF NOT EXISTS conciliacao_dinheiro (
-  id          SERIAL PRIMARY KEY,
-  data        DATE NOT NULL,
-  pdv         VARCHAR(10),
-  valor       NUMERIC(12,2) NOT NULL DEFAULT 0,
-  legado_id   VARCHAR(40) UNIQUE,
-  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+  id                 SERIAL PRIMARY KEY,
+  data               DATE NOT NULL,
+  pdv                VARCHAR(10),
+  valor              NUMERIC(12,2) NOT NULL DEFAULT 0,
+  legado_id          VARCHAR(40),
+  impressao_digital  TEXT UNIQUE,
+  criado_em          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ── Acumulado (conferência de caixa) ───────────────────────────────────────────
@@ -294,6 +308,43 @@ ALTER TABLE contas_pagamentos
   ADD COLUMN IF NOT EXISTS origem VARCHAR(60),
   ADD COLUMN IF NOT EXISTS observacoes TEXT,
   ADD COLUMN IF NOT EXISTS legado_id VARCHAR(40) UNIQUE;
+
+-- Conciliação: identidade por conteúdo. Em bancos que já receberam importações,
+-- a impressão digital precisa ser preenchida a partir das linhas existentes —
+-- senão a próxima importação não reconheceria o que já está lá e duplicaria.
+ALTER TABLE conciliacao_transacoes ADD COLUMN IF NOT EXISTS impressao_digital TEXT;
+ALTER TABLE conciliacao_dinheiro   ADD COLUMN IF NOT EXISTS impressao_digital TEXT;
+
+-- O id do sistema antigo deixa de ser identidade (ele muda a cada recarga de
+-- extrato) e passa a ser só informativo, então não pode mais ser único.
+ALTER TABLE conciliacao_transacoes DROP CONSTRAINT IF EXISTS conciliacao_transacoes_legado_id_key;
+ALTER TABLE conciliacao_dinheiro   DROP CONSTRAINT IF EXISTS conciliacao_dinheiro_legado_id_key;
+
+-- O sufixo "#n" preserva vendas genuinamente idênticas (mesmo minuto, mesmo
+-- valor). Precisa casar exatamente com o que o importador gera em JS.
+UPDATE conciliacao_transacoes t SET impressao_digital = s.fp
+  FROM (
+    SELECT id,
+           adquirente || '|' || data::text || '|' || COALESCE(hora, '') || '|'
+             || valor_bruto::text || '|' || COALESCE(bandeira, '') || '|' || COALESCE(forma, '')
+             || CASE WHEN ROW_NUMBER() OVER w > 1 THEN '#' || (ROW_NUMBER() OVER w)::text ELSE '' END AS fp
+      FROM conciliacao_transacoes
+    WINDOW w AS (PARTITION BY adquirente, data, hora, valor_bruto, bandeira, forma ORDER BY id)
+  ) s
+ WHERE t.id = s.id AND t.impressao_digital IS NULL;
+
+UPDATE conciliacao_dinheiro d SET impressao_digital = s.fp
+  FROM (
+    SELECT id,
+           data::text || '|' || COALESCE(pdv, '') || '|' || valor::text
+             || CASE WHEN ROW_NUMBER() OVER w > 1 THEN '#' || (ROW_NUMBER() OVER w)::text ELSE '' END AS fp
+      FROM conciliacao_dinheiro
+    WINDOW w AS (PARTITION BY data, pdv, valor ORDER BY id)
+  ) s
+ WHERE d.id = s.id AND d.impressao_digital IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_impressao ON conciliacao_transacoes(impressao_digital);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_dinheiro_impressao ON conciliacao_dinheiro(impressao_digital);
 
 CREATE INDEX IF NOT EXISTS idx_contas_vencimento ON contas(vencimento);
 CREATE INDEX IF NOT EXISTS idx_contas_tipo ON contas(tipo);

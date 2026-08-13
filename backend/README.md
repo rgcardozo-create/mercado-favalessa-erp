@@ -77,7 +77,8 @@ Detalhes de como o backup é interpretado:
 - Só `contas` e `despesas` guardam um array `pagamentos[]`. `fixas` e `impostos` registram um pagamento único solto no próprio registro (`valorPago`/`dataPagamento`) — o importador converte os dois formatos em linhas de `contas_pagamentos`, de onde o saldo é sempre calculado. O campo `pago` do JSON antigo é ignorado de propósito.
 - `despesas` não têm vencimento próprio: a `data` da despesa é usada como vencimento, e a `categoria` é preservada.
 - Campos preservados: parcela/total de parcelas, prioridade, observações, forma e origem do pagamento.
-- A conciliação (~4,5 mil transações) é inserida em lotes; `hora` fica como texto porque os extratos usam formatos diferentes ("08:21", "9:45:46").
+- A conciliação é inserida em lotes; `hora` fica como texto porque os extratos usam formatos diferentes ("08:21", "9:45:46").
+- **Transações de cartão são identificadas pelo conteúdo** (adquirente + data + hora + valor + bandeira + forma), não pelo id do sistema antigo. Ao recarregar um extrato, a v3 gera ids novos para as mesmas vendas — usar o id faria o faturamento do período aparecer em dobro numa segunda importação. Vendas genuinamente idênticas (mesmo minuto, mesmo valor) são preservadas via sufixo `#2`, `#3`. O mesmo vale para o dinheiro por PDV.
 
 > **Dado inconsistente conhecido:** no extrato do Itaú o valor bruto (R$ 86,58) não bate com o líquido (R$ 2.473,56) — o parser do sistema atual trouxe esses campos incompletos. A importação preserva os valores como estão, sem "corrigir" histórico. Vale revisar quando a importação de extratos for reescrita.
 
