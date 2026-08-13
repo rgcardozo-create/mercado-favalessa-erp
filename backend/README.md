@@ -97,6 +97,8 @@ Detalhes de como o backup é interpretado:
 - `GET /api/painel-do-dia` — vencidas, vencem hoje e próximos 7 dias, com totais (Master/Gerente)
 - `GET /api/conciliacao` — resumo por adquirente e dinheiro por PDV (aceita `?de=&ate=`)
 - `GET /api/conciliacao/transacoes` — listagem paginada (`?adquirente=&de=&ate=&pagina=&limite=`)
+- `POST /api/conciliacao/extratos/analisar` — lê a planilha e devolve o que entendeu, sem gravar (Master/Gerente)
+- `POST /api/conciliacao/extratos` — grava as transações do extrato (Master/Gerente)
 - `GET /api/acumulados` (aceita `?de=&ate=`) / `POST /api/acumulados` / `DELETE /api/acumulados/:id` — Master e Gerente
 - `GET /api/venda-prazo` — saldo devedor por cliente; `GET /api/venda-prazo/clientes/:id` — extrato
 - `POST /api/venda-prazo/movimentos` — lança compra ou pagamento do cliente
@@ -139,10 +141,19 @@ Em produção este backend **também serve o frontend** (`../frontend`), então 
 
 > **Contas pessoais saiu do escopo** por decisão do usuário: será tratada fora deste sistema. A regra de nunca misturar valores pessoais com totais da empresa continua valendo — nada pessoal entra no banco.
 
-### Importação de novos extratos — em aberto
+### Importação de extratos de cartão
 
-A conciliação hoje mostra o histórico que veio do backup. Para **carregar extratos novos**, o sistema atual lê a pasta `EXTRATOS\` do computador da loja via File System Access API, o que não funciona em nuvem — o servidor não enxerga o disco da loja.
+O sistema antigo lia a pasta `EXTRATOS\` do computador da loja, o que não funciona em nuvem. Aqui o arquivo é carregado **pela tela de Conciliação** (Master/Gerente), em dois passos: o sistema lê a planilha e mostra o que entendeu — quais colunas, quantas transações, para onde vão — e só grava depois da confirmação.
 
-O caminho previsto no `SPEC.md` é upload manual do arquivo pela tela. Isso ainda não foi feito porque exige um parser por adquirente (os arquivos são `.xlsx` com layouts diferentes: `CARTOES 01 S 23.xlsx`, `STONE 01 A 23.xlsx`), e escrever esse parser sem os arquivos reais em mãos seria chute. Assim que os arquivos de exemplo estiverem disponíveis, dá para implementar o upload.
+Como cada adquirente entrega um layout diferente, o cabeçalho é localizado por nome de coluna (`src/utils/lerPlanilha.js`), não por posição fixa. Isso tolera as linhas de título que os relatórios costumam trazer antes da tabela.
+
+Duas regras derivadas dos dados reais do sistema antigo (`src/utils/extrato.js`):
+
+- **Voucher vai para Tickets**, mesmo vindo do arquivo da Stone ou da Rede. Foi assim que o sistema atual sempre separou: no extrato da Stone, as linhas de voucher aparecem em Tickets, não em Stone.
+- **Quando o extrato não traz o líquido**, ele é derivado do bruto menos a tarifa.
+
+Se a planilha não for reconhecida, a tela mostra os nomes de coluna encontrados — é o que basta para adicionar o layout novo em `SINONIMOS`.
+
+> O rótulo `itau` no banco corresponde ao extrato da **Rede** (é a conta que recebe). Mantido assim por compatibilidade com o histórico importado.
 
 Falta antes de usar em produção: subir no Railway (banco + serviço), definir as senhas reais dos 3 usuários e rodar a importação do backup mais recente. Conforme o `SPEC.md`, o sistema HTML atual deve seguir rodando em paralelo até estar validado em uso real.
