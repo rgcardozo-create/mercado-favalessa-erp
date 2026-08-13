@@ -63,6 +63,8 @@ Pela tela, sem terminal: entre como Master → aba **Administração** → seç�
 
 Pode repetir quantas vezes quiser: a importação é idempotente e **atualiza no lugar em vez de duplicar**. Na prática, dá para reimportar um backup mais novo sempre que quiser, até o dia em que o sistema antigo for desligado.
 
+Isso vale inclusive quando você **recarrega extratos de cartão** no sistema antigo. Nesse caso a v3 gera identificadores novos para as mesmas vendas, então a conciliação é reconhecida pelo conteúdo da transação (data, hora, valor, bandeira) — o mesmo período não entra duas vezes.
+
 > Também existe o caminho por linha de comando, se preferir: `npm run importar-backup -- caminho/do/backup.json` (aceita `--dry-run`).
 
 ## 6. Publicar o endereço

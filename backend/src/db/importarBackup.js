@@ -47,6 +47,21 @@ async function inserirEmLote(client, { tabela, colunas, linhas, chaveConflito, t
 
 const ADQUIRENTES = ['cielo', 'stone', 'itau', 'tickets'];
 
+// Identidade de uma linha de conciliação a partir do seu conteúdo.
+//
+// Duas vendas podem ser legitimamente idênticas (mesmo minuto, mesmo valor, mesma
+// bandeira) — acontece de verdade nos extratos. Por isso a segunda ocorrência
+// ganha "#2", a terceira "#3", e nenhuma se perde na deduplicação.
+//
+// O formato precisa casar exatamente com o UPDATE de migração no schema.sql,
+// senão as linhas já importadas não seriam reconhecidas.
+function impressaoDigital(vistos, partes) {
+  const base = partes.map((p) => (p === null || p === undefined ? '' : String(p))).join('|');
+  const ocorrencia = (vistos.get(base) || 0) + 1;
+  vistos.set(base, ocorrencia);
+  return ocorrencia === 1 ? base : `${base}#${ocorrencia}`;
+}
+
 function normalizarNome(nome) {
   return String(nome || '').trim();
 }
@@ -274,17 +289,24 @@ async function importarDados(backup, { dryRun = false } = {}) {
     }
 
     // 4) Conciliação: transações das maquininhas + conferência de dinheiro por PDV.
+    //
+    // Identificadas pelo CONTEÚDO, não pelo id do sistema antigo: ao recarregar um
+    // extrato, a v3 gera ids novos para as mesmas vendas, e usar o id faria o
+    // faturamento do período aparecer em dobro numa segunda importação.
     const conciliacoes = backup.conciliacoes || {};
     const transacoes = [];
+    const vistos = new Map();
+
     for (const adquirente of ADQUIRENTES) {
       for (const t of conciliacoes[adquirente] || []) {
+        const valorBruto = paraNumero(t.valorBruto);
         transacoes.push([
           adquirente,
           t.data,
           textoOuNull(t.hora),
           textoOuNull(t.forma),
           textoOuNull(t.bandeira),
-          paraNumero(t.valorBruto),
+          valorBruto,
           paraNumero(t.tarifa),
           paraNumero(t.valorLiquido),
           textoOuNull(t.categoria),
@@ -293,6 +315,14 @@ async function importarDados(backup, { dryRun = false } = {}) {
           textoOuNull(t.arquivo),
           t.importadoEm || null,
           t.id,
+          impressaoDigital(vistos, [
+            adquirente,
+            t.data,
+            t.hora,
+            valorBruto.toFixed(2),
+            t.bandeira,
+            t.forma,
+          ]),
         ]);
         resumo.conciliacao[adquirente] += 1;
       }
@@ -303,25 +333,31 @@ async function importarDados(backup, { dryRun = false } = {}) {
         tabela: 'conciliacao_transacoes',
         colunas: [
           'adquirente', 'data', 'hora', 'forma', 'bandeira', 'valor_bruto', 'tarifa',
-          'valor_liquido', 'categoria', 'status', 'lote', 'arquivo', 'importado_em', 'legado_id',
+          'valor_liquido', 'categoria', 'status', 'lote', 'arquivo', 'importado_em',
+          'legado_id', 'impressao_digital',
         ],
         linhas: transacoes,
-        chaveConflito: 'legado_id',
+        chaveConflito: 'impressao_digital',
       });
     }
 
-    const dinheiro = (conciliacoes.dinheiro || []).map((d) => [
-      d.data,
-      textoOuNull(d.pdv),
-      paraNumero(d.valor),
-      d.id,
-    ]);
+    const vistosDinheiro = new Map();
+    const dinheiro = (conciliacoes.dinheiro || []).map((d) => {
+      const valor = paraNumero(d.valor);
+      return [
+        d.data,
+        textoOuNull(d.pdv),
+        valor,
+        d.id,
+        impressaoDigital(vistosDinheiro, [d.data, d.pdv, valor.toFixed(2)]),
+      ];
+    });
     if (dinheiro.length) {
       await inserirEmLote(client, {
         tabela: 'conciliacao_dinheiro',
-        colunas: ['data', 'pdv', 'valor', 'legado_id'],
+        colunas: ['data', 'pdv', 'valor', 'legado_id', 'impressao_digital'],
         linhas: dinheiro,
-        chaveConflito: 'legado_id',
+        chaveConflito: 'impressao_digital',
       });
       resumo.conciliacao.dinheiro = dinheiro.length;
     }
