@@ -7,7 +7,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - Autenticação com JWT (login por usuário/senha, sem mais senha única).
 - 3 perfis: `master`, `gerente`, `loja`.
 - **Contas a pagar nas quatro telas** — Fornecedores, Despesas fixas, Impostos e Outras despesas — com pagamentos parciais (baixas) em tabela filha.
-- Painel do dia (vencidas / vencem hoje / próximos 7 dias, com quebra por tela), só para Master e Gerente.
+- Painel do dia (despesas fixas e impostos vencidos ou de hoje, mais os boletos do recorte escolhido), só para Master e Gerente.
 - **Conciliação** das maquininhas (Cielo, Stone, Itaú, Tickets) e do dinheiro por PDV.
 - **Acumulado** (conferência de caixa), só para Master e Gerente.
 - **Venda a prazo** com saldo devedor por cliente e extrato individual.
@@ -94,7 +94,10 @@ Detalhes de como o backup é interpretado:
 - `POST /api/contas` — cadastra um lançamento (`tipo` padrão `fornecedor`; `categoria` usada em Outras despesas)
 - `PUT /api/contas/:id` / `DELETE /api/contas/:id`
 - `POST /api/contas/:id/pagamentos` — registra uma baixa (parcial ou total)
-- `GET /api/painel-do-dia` — vencidas, vencem hoje e próximos 7 dias, com totais (Master/Gerente)
+- `GET /api/painel-do-dia` — fixas, impostos e boletos com totais (Master/Gerente).
+  - `?filtro=` recorta os boletos de fornecedor: `hoje` (padrão), `ontem`, `atrasados`, `semana`.
+  - `?filtroFixas=` e `?filtroImpostos=` recortam os blocos fixos: `ate_hoje` (padrão — vencidas mais as de hoje), `atrasados`, `hoje`, `semana`, `todos`.
+  - Valor desconhecido cai no padrão; nada do parâmetro entra no SQL.
 - `GET /api/conciliacao` — resumo por adquirente e dinheiro por PDV (aceita `?de=&ate=`)
 - `GET /api/conciliacao/transacoes` — listagem paginada (`?adquirente=&de=&ate=&pagina=&limite=`)
 - `POST /api/conciliacao/extratos/analisar` — lê a planilha e devolve o que entendeu, sem gravar (Master/Gerente)
