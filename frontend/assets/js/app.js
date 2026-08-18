@@ -16,7 +16,7 @@ const state = {
   contas: [],
   fornecedores: [],
   painel: null,
-  horizontePainel: 'hoje',
+  filtroBoletos: 'hoje',
   conciliacao: null,
   acumulados: null,
   vendaPrazo: null,
@@ -95,7 +95,7 @@ async function carregarDados() {
   render();
   try {
     if (state.tab === 'painel') {
-      state.painel = await apiFetch(`/painel-do-dia?horizonte=${state.horizontePainel}`);
+      state.painel = await apiFetch(`/painel-do-dia?filtro=${state.filtroBoletos}`);
     } else if (state.tab === 'conciliacao') {
       state.conciliacao = await apiFetch('/conciliacao');
     } else if (state.tab === 'acumulado') {
@@ -141,8 +141,9 @@ function loginHTML() {
   return `
     <div class="login-wrap">
       <form id="form-login" class="login-card">
-        <h1>Mercado Favalessa ERP</h1>
-        <p class="subtitulo">Contas a pagar &middot; Fornecedores</p>
+        <div class="marca"><span class="marca-nome">FAVALESSA</span><span class="marca-sub">Mercado</span></div>
+        <h1>Sistema financeiro</h1>
+        <p class="subtitulo">Entre com seu usuário e senha</p>
         ${state.loginErro ? `<div class="alerta erro">${state.loginErro}</div>` : ''}
         <label>Email</label>
         <input type="email" name="email" required autocomplete="username" />
@@ -201,6 +202,7 @@ function cabecalhoHTML(titulo) {
   return `
     <div class="topo">
       <div>
+        <div class="marca"><span class="marca-nome">FAVALESSA</span><span class="marca-sub">Mercado</span></div>
         <h1>${titulo}</h1>
         <p class="usuario-atual">${usuario.nome} <span class="badge role">${usuario.role}</span></p>
       </div>
@@ -251,13 +253,15 @@ function linhaPainelHTML(conta) {
         <strong>${conta.descricao}</strong>
         <small>${contexto.join(' · ')}</small>
       </div>
-      <span class="badge ${classeSituacao}">${situacao}</span>
-      <span class="linha-painel-valor">${brl(conta.saldo)}</span>
-      ${
-        podeGerenciar()
-          ? `<button data-action="toggle-baixa" data-id="${conta.id}">${baixaAberta ? 'Cancelar' : 'Pagar'}</button>`
-          : ''
-      }
+      <div class="linha-painel-acao">
+        <span class="badge ${classeSituacao}">${situacao}</span>
+        <span class="linha-painel-valor">${brl(conta.saldo)}</span>
+        ${
+          podeGerenciar()
+            ? `<button data-action="toggle-baixa" data-id="${conta.id}">${baixaAberta ? 'Cancelar' : 'Pagar'}</button>`
+            : ''
+        }
+      </div>
     </div>
     ${
       baixaAberta && podeGerenciar()
@@ -272,17 +276,19 @@ function linhaPainelHTML(conta) {
   `;
 }
 
-function blocoPainelHTML({ titulo, icone, bloco, classe, vazio, extra = '' }) {
+function blocoPainelHTML({ titulo, icone, bloco, classe, vazio, extra = '', rodape = '' }) {
   return `
     <section class="bloco-painel ${classe}">
       <div class="bloco-cabecalho">
         <h2>${icone} ${titulo}</h2>
         <span class="bloco-resumo">
           ${bloco.quantidade} conta(s)${bloco.quantidade ? ` &middot; <strong>${brl(bloco.total)}</strong>` : ''}
+          ${bloco.atrasadas ? `<span class="badge atrasada">${bloco.atrasadas} atrasada(s)</span>` : ''}
         </span>
         ${extra}
       </div>
       ${bloco.quantidade ? bloco.contas.map(linhaPainelHTML).join('') : `<p class="vazio">${vazio}</p>`}
+      ${rodape}
     </section>
   `;
 }
@@ -295,54 +301,63 @@ function painelHTML() {
   }
 
   const p = state.painel;
-  const mes = MESES[Number(p.hoje.slice(5, 7)) - 1];
+
+  const TITULOS_FILTRO = {
+    hoje: 'Boletos vencendo hoje',
+    ontem: 'Boletos que venceram ontem',
+    atrasados: 'Boletos atrasados',
+    semana: 'Boletos dos próximos 7 dias',
+  };
 
   const seletor = `
-    <select id="horizonte-painel">
-      <option value="hoje" ${p.horizonte === 'hoje' ? 'selected' : ''}>Vencendo hoje</option>
-      <option value="amanha" ${p.horizonte === 'amanha' ? 'selected' : ''}>Hoje e amanhã</option>
-      <option value="semana" ${p.horizonte === 'semana' ? 'selected' : ''}>Próximos 7 dias</option>
+    <select id="filtro-boletos">
+      <option value="hoje" ${p.filtro === 'hoje' ? 'selected' : ''}>Vencendo hoje</option>
+      <option value="ontem" ${p.filtro === 'ontem' ? 'selected' : ''}>Venceram ontem</option>
+      <option value="atrasados" ${p.filtro === 'atrasados' ? 'selected' : ''}>Todos os atrasados</option>
+      <option value="semana" ${p.filtro === 'semana' ? 'selected' : ''}>Próximos 7 dias</option>
     </select>
   `;
+
+  const b = p.boletos;
+  // Nota de rodapé do bloco: mostra que existe mais fora do recorte, sem listar.
+  const resumoBoletos =
+    b.em_aberto_total > b.quantidade
+      ? `<p class="vazio">Ao todo há <strong>${b.em_aberto_total}</strong> boleto(s) em aberto
+         (${brl(b.em_aberto_valor)})${b.em_aberto_atrasados ? `, sendo ${b.em_aberto_atrasados} atrasado(s)` : ''}.
+         A lista completa fica em <strong>Contas a pagar</strong>.</p>`
+      : '';
 
   return `
     ${cabecalho}
     <p class="usuario-atual">Referência: ${dateBR(p.hoje)}</p>
 
-    ${blocoPainelHTML({
-      titulo: 'Atrasados — pagar com prioridade',
-      icone: '🔴',
-      bloco: p.atrasados,
-      classe: 'atrasados',
-      vazio: 'Nenhuma conta atrasada.',
-    })}
-
-    ${blocoPainelHTML({
-      titulo: p.horizonte === 'hoje' ? 'Vencendo hoje' : 'Vencendo',
-      icone: '⏰',
-      bloco: p.vencendo,
-      classe: 'vencendo',
-      vazio: 'Nenhuma conta vencendo.',
-      extra: seletor,
-    })}
-
     <div class="colunas-painel">
       ${blocoPainelHTML({
-        titulo: `Contas fixas de ${mes} a vencer`,
+        titulo: 'Despesas fixas',
         icone: '📌',
-        bloco: p.fixas_do_mes,
+        bloco: p.fixas,
         classe: 'fixas',
-        vazio: 'Nenhuma conta fixa pendente para os próximos dias.',
+        vazio: 'Nenhuma despesa fixa pendente.',
       })}
 
       ${blocoPainelHTML({
-        titulo: 'Impostos a vencer',
+        titulo: 'Impostos',
         icone: '🧾',
-        bloco: p.impostos_a_vencer,
+        bloco: p.impostos,
         classe: 'impostos',
-        vazio: 'Nenhum imposto a vencer.',
+        vazio: 'Nenhum imposto pendente.',
       })}
     </div>
+
+    ${blocoPainelHTML({
+      titulo: TITULOS_FILTRO[p.filtro],
+      icone: '📄',
+      bloco: b,
+      classe: 'boletos',
+      vazio: 'Nenhum boleto neste filtro.',
+      extra: seletor,
+      rodape: resumoBoletos,
+    })}
   `;
 }
 
@@ -1188,10 +1203,10 @@ function bind() {
   const formPeriodo = root.querySelector('[data-action="filtro-periodo"]');
   if (formPeriodo) formPeriodo.addEventListener('submit', onFiltroPeriodo);
 
-  const seletorHorizonte = root.querySelector('#horizonte-painel');
-  if (seletorHorizonte) {
-    seletorHorizonte.addEventListener('change', (ev) => {
-      state.horizontePainel = ev.target.value;
+  const seletorBoletos = root.querySelector('#filtro-boletos');
+  if (seletorBoletos) {
+    seletorBoletos.addEventListener('change', (ev) => {
+      state.filtroBoletos = ev.target.value;
       carregarDados();
     });
   }
