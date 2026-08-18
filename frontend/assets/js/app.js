@@ -1,5 +1,5 @@
 import { apiFetch, getSessao, salvarSessao, limparSessao, setFolhaToken, getFolhaToken } from './api.js';
-import { brl, dateBR, todayISO } from './helpers.js';
+import { brl, dateBR, todayISO, escapar } from './helpers.js';
 
 // As quatro telas de Contas a pagar. Rótulos iguais aos do sistema atual.
 const TIPOS = [
@@ -41,6 +41,10 @@ const state = {
   extratoResultado: null,
   periodo: { de: '', ate: '' },
   statusFiltro: '',
+  buscaContas: '',
+  // Lançamento barrado por já existir igual: guarda a mensagem e o que foi
+  // digitado, para o usuário corrigir o valor ou confirmar mesmo assim.
+  duplicidade: null,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -48,6 +52,21 @@ const state = {
 };
 
 const root = document.getElementById('app');
+
+// Controle da busca de contas: `timerBusca` segura o disparo enquanto o usuário
+// digita e `focoBusca` lembra que ele estava no campo, para devolver o cursor
+// depois do redesenho. Sai do ar quando o clique vai para outro controle —
+// não dá para confiar no evento `blur`, que nem sempre dispara quando o
+// próprio elemento é removido do DOM pelo render.
+let timerBusca = null;
+let focoBusca = false;
+
+function limparBuscaContas() {
+  clearTimeout(timerBusca);
+  state.buscaContas = '';
+  state.duplicidade = null;
+  focoBusca = false;
+}
 
 function rotuloTipo(tipo) {
   const t = TIPOS.find((x) => x.tipo === tipo);
@@ -127,6 +146,7 @@ async function carregarDados() {
     } else {
       const params = new URLSearchParams({ tipo: state.tipo });
       if (state.statusFiltro) params.set('status', state.statusFiltro);
+      if (state.buscaContas.trim()) params.set('busca', state.buscaContas.trim());
       const [contas, fornecedores] = await Promise.all([
         apiFetch(`/contas?${params}`),
         apiFetch('/fornecedores'),
@@ -1066,6 +1086,19 @@ function contasHTML() {
     0
   );
 
+  // Quando o lançamento foi barrado por duplicidade, o formulário volta
+  // preenchido com o que foi digitado — normalmente só o valor precisa mudar.
+  const pendente = (state.duplicidade && state.duplicidade.payload) || {};
+  const aviso = state.duplicidade
+    ? `<div class="alerta aviso">
+        <p>${escapar(state.duplicidade.mensagem)}</p>
+        <div class="acoes-alerta">
+          <button type="button" id="btn-duplicado-confirmar">Cadastrar assim mesmo</button>
+          <button type="button" id="btn-duplicado-cancelar" class="secundario">Cancelar</button>
+        </div>
+      </div>`
+    : '';
+
   return `
     ${cabecalhoHTML(`Contas a pagar &middot; ${rotuloTipo(state.tipo)}`)}
 
@@ -1074,6 +1107,8 @@ function contasHTML() {
         (t) => `<button data-tipo="${t.tipo}" class="${state.tipo === t.tipo ? 'ativo' : ''}">${t.rotulo}</button>`
       ).join('')}
     </div>
+
+    ${aviso}
 
     <section class="cartoes-form">
       ${
@@ -1093,15 +1128,20 @@ function contasHTML() {
             ? `<label>Fornecedor
                 <select name="fornecedor_id">
                   <option value="">— sem fornecedor —</option>
-                  ${state.fornecedores.map((f) => `<option value="${f.id}">${f.nome}</option>`).join('')}
+                  ${state.fornecedores
+                    .map(
+                      (f) =>
+                        `<option value="${f.id}" ${String(pendente.fornecedor_id) === String(f.id) ? 'selected' : ''}>${escapar(f.nome)}</option>`
+                    )
+                    .join('')}
                 </select>
               </label>`
             : ''
         }
-        <label>Descrição <input type="text" name="descricao" required /></label>
-        ${ehDespesa ? '<label>Categoria <input type="text" name="categoria" placeholder="Manutenção, Outros..." /></label>' : ''}
-        <label>Valor <input type="number" step="0.01" min="0" name="valor" required /></label>
-        <label>${ehDespesa ? 'Data' : 'Vencimento'} <input type="date" name="vencimento" required /></label>
+        <label>Descrição <input type="text" name="descricao" required value="${escapar(pendente.descricao || '')}" /></label>
+        ${ehDespesa ? `<label>Categoria <input type="text" name="categoria" placeholder="Manutenção, Outros..." value="${escapar(pendente.categoria || '')}" /></label>` : ''}
+        <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${escapar(pendente.valor || '')}" /></label>
+        <label>${ehDespesa ? 'Data' : 'Vencimento'} <input type="date" name="vencimento" required value="${escapar(pendente.vencimento || '')}" /></label>
         <button type="submit">Cadastrar</button>
       </form>
     </section>
@@ -1110,7 +1150,18 @@ function contasHTML() {
       <button data-status="" class="${state.statusFiltro === '' ? 'ativo' : ''}">Todas</button>
       <button data-status="pendente" class="${state.statusFiltro === 'pendente' ? 'ativo' : ''}">Pendentes</button>
       <button data-status="quitado" class="${state.statusFiltro === 'quitado' ? 'ativo' : ''}">Quitadas</button>
-      <span class="resumo-lista">${state.contas.length} lançamento(s) &middot; em aberto <strong>${brl(totalEmAberto)}</strong></span>
+      <form class="busca" data-action="busca-contas">
+        <input
+          type="search"
+          id="busca-contas"
+          name="busca"
+          placeholder="Buscar ${ehFornecedor ? 'fornecedor ou descrição' : 'descrição ou categoria'}…"
+          value="${escapar(state.buscaContas)}"
+          autocomplete="off"
+        />
+        ${state.buscaContas ? '<button type="button" id="btn-limpar-busca" class="secundario">Limpar</button>' : ''}
+      </form>
+      <span class="resumo-lista">${state.contas.length} lançamento(s)${state.buscaContas.trim() ? ' na busca' : ''} &middot; em aberto <strong>${brl(totalEmAberto)}</strong></span>
     </div>
 
     ${state.carregando ? '<p>Carregando…</p>' : ''}
@@ -1127,7 +1178,7 @@ function contasHTML() {
         ${
           state.contas.length
             ? state.contas.map(linhaConta).join('')
-            : '<tr><td colspan="7">Nenhum lançamento cadastrado.</td></tr>'
+            : `<tr><td colspan="7">${state.buscaContas.trim() ? 'Nenhum lançamento encontrado para essa busca.' : 'Nenhum lançamento cadastrado.'}</td></tr>`
         }
       </tbody>
     </table>
@@ -1175,6 +1226,7 @@ function bind() {
       if (state.tab === btn.dataset.tab) return;
       state.tab = btn.dataset.tab;
       state.baixaAbertaId = null;
+      limparBuscaContas();
       carregarDados();
     });
   });
@@ -1184,6 +1236,7 @@ function bind() {
       if (state.tipo === btn.dataset.tipo) return;
       state.tipo = btn.dataset.tipo;
       state.baixaAbertaId = null;
+      limparBuscaContas();
       carregarDados();
     });
   });
@@ -1191,6 +1244,7 @@ function bind() {
   root.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.statusFiltro = btn.dataset.status;
+      focoBusca = false; // clicou fora da busca: o foco é de quem clicou
       carregarDados();
     });
   });
@@ -1200,6 +1254,51 @@ function bind() {
 
   const formConta = root.querySelector('[data-action="nova-conta"]');
   if (formConta) formConta.addEventListener('submit', onNovaConta);
+
+  const formBusca = root.querySelector('[data-action="busca-contas"]');
+  if (formBusca) {
+    formBusca.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      clearTimeout(timerBusca);
+      carregarDados();
+    });
+
+    const campo = formBusca.querySelector('#busca-contas');
+    // A tela inteira é redesenhada a cada busca, então devolvemos o foco (e o
+    // cursor no fim do texto) para quem estava digitando.
+    if (focoBusca) {
+      campo.focus();
+      const texto = campo.value;
+      campo.value = '';
+      campo.value = texto;
+    }
+    campo.addEventListener('input', (ev) => {
+      focoBusca = true;
+      state.buscaContas = ev.target.value;
+      clearTimeout(timerBusca);
+      timerBusca = setTimeout(carregarDados, 350);
+    });
+    const btnLimpar = formBusca.querySelector('#btn-limpar-busca');
+    if (btnLimpar) {
+      btnLimpar.addEventListener('click', () => {
+        clearTimeout(timerBusca);
+        state.buscaContas = '';
+        focoBusca = false;
+        carregarDados();
+      });
+    }
+  }
+
+  const btnConfirmarDup = root.querySelector('#btn-duplicado-confirmar');
+  if (btnConfirmarDup) btnConfirmarDup.addEventListener('click', onConfirmarDuplicado);
+
+  const btnCancelarDup = root.querySelector('#btn-duplicado-cancelar');
+  if (btnCancelarDup) {
+    btnCancelarDup.addEventListener('click', () => {
+      state.duplicidade = null;
+      render();
+    });
+  }
 
   root.querySelectorAll('[data-action="toggle-baixa"]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -1611,23 +1710,38 @@ async function onNovoFornecedor(ev) {
 async function onNovaConta(ev) {
   ev.preventDefault();
   const fd = new FormData(ev.target);
+  const payload = {
+    tipo: state.tipo,
+    fornecedor_id: fd.get('fornecedor_id') || null,
+    categoria: fd.get('categoria') || null,
+    descricao: fd.get('descricao'),
+    valor: fd.get('valor'),
+    vencimento: fd.get('vencimento'),
+  };
+  await enviarNovaConta(payload);
+}
+
+// O 409 não é erro do usuário: é o sistema avisando que já existe lançamento
+// igual. A tela mostra o aviso, devolve o que foi digitado e deixa confirmar.
+async function enviarNovaConta(payload) {
+  state.erro = null;
   try {
-    await apiFetch('/contas', {
-      method: 'POST',
-      body: JSON.stringify({
-        tipo: state.tipo,
-        fornecedor_id: fd.get('fornecedor_id') || null,
-        categoria: fd.get('categoria') || null,
-        descricao: fd.get('descricao'),
-        valor: fd.get('valor'),
-        vencimento: fd.get('vencimento'),
-      }),
-    });
+    await apiFetch('/contas', { method: 'POST', body: JSON.stringify(payload) });
+    state.duplicidade = null;
     carregarDados();
   } catch (err) {
-    state.erro = err.message;
+    if (err.status === 409) {
+      state.duplicidade = { mensagem: err.message, payload, existente: err.dados && err.dados.duplicada };
+    } else {
+      state.erro = err.message;
+    }
     render();
   }
+}
+
+function onConfirmarDuplicado() {
+  const { payload } = state.duplicidade;
+  enviarNovaConta({ ...payload, permitir_duplicado: true });
 }
 
 async function onFormBaixa(ev) {

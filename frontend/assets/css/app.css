@@ -86,6 +86,8 @@ button {
 }
 button:hover { background: var(--azul-escuro); }
 button:disabled { background: #B9C4DA; cursor: not-allowed; }
+button.secundario { background: #fff; color: var(--azul); border: 1px solid var(--borda); }
+button.secundario:hover { background: var(--azul-suave); }
 button.perigo { background: var(--vermelho); }
 button.perigo:hover { background: #B42318; }
 button.ativo { background: var(--azul); }
@@ -221,6 +223,15 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .filtros button.ativo { background: var(--azul); color: #fff; border-color: var(--azul); }
 .resumo-lista { margin-left: auto; color: var(--texto-suave); font-size: 13px; }
 
+/* Busca dentro da barra de filtros */
+.busca { display: flex; gap: 6px; align-items: center; flex: 1 1 300px; max-width: 420px; }
+.busca input { margin: 0; }
+.busca input[type="search"] { padding: 8px 12px; }
+
+/* Botões dentro de um alerta (ex.: confirmar lançamento duplicado) */
+.acoes-alerta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.acoes-alerta button { font-size: 13px; padding: 7px 14px; }
+
 /* Blocos com título e total */
 .grupo-painel { margin-bottom: 24px; }
 .grupo-cabecalho { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
@@ -292,4 +303,5 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
   .form-inline label { min-width: 100%; }
   .bloco-cabecalho select { margin-left: 0; width: 100%; }
   .resumo-lista { margin-left: 0; width: 100%; }
+  .busca { max-width: 100%; flex-basis: 100%; }
 }

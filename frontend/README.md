@@ -30,7 +30,7 @@ O service worker guarda em cache **apenas o casco** (HTML/CSS/JS), para o app ab
 | Tela | Master | Gerente | Loja |
 |---|---|---|---|
 | Painel do dia | ✅ | ✅ | ❌ |
-| Contas a pagar (4 abas) | ✅ | ✅ | ✅ (sem dar baixa) |
+| Contas a pagar (4 abas, com busca) | ✅ | ✅ | ✅ (sem dar baixa) |
 | Venda a prazo | ✅ | ✅ | ✅ |
 | Conciliação | ✅ | ✅ | ✅ |
 | Acumulado | ✅ | ✅ | ❌ |

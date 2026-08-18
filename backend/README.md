@@ -6,6 +6,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 
 - Autenticação com JWT (login por usuário/senha, sem mais senha única).
 - 3 perfis: `master`, `gerente`, `loja`.
+- **Aviso de lançamento repetido**: cadastrar (ou editar para) fornecedor, descrição, vencimento e valor iguais aos de outra conta responde `409` com a conta que já existe. Repetir só o fornecedor e a descrição é normal e passa direto; parcelas diferem no vencimento e dois boletos do mesmo dia diferem no valor. Para casos legítimos, o mesmo POST/PUT com `permitir_duplicado: true` grava assim mesmo.
 - **Contas a pagar nas quatro telas** — Fornecedores, Despesas fixas, Impostos e Outras despesas — com pagamentos parciais (baixas) em tabela filha.
 - Painel do dia (despesas fixas e impostos vencidos ou de hoje, mais os boletos do recorte escolhido), só para Master e Gerente.
 - **Conciliação** das maquininhas (Cielo, Stone, Itaú, Tickets) e do dinheiro por PDV.
@@ -89,7 +90,8 @@ Detalhes de como o backup é interpretado:
 - `POST /api/auth/login` — `{ email, senha }` → `{ token, usuario }`
 - `GET /api/auth/me` — dados do usuário autenticado
 - `GET /api/fornecedores` / `POST /api/fornecedores`
-- `GET /api/contas` (aceita `?status=pendente|quitado` e `?tipo=fornecedor|fixa|imposto|despesa`)
+- `GET /api/contas` (aceita `?status=pendente|quitado`, `?tipo=fornecedor|fixa|imposto|despesa` e `?busca=`)
+  - `busca` procura em fornecedor, descrição e categoria de uma vez, ignorando acento e maiúscula. `%` e `_` digitados valem como texto.
 - `GET /api/contas/:id` — inclui lista de pagamentos
 - `POST /api/contas` — cadastra um lançamento (`tipo` padrão `fornecedor`; `categoria` usada em Outras despesas)
 - `PUT /api/contas/:id` / `DELETE /api/contas/:id`

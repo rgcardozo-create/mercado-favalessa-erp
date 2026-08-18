@@ -1,9 +1,45 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
-const { SELECT_CONTAS_COM_SALDO, TIPOS_VALIDOS } = require('../db/contasQuery');
+const { SELECT_CONTAS_COM_SALDO, SEM_ACENTO, TIPOS_VALIDOS } = require('../db/contasQuery');
+
+// Duas contas iguais no fornecedor, na descrição, no vencimento E no valor são,
+// na prática, o mesmo boleto lançado duas vezes. Repetir fornecedor e descrição é
+// normal (é o mesmo fornecedor todo mês); repetir também data e valor não é.
+// Parcelas diferem no vencimento, e dois boletos do mesmo dia diferem no valor.
+async function contaDuplicada({ tipo, fornecedorId, descricao, valor, vencimento, ignorarId = null }) {
+  const { rows } = await pool.query(
+    `SELECT c.id, c.descricao, c.valor, c.tipo, f.nome AS fornecedor_nome,
+            to_char(c.vencimento, 'YYYY-MM-DD') AS vencimento,
+            to_char(c.vencimento, 'DD/MM/YYYY') AS vencimento_br
+       FROM contas c
+       LEFT JOIN fornecedores f ON f.id = c.fornecedor_id
+      WHERE c.tipo = $1
+        AND c.fornecedor_id IS NOT DISTINCT FROM $2
+        AND ${SEM_ACENTO('btrim(c.descricao)')} = ${SEM_ACENTO('btrim($3)')}
+        AND c.valor = $4
+        AND c.vencimento = $5
+        AND ($6::bigint IS NULL OR c.id <> $6)
+      ORDER BY c.id
+      LIMIT 1`,
+    [tipo, fornecedorId, descricao, valor, vencimento, ignorarId]
+  );
+  return rows[0] || null;
+}
+
+function respostaDuplicada(res, existente) {
+  const dia = existente.vencimento_br;
+  const quem = existente.fornecedor_nome ? `${existente.fornecedor_nome} — ` : '';
+  return res.status(409).json({
+    error:
+      `Já existe um lançamento igual: ${quem}${existente.descricao}, vencimento ${dia}, ` +
+      `valor R$ ${Number(existente.valor).toFixed(2).replace('.', ',')}. ` +
+      'Se for mesmo outra conta, confirme para cadastrar assim mesmo.',
+    duplicada: existente,
+  });
+}
 
 async function listar(req, res) {
-  const { status, tipo } = req.query; // status: pendente|quitado — tipo: fornecedor|fixa|imposto|despesa
+  const { status, tipo, busca } = req.query; // status: pendente|quitado — tipo: fornecedor|fixa|imposto|despesa
   const filtros = [];
   const params = [];
 
@@ -18,6 +54,16 @@ async function listar(req, res) {
     }
     params.push(tipo);
     filtros.push(`t.tipo = $${params.length}`);
+  }
+
+  // Busca livre: pega fornecedor, descrição e categoria de uma vez, sem ligar
+  // para acento nem maiúscula — é como o usuário lembra do lançamento.
+  const termo = (busca || '').trim();
+  if (termo) {
+    // `%` e `_` digitados são texto, não curinga — quem busca "100%" quer 100%.
+    params.push(`%${termo.replace(/([\\%_])/g, '\\$1')}%`);
+    const alvo = `coalesce(t.fornecedor_nome, '') || ' ' || t.descricao || ' ' || coalesce(t.categoria, '')`;
+    filtros.push(`${SEM_ACENTO(alvo)} LIKE ${SEM_ACENTO(`$${params.length}`)} ESCAPE '\\'`);
   }
 
   const where = filtros.length ? ` WHERE ${filtros.join(' AND ')}` : '';
@@ -59,6 +105,11 @@ async function criar(req, res) {
   // Fornecedor só faz sentido em conta do tipo fornecedor.
   const fornecedorId = tipo === 'fornecedor' ? fornecedor_id || null : null;
 
+  if (!req.body.permitir_duplicado) {
+    const existente = await contaDuplicada({ tipo, fornecedorId, descricao, valor, vencimento });
+    if (existente) return respostaDuplicada(res, existente);
+  }
+
   const { rows } = await pool.query(
     `INSERT INTO contas (tipo, categoria, fornecedor_id, descricao, valor, vencimento, criado_por)
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
@@ -80,6 +131,23 @@ async function criar(req, res) {
 async function atualizar(req, res) {
   const { id } = req.params;
   const { fornecedor_id, descricao, valor, vencimento, categoria } = req.body;
+
+  // Editar também pode criar duplicata (mudar o valor para bater com outro
+  // lançamento do mesmo dia, por exemplo), então a mesma checagem vale aqui.
+  if (!req.body.permitir_duplicado) {
+    const { rows: atuais } = await pool.query('SELECT * FROM contas WHERE id = $1', [id]);
+    if (!atuais[0]) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const atual = atuais[0];
+    const existente = await contaDuplicada({
+      tipo: atual.tipo,
+      fornecedorId: fornecedor_id === undefined ? atual.fornecedor_id : fornecedor_id || null,
+      descricao: descricao ?? atual.descricao,
+      valor: valor ?? atual.valor,
+      vencimento: vencimento ?? atual.vencimento,
+      ignorarId: atual.id,
+    });
+    if (existente) return respostaDuplicada(res, existente);
+  }
 
   // `tipo` não é editável: mudar o tipo de uma conta já lançada bagunçaria o
   // histórico e os totais por tela. Para trocar, exclua e lance de novo.
