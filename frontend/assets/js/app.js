@@ -16,6 +16,7 @@ const state = {
   contas: [],
   fornecedores: [],
   painel: null,
+  horizontePainel: 'hoje',
   conciliacao: null,
   acumulados: null,
   vendaPrazo: null,
@@ -94,7 +95,7 @@ async function carregarDados() {
   render();
   try {
     if (state.tab === 'painel') {
-      state.painel = await apiFetch('/painel-do-dia');
+      state.painel = await apiFetch(`/painel-do-dia?horizonte=${state.horizontePainel}`);
     } else if (state.tab === 'conciliacao') {
       state.conciliacao = await apiFetch('/conciliacao');
     } else if (state.tab === 'acumulado') {
@@ -222,34 +223,66 @@ function cabecalhoHTML(titulo) {
   `;
 }
 
-function grupoPainelHTML(titulo, contas, total, classe) {
+const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
+  'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+
+// Uma linha do painel: descrição em destaque e, embaixo, o contexto que ajuda a
+// decidir (de onde vem, quando vence, parcela, quanto já foi pago).
+function linhaPainelHTML(conta) {
+  const contexto = [
+    rotuloTipo(conta.tipo),
+    dateBR(conta.vencimento),
+    conta.total_parcelas > 1 ? `parc. ${conta.parcela}/${conta.total_parcelas}` : null,
+    Number(conta.total_pago) > 0 ? `pago ${brl(conta.total_pago)} de ${brl(conta.valor)}` : null,
+    conta.tipo === 'fornecedor' ? conta.fornecedor_nome : conta.categoria,
+    conta.observacoes,
+  ].filter(Boolean);
+
+  const parcial = Number(conta.total_pago) > 0;
+  const atrasada = conta.vencimento.slice(0, 10) < state.painel.hoje.slice(0, 10);
+  const situacao = parcial ? 'Parcial' : atrasada ? 'Atrasada' : 'Em aberto';
+  const classeSituacao = parcial ? 'parcial' : atrasada ? 'atrasada' : 'aberta';
+
+  const baixaAberta = state.baixaAbertaId === conta.id;
+
   return `
-    <section class="grupo-painel ${classe}">
-      <div class="grupo-cabecalho">
-        <h2>${titulo}</h2>
-        <span class="grupo-total">${brl(total)} <small>em ${contas.length} conta(s)</small></span>
+    <div class="linha-painel">
+      <div class="linha-painel-info">
+        <strong>${conta.descricao}</strong>
+        <small>${contexto.join(' · ')}</small>
       </div>
+      <span class="badge ${classeSituacao}">${situacao}</span>
+      <span class="linha-painel-valor">${brl(conta.saldo)}</span>
       ${
-        contas.length
-          ? `<table class="tabela-contas">
-              <thead><tr><th>Tipo</th><th>Fornecedor / Categoria</th><th>Descrição</th><th>Vencimento</th><th>Valor</th><th>Saldo</th></tr></thead>
-              <tbody>
-                ${contas
-                  .map(
-                    (c) => `<tr>
-                      <td><span class="badge tipo">${rotuloTipo(c.tipo)}</span></td>
-                      <td>${(c.tipo === 'fornecedor' ? c.fornecedor_nome : c.categoria) || '—'}</td>
-                      <td>${c.descricao}</td>
-                      <td>${dateBR(c.vencimento)}</td>
-                      <td>${brl(c.valor)}</td>
-                      <td>${brl(c.saldo)}</td>
-                    </tr>`
-                  )
-                  .join('')}
-              </tbody>
-            </table>`
-          : '<p class="vazio">Nada aqui.</p>'
+        podeGerenciar()
+          ? `<button data-action="toggle-baixa" data-id="${conta.id}">${baixaAberta ? 'Cancelar' : 'Pagar'}</button>`
+          : ''
       }
+    </div>
+    ${
+      baixaAberta && podeGerenciar()
+        ? `<form data-action="form-baixa" data-id="${conta.id}" class="form-inline form-baixa-painel">
+            <label>Valor <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" /></label>
+            <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
+            <label>Forma <input type="text" name="forma_pagamento" placeholder="pix, dinheiro..." /></label>
+            <button type="submit">Confirmar pagamento</button>
+          </form>`
+        : ''
+    }
+  `;
+}
+
+function blocoPainelHTML({ titulo, icone, bloco, classe, vazio, extra = '' }) {
+  return `
+    <section class="bloco-painel ${classe}">
+      <div class="bloco-cabecalho">
+        <h2>${icone} ${titulo}</h2>
+        <span class="bloco-resumo">
+          ${bloco.quantidade} conta(s)${bloco.quantidade ? ` &middot; <strong>${brl(bloco.total)}</strong>` : ''}
+        </span>
+        ${extra}
+      </div>
+      ${bloco.quantidade ? bloco.contas.map(linhaPainelHTML).join('') : `<p class="vazio">${vazio}</p>`}
     </section>
   `;
 }
@@ -262,50 +295,54 @@ function painelHTML() {
   }
 
   const p = state.painel;
+  const mes = MESES[Number(p.hoje.slice(5, 7)) - 1];
+
+  const seletor = `
+    <select id="horizonte-painel">
+      <option value="hoje" ${p.horizonte === 'hoje' ? 'selected' : ''}>Vencendo hoje</option>
+      <option value="amanha" ${p.horizonte === 'amanha' ? 'selected' : ''}>Hoje e amanhã</option>
+      <option value="semana" ${p.horizonte === 'semana' ? 'selected' : ''}>Próximos 7 dias</option>
+    </select>
+  `;
+
   return `
     ${cabecalho}
     <p class="usuario-atual">Referência: ${dateBR(p.hoje)}</p>
 
-    <div class="cartoes-resumo">
-      <div class="cartao-resumo vencidas">
-        <span class="rotulo">Vencidas</span>
-        <strong>${brl(p.totais.vencidas)}</strong>
-        <small>${p.vencidas.length} conta(s)</small>
-      </div>
-      <div class="cartao-resumo hoje">
-        <span class="rotulo">Vencem hoje</span>
-        <strong>${brl(p.totais.vencem_hoje)}</strong>
-        <small>${p.vencem_hoje.length} conta(s)</small>
-      </div>
-      <div class="cartao-resumo proximos">
-        <span class="rotulo">Próximos 7 dias</span>
-        <strong>${brl(p.totais.proximos_7_dias)}</strong>
-        <small>${p.proximos_7_dias.length} conta(s)</small>
-      </div>
+    ${blocoPainelHTML({
+      titulo: 'Atrasados — pagar com prioridade',
+      icone: '🔴',
+      bloco: p.atrasados,
+      classe: 'atrasados',
+      vazio: 'Nenhuma conta atrasada.',
+    })}
+
+    ${blocoPainelHTML({
+      titulo: p.horizonte === 'hoje' ? 'Vencendo hoje' : 'Vencendo',
+      icone: '⏰',
+      bloco: p.vencendo,
+      classe: 'vencendo',
+      vazio: 'Nenhuma conta vencendo.',
+      extra: seletor,
+    })}
+
+    <div class="colunas-painel">
+      ${blocoPainelHTML({
+        titulo: `Contas fixas de ${mes} a vencer`,
+        icone: '📌',
+        bloco: p.fixas_do_mes,
+        classe: 'fixas',
+        vazio: 'Nenhuma conta fixa pendente para os próximos dias.',
+      })}
+
+      ${blocoPainelHTML({
+        titulo: 'Impostos a vencer',
+        icone: '🧾',
+        bloco: p.impostos_a_vencer,
+        classe: 'impostos',
+        vazio: 'Nenhum imposto a vencer.',
+      })}
     </div>
-
-    ${
-      p.por_tipo && p.por_tipo.length
-        ? `<section class="por-tipo">
-            <h2>Em aberto por tela</h2>
-            <div class="linha-tipos">
-              ${p.por_tipo
-                .map(
-                  (t) => `<div class="chip-tipo">
-                    <span>${t.rotulo}</span>
-                    <strong>${brl(t.total)}</strong>
-                    <small>${t.quantidade} conta(s)</small>
-                  </div>`
-                )
-                .join('')}
-            </div>
-          </section>`
-        : ''
-    }
-
-    ${grupoPainelHTML('Vencidas', p.vencidas, p.totais.vencidas, 'vencidas')}
-    ${grupoPainelHTML('Vencem hoje', p.vencem_hoje, p.totais.vencem_hoje, 'hoje')}
-    ${grupoPainelHTML('Próximos 7 dias', p.proximos_7_dias, p.totais.proximos_7_dias, 'proximos')}
   `;
 }
 
@@ -1150,6 +1187,14 @@ function bind() {
 
   const formPeriodo = root.querySelector('[data-action="filtro-periodo"]');
   if (formPeriodo) formPeriodo.addEventListener('submit', onFiltroPeriodo);
+
+  const seletorHorizonte = root.querySelector('#horizonte-painel');
+  if (seletorHorizonte) {
+    seletorHorizonte.addEventListener('change', (ev) => {
+      state.horizontePainel = ev.target.value;
+      carregarDados();
+    });
+  }
 
   const btnBackup = root.querySelector('#btn-exportar-backup');
   if (btnBackup) btnBackup.addEventListener('click', onExportarBackup);

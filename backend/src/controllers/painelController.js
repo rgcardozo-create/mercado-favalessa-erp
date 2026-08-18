@@ -1,15 +1,22 @@
 const pool = require('../db/pool');
-const { SELECT_CONTAS_COM_SALDO, HOJE_SP, TIPOS_VALIDOS, ROTULOS_TIPO } = require('../db/contasQuery');
+const { SELECT_CONTAS_COM_SALDO, HOJE_SP } = require('../db/contasQuery');
 
-// Painel do dia: o que precisa ser pago hoje, o que já venceu e o que vence na semana.
+// Painel do dia — organizado pelo que o dono precisa decidir, não por período genérico.
 //
-// Cobre as quatro telas de Contas a pagar (Fornecedores, Despesas fixas, Impostos e
-// Outras despesas), que vivem na tabela `contas` separadas por tipo.
+// A ideia: fixas e impostos são previsíveis e ficam sempre à vista; conta de
+// fornecedor é do dia a dia e só aparece a do dia corrente, saindo sozinha quando
+// vira o dia. Assim o painel não vira uma lista longa de tudo que existe.
 //
 // Contas pessoais e extras de funcionários não aparecem aqui e nunca podem aparecer:
 // pessoais nunca entram em nenhum total da empresa, e extras (adiantamentos/vales) já
 // são descontados na folha. Por isso ficam fora da tabela `contas` (SPEC.md, regras 1 e 3).
+
+// Quanto o bloco "vencendo" enxerga à frente. Padrão: só o dia corrente.
+const HORIZONTES = { hoje: 0, amanha: 1, semana: 7 };
+
 async function painelDoDia(req, res) {
+  const horizonte = HORIZONTES[req.query.horizonte] ?? 0;
+
   const sql = `
     WITH contas_com_saldo AS (${SELECT_CONTAS_COM_SALDO}),
     pendentes AS (
@@ -17,40 +24,47 @@ async function painelDoDia(req, res) {
     )
     SELECT
       ${HOJE_SP} AS hoje,
+
+      -- Atrasados: tudo que já venceu, de qualquer tela. É a única lista que
+      -- mistura tipos, porque atraso é atraso.
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
-         FROM pendentes t WHERE t.vencimento < ${HOJE_SP}) AS vencidas,
-      (SELECT COALESCE(json_agg(t ORDER BY t.valor DESC), '[]'::json)
-         FROM pendentes t WHERE t.vencimento = ${HOJE_SP}) AS vencem_hoje,
+         FROM pendentes t WHERE t.vencimento < ${HOJE_SP}) AS atrasados,
+
+      -- Vencendo: o dia corrente (ou até o horizonte escolhido).
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
          FROM pendentes t
-        WHERE t.vencimento > ${HOJE_SP}
-          AND t.vencimento <= ${HOJE_SP} + INTERVAL '7 days') AS proximos_7_dias
+        WHERE t.vencimento >= ${HOJE_SP}
+          AND t.vencimento <= ${HOJE_SP} + ($1::int || ' days')::interval) AS vencendo,
+
+      -- Contas fixas do mês corrente ainda a vencer: aluguel, água, sistema...
+      -- ficam à vista o mês todo porque são compromisso certo.
+      (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
+         FROM pendentes t
+        WHERE t.tipo = 'fixa'
+          AND t.vencimento > ${HOJE_SP} + ($1::int || ' days')::interval
+          AND date_trunc('month', t.vencimento) = date_trunc('month', ${HOJE_SP})) AS fixas_do_mes,
+
+      -- Impostos a vencer: sem recorte de mês, porque parcelamento de imposto
+      -- se estende por meses e o dono quer enxergar tudo que vem pela frente.
+      (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
+         FROM pendentes t
+        WHERE t.tipo = 'imposto'
+          AND t.vencimento > ${HOJE_SP} + ($1::int || ' days')::interval) AS impostos_a_vencer
   `;
 
-  const { rows } = await pool.query(sql);
-  const painel = rows[0];
+  const { rows } = await pool.query(sql, [horizonte]);
+  const p = rows[0];
 
   const somar = (lista) => lista.reduce((acc, c) => acc + Number(c.saldo), 0);
-
-  // Quanto está em aberto por tela (Fornecedores, Fixas, Impostos, Outras),
-  // considerando tudo que já venceu ou vence nos próximos 7 dias.
-  const aVencer = [...painel.vencidas, ...painel.vencem_hoje, ...painel.proximos_7_dias];
-  const porTipo = TIPOS_VALIDOS.map((tipo) => {
-    const doTipo = aVencer.filter((c) => c.tipo === tipo);
-    return { tipo, rotulo: ROTULOS_TIPO[tipo], quantidade: doTipo.length, total: somar(doTipo) };
-  }).filter((t) => t.quantidade > 0);
+  const bloco = (lista) => ({ contas: lista, quantidade: lista.length, total: somar(lista) });
 
   return res.json({
-    hoje: painel.hoje,
-    vencidas: painel.vencidas,
-    vencem_hoje: painel.vencem_hoje,
-    proximos_7_dias: painel.proximos_7_dias,
-    totais: {
-      vencidas: somar(painel.vencidas),
-      vencem_hoje: somar(painel.vencem_hoje),
-      proximos_7_dias: somar(painel.proximos_7_dias),
-    },
-    por_tipo: porTipo,
+    hoje: p.hoje,
+    horizonte: req.query.horizonte || 'hoje',
+    atrasados: bloco(p.atrasados),
+    vencendo: bloco(p.vencendo),
+    fixas_do_mes: bloco(p.fixas_do_mes),
+    impostos_a_vencer: bloco(p.impostos_a_vencer),
   });
 }
 
