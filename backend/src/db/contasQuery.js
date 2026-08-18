@@ -19,6 +19,12 @@ const SELECT_CONTAS_COM_SALDO = `
   ) p ON p.conta_id = c.id
 `;
 
+// Texto sem acento e em minúsculas, para busca. `unaccent` é extensão e pode não
+// estar instalada no banco do Railway, então normalizamos na mão — a tabela de
+// contas é pequena (milhares de linhas), varredura sequencial aqui é barata.
+const SEM_ACENTO = (expr) =>
+  `translate(lower(${expr}), 'áàâãäéèêëíìîïóòôõöúùûüçñ', 'aaaaaeeeeiiiiooooouuuucn')`;
+
 // "Hoje" sempre no fuso da loja, não no fuso do servidor (Railway roda em UTC).
 const HOJE_SP = `(now() AT TIME ZONE 'America/Sao_Paulo')::date`;
 
@@ -33,4 +39,4 @@ const ROTULOS_TIPO = {
   despesa: 'Outras despesas',
 };
 
-module.exports = { SELECT_CONTAS_COM_SALDO, HOJE_SP, TIPOS_VALIDOS, ROTULOS_TIPO };
+module.exports = { SELECT_CONTAS_COM_SALDO, SEM_ACENTO, HOJE_SP, TIPOS_VALIDOS, ROTULOS_TIPO };

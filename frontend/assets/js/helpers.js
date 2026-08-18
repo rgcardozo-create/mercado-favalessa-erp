@@ -19,3 +19,11 @@ export function dateBR(isoDate) {
 export function todayISO() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
 }
+
+// A tela monta HTML por string; texto vindo do banco (descrição, nome de
+// fornecedor) passa por aqui antes de entrar no innerHTML.
+export function escapar(texto) {
+  return String(texto ?? '').replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
+  );
+}

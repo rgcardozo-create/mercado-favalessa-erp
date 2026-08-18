@@ -61,7 +61,12 @@ export async function apiFetch(path, opts = {}) {
   const data = isJson ? await res.json() : null;
 
   if (!res.ok) {
-    throw new Error((data && data.error) || `Erro na requisição (HTTP ${res.status}).`);
+    // O corpo vai junto do erro: respostas como o 409 de lançamento duplicado
+    // trazem dados que a tela precisa mostrar (qual conta já existe).
+    const erro = new Error((data && data.error) || `Erro na requisição (HTTP ${res.status}).`);
+    erro.status = res.status;
+    erro.dados = data;
+    throw erro;
   }
   return data;
 }
