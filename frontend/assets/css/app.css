@@ -56,7 +56,8 @@ button.ativo { background: #059669; }
 .badge.pendente { background: #DC2626; }
 
 /* Abas */
-.abas { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #2a2a2a; padding-bottom: 12px; }
+.abas { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #2a2a2a; padding-bottom: 12px; flex-wrap: wrap; }
+.abas button { white-space: nowrap; }
 .abas button { background: #242424; }
 .abas button.ativo { background: #2563eb; }
 
@@ -86,6 +87,48 @@ button.ativo { background: #059669; }
 .chip-tipo strong { font-size: 16px; }
 .chip-tipo small { color: #777; font-size: 11px; }
 
+/* Painel do dia — blocos com linhas compactas, para bater o olho e decidir */
+.bloco-painel {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.bloco-painel.atrasados { border-color: #5b2020; }
+.bloco-cabecalho { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.bloco-cabecalho h2 { font-size: 15px; margin: 0; }
+.bloco-resumo { color: #999; font-size: 12px; }
+.bloco-cabecalho select { margin-left: auto; font-size: 13px; }
+
+.linha-painel {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  background: #1f1f1f;
+  flex-wrap: wrap;
+}
+/* Sem o basis de 60%, o texto longo espreme a coluna e quebra letra a letra no celular. */
+.linha-painel-info { flex: 1 1 60%; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.linha-painel-info strong { font-size: 14px; }
+.linha-painel-info small { color: #8a8a8a; font-size: 12px; line-height: 1.4; }
+.linha-painel-valor { font-weight: bold; color: #f87171; white-space: nowrap; margin-left: auto; }
+.linha-painel button { padding: 6px 14px; font-size: 13px; white-space: nowrap; }
+
+.badge.atrasada { background: #7f1d1d; }
+.badge.parcial { background: #4c1d95; }
+.badge.aberta { background: #1e3a5f; }
+
+.form-baixa-painel { margin: 0 0 10px 12px; background: #181818; }
+
+/* Fixas e impostos lado a lado: são as duas listas que ficam sempre à vista */
+.colunas-painel { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.colunas-painel .bloco-painel { margin-bottom: 0; }
+
 .grupo-painel { margin-bottom: 24px; }
 .grupo-cabecalho { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
 .grupo-cabecalho h2 { font-size: 16px; margin: 0; }
@@ -109,6 +152,16 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .filtros { display: flex; gap: 8px; margin-bottom: 16px; }
 .filtros button { background: #242424; }
 .filtros button.ativo { background: #2563eb; }
+
+/* No celular a página nunca deve rolar para o lado: tabelas largas rolam
+   dentro do próprio bloco. */
+@media (max-width: 700px) {
+  #app { padding: 14px; }
+  .tabela-contas { display: block; overflow-x: auto; white-space: nowrap; }
+  .topo { flex-wrap: wrap; gap: 8px; }
+  .form-inline label { min-width: 100%; }
+  .bloco-cabecalho select { margin-left: 0; width: 100%; }
+}
 
 /* Tabela */
 .tabela-contas { width: 100%; border-collapse: collapse; background: #1f1f1f; border-radius: 10px; overflow: hidden; }
