@@ -17,6 +17,8 @@ const state = {
   fornecedores: [],
   painel: null,
   filtroBoletos: 'hoje',
+  filtroFixas: 'ate_hoje',
+  filtroImpostos: 'ate_hoje',
   conciliacao: null,
   acumulados: null,
   vendaPrazo: null,
@@ -95,7 +97,10 @@ async function carregarDados() {
   render();
   try {
     if (state.tab === 'painel') {
-      state.painel = await apiFetch(`/painel-do-dia?filtro=${state.filtroBoletos}`);
+      state.painel = await apiFetch(
+        `/painel-do-dia?filtro=${state.filtroBoletos}` +
+          `&filtroFixas=${state.filtroFixas}&filtroImpostos=${state.filtroImpostos}`,
+      );
     } else if (state.tab === 'conciliacao') {
       state.conciliacao = await apiFetch('/conciliacao');
     } else if (state.tab === 'acumulado') {
@@ -309,14 +314,37 @@ function painelHTML() {
     semana: 'Boletos dos próximos 7 dias',
   };
 
-  const seletor = `
-    <select id="filtro-boletos">
-      <option value="hoje" ${p.filtro === 'hoje' ? 'selected' : ''}>Vencendo hoje</option>
-      <option value="ontem" ${p.filtro === 'ontem' ? 'selected' : ''}>Venceram ontem</option>
-      <option value="atrasados" ${p.filtro === 'atrasados' ? 'selected' : ''}>Todos os atrasados</option>
-      <option value="semana" ${p.filtro === 'semana' ? 'selected' : ''}>Próximos 7 dias</option>
+  // Opções dos blocos fixos. `ate_hoje` é o padrão e é o recorte que o dono quer
+  // ver ao abrir o painel: o que já venceu mais o que vence hoje.
+  const OPCOES_FIXOS = [
+    ['ate_hoje', 'Vencidas e de hoje'],
+    ['atrasados', 'Só as vencidas'],
+    ['hoje', 'Só as de hoje'],
+    ['semana', 'Até 7 dias à frente'],
+    ['todos', 'Todas as pendentes'],
+  ];
+
+  const seletorHTML = (id, opcoes, atual) => `
+    <select id="${id}">
+      ${opcoes
+        .map(([valor, rotulo]) => `<option value="${valor}" ${atual === valor ? 'selected' : ''}>${rotulo}</option>`)
+        .join('')}
     </select>
   `;
+
+  const seletor = seletorHTML('filtro-boletos', [
+    ['hoje', 'Vencendo hoje'],
+    ['ontem', 'Venceram ontem'],
+    ['atrasados', 'Todos os atrasados'],
+    ['semana', 'Próximos 7 dias'],
+  ], p.filtro);
+
+  // Rodapé dos blocos fixos: avisa que existe coisa fora do recorte, sem listar.
+  const restante = (bloco, comoVer) =>
+    bloco.em_aberto_total > bloco.quantidade
+      ? `<p class="vazio">Há <strong>${bloco.em_aberto_total}</strong> pendente(s) no total
+         (${brl(bloco.em_aberto_valor)}). ${comoVer}</p>`
+      : '';
 
   const b = p.boletos;
   // Nota de rodapé do bloco: mostra que existe mais fora do recorte, sem listar.
@@ -337,7 +365,9 @@ function painelHTML() {
         icone: '📌',
         bloco: p.fixas,
         classe: 'fixas',
-        vazio: 'Nenhuma despesa fixa pendente.',
+        vazio: 'Nenhuma despesa fixa neste recorte.',
+        extra: seletorHTML('filtro-fixas', OPCOES_FIXOS, p.filtro_fixas),
+        rodape: restante(p.fixas, 'As que vencem depois aparecem mudando o seletor acima.'),
       })}
 
       ${blocoPainelHTML({
@@ -345,7 +375,9 @@ function painelHTML() {
         icone: '🧾',
         bloco: p.impostos,
         classe: 'impostos',
-        vazio: 'Nenhum imposto pendente.',
+        vazio: 'Nenhum imposto neste recorte.',
+        extra: seletorHTML('filtro-impostos', OPCOES_FIXOS, p.filtro_impostos),
+        rodape: restante(p.impostos, 'Os que vencem depois aparecem mudando o seletor acima.'),
       })}
     </div>
 
@@ -1203,10 +1235,16 @@ function bind() {
   const formPeriodo = root.querySelector('[data-action="filtro-periodo"]');
   if (formPeriodo) formPeriodo.addEventListener('submit', onFiltroPeriodo);
 
-  const seletorBoletos = root.querySelector('#filtro-boletos');
-  if (seletorBoletos) {
-    seletorBoletos.addEventListener('change', (ev) => {
-      state.filtroBoletos = ev.target.value;
+  const SELETORES_PAINEL = {
+    'filtro-boletos': 'filtroBoletos',
+    'filtro-fixas': 'filtroFixas',
+    'filtro-impostos': 'filtroImpostos',
+  };
+  for (const [id, chave] of Object.entries(SELETORES_PAINEL)) {
+    const seletor = root.querySelector(`#${id}`);
+    if (!seletor) continue;
+    seletor.addEventListener('change', (ev) => {
+      state[chave] = ev.target.value;
       carregarDados();
     });
   }
