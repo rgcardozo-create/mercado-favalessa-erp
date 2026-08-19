@@ -324,6 +324,11 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .acoes-alerta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .acoes-alerta button { font-size: 13px; padding: 7px 14px; }
 
+/* Listas separadas por forma de pagamento dentro de Contas a pagar */
+.grupo-forma { margin-bottom: 22px; }
+.grupo-forma .grupo-cabecalho { margin-bottom: 8px; }
+.grupo-forma h2 { font-size: 15px; }
+
 /* Blocos com título e total */
 .grupo-painel { margin-bottom: 24px; }
 .grupo-cabecalho { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }

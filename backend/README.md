@@ -6,6 +6,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 
 - Autenticação com JWT (login por usuário/senha, sem mais senha única).
 - 3 perfis: `master`, `gerente`, `loja`.
+- **Forma de pagamento prevista** por lançamento (`forma_prevista`): separa em listas quem se paga por PIX de quem manda boleto, e já vem escolhida na hora de dar baixa. É previsão — o que foi pago de fato continua em `contas_pagamentos`.
 - **Aviso de lançamento repetido**: cadastrar (ou editar para) fornecedor, descrição, vencimento e valor iguais aos de outra conta responde `409` com a conta que já existe. Repetir só o fornecedor e a descrição é normal e passa direto; parcelas diferem no vencimento e dois boletos do mesmo dia diferem no valor. Para casos legítimos, o mesmo POST/PUT com `permitir_duplicado: true` grava assim mesmo.
 - **Contas a pagar nas quatro telas** — Fornecedores, Despesas fixas, Impostos e Outras despesas — com pagamentos parciais (baixas) em tabela filha.
 - Painel do dia (despesas fixas, impostos e outras despesas vencidos ou de hoje, mais os boletos de fornecedor do recorte escolhido), só para Master e Gerente.
@@ -98,7 +99,7 @@ Detalhes de como o backup é interpretado:
   - `mes` recorta pelo mês: conta quitada entra pela data do pagamento, pendente pelo vencimento. Sem o parâmetro, todo o período.
   - cada conta traz `ultimo_pagamento` (data da última baixa) além de `total_pago`, `saldo` e `quitado`.
 - `GET /api/contas/:id` — inclui lista de pagamentos
-- `POST /api/contas` — cadastra um lançamento (`tipo` padrão `fornecedor`; `categoria` usada em Outras despesas)
+- `POST /api/contas` — cadastra um lançamento (`tipo` padrão `fornecedor`; `categoria` usada em Outras despesas; `forma_prevista` opcional)
 - `PUT /api/contas/:id` / `DELETE /api/contas/:id`
 - `POST /api/contas/:id/pagamentos` — registra uma baixa (parcial ou total); aceita `forma_pagamento` (nome) e `banco_id` (opcional)
 - `PUT /api/contas/:id/pagamentos/:pagamentoId` — corrige uma baixa (valor, data, forma, banco)

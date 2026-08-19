@@ -113,7 +113,7 @@ async function obter(req, res) {
 }
 
 async function criar(req, res) {
-  const { fornecedor_id, descricao, valor, vencimento, categoria } = req.body;
+  const { fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista } = req.body;
   const tipo = req.body.tipo || 'fornecedor';
 
   if (!descricao || valor === undefined || !vencimento) {
@@ -135,9 +135,9 @@ async function criar(req, res) {
   }
 
   const { rows } = await pool.query(
-    `INSERT INTO contas (tipo, categoria, fornecedor_id, descricao, valor, vencimento, criado_por)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-    [tipo, categoria || null, fornecedorId, descricao, valor, vencimento, req.user.id]
+    `INSERT INTO contas (tipo, categoria, fornecedor_id, descricao, valor, vencimento, forma_prevista, criado_por)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    [tipo, categoria || null, fornecedorId, descricao, valor, vencimento, forma_prevista || null, req.user.id]
   );
   const conta = rows[0];
 
@@ -154,7 +154,7 @@ async function criar(req, res) {
 
 async function atualizar(req, res) {
   const { id } = req.params;
-  const { fornecedor_id, descricao, valor, vencimento, categoria } = req.body;
+  const { fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista } = req.body;
 
   // Editar também pode criar duplicata (mudar o valor para bater com outro
   // lançamento do mesmo dia, por exemplo), então a mesma checagem vale aqui.
@@ -182,10 +182,11 @@ async function atualizar(req, res) {
          valor = COALESCE($3, valor),
          vencimento = COALESCE($4, vencimento),
          categoria = COALESCE($5, categoria),
+         forma_prevista = COALESCE($6, forma_prevista),
          atualizado_em = now()
-     WHERE id = $6
+     WHERE id = $7
      RETURNING *`,
-    [fornecedor_id, descricao, valor, vencimento, categoria, id]
+    [fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista || null, id]
   );
 
   if (!rows[0]) {
