@@ -308,6 +308,7 @@ input[type="file"] { padding: 6px; font-size: 13px; }
   align-items: flex-end;
 }
 .form-inline label { flex: 1; min-width: 120px; }
+.form-inline label.campo-largo { flex: 1 1 100%; }
 
 .filtros { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 .filtros button { background: #fff; color: var(--azul); border: 1px solid var(--borda); }

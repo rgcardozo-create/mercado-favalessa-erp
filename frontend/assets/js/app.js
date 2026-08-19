@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.6.0';
+const VERSAO = '1.7.0';
 
 const state = {
   sessao: getSessao(),
@@ -954,10 +954,12 @@ function acumuladoHTML() {
         <h2>Conferência do dia</h2>
         <label>Data <input type="date" name="data" required value="${state.diaAcumulado || todayISO()}" /></label>
         <label>Dinheiro <input type="number" step="0.01" name="dinheiro" /></label>
-        <label>Cartão <input type="number" step="0.01" name="cartao" /></label>
+        <label>Cartão (TEF) <input type="number" step="0.01" name="cartao" /></label>
         <label>PIX <input type="number" step="0.01" name="pix" /></label>
         <label>Tickets <input type="number" step="0.01" name="tickets" /></label>
+        <label>Maquininha fora <input type="number" step="0.01" name="pos_maquina" /></label>
         <label>Outras <input type="number" step="0.01" name="outras" /></label>
+        <label class="campo-largo">Observações <input type="text" name="observacoes" placeholder="ex.: PDV 2 fechou 5,00 a menos" /></label>
         <button type="submit">Salvar</button>
       </form>
     </section>
@@ -971,7 +973,7 @@ function acumuladoHTML() {
       ${
         acumulados.length
           ? `<table class="tabela-contas">
-              <thead><tr><th>Data</th><th>Dinheiro</th><th>Cartão</th><th>PIX</th><th>Tickets</th><th>Outras</th><th>Total</th><th>Ações</th></tr></thead>
+              <thead><tr><th>Data</th><th>Dinheiro</th><th>Cartão</th><th>PIX</th><th>Tickets</th><th>Maq. fora</th><th>Outras</th><th>Total</th><th>Ações</th></tr></thead>
               <tbody>
                 ${acumulados
                   .map(
@@ -981,8 +983,9 @@ function acumuladoHTML() {
                       <td>${brl(a.cartao)}</td>
                       <td>${brl(a.pix)}</td>
                       <td>${brl(a.tickets)}</td>
+                      <td>${brl(Number(a.pos_maquina) + Number(a.pos_sistema))}</td>
                       <td>${brl(a.outras)}</td>
-                      <td><strong>${brl(a.total)}</strong></td>
+                      <td><strong>${brl(a.total)}</strong>${a.observacoes ? `<br /><small>${escapar(a.observacoes)}</small>` : ''}</td>
                       <td><button data-action="excluir-acumulado" data-id="${a.id}" class="perigo">Excluir</button></td>
                     </tr>`
                   )
@@ -1852,7 +1855,9 @@ async function onNovoAcumulado(ev) {
         cartao: fd.get('cartao') || 0,
         pix: fd.get('pix') || 0,
         tickets: fd.get('tickets') || 0,
+        pos_maquina: fd.get('pos_maquina') || 0,
         outras: fd.get('outras') || 0,
+        observacoes: fd.get('observacoes') || null,
       }),
     });
     // Volta para hoje: o dia atrasado que acabou de ser lançado sai da lista de
