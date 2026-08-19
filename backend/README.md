@@ -10,7 +10,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - **Contas a pagar nas quatro telas** — Fornecedores, Despesas fixas, Impostos e Outras despesas — com pagamentos parciais (baixas) em tabela filha.
 - Painel do dia (despesas fixas, impostos e outras despesas vencidos ou de hoje, mais os boletos de fornecedor do recorte escolhido), só para Master e Gerente.
 - **Conciliação** das maquininhas (Cielo, Stone, Itaú, Tickets) e do dinheiro por PDV.
-- **Acumulado** (conferência de caixa), só para Master e Gerente.
+- **Acumulado** (conferência de caixa), só para Master e Gerente, com resumo de vendas: hoje contra o mesmo dia da semana passada, últimos 7 dias contra os 7 anteriores, mês até hoje contra o mesmo período do mês passado, série de 30 dias e a lista dos dias sem lançamento.
 - **Venda a prazo** com saldo devedor por cliente e extrato individual.
 - **Cadastros** de clientes, funcionários, bancos e formas de pagamento.
 - **Correção de lançamento e de baixa**: dá para editar a conta (descrição, valor, vencimento, fornecedor) e também corrigir ou estornar um pagamento já registrado — data trocada e valor digitado errado se resolvem sem apagar a conta inteira.
@@ -112,6 +112,7 @@ Detalhes de como o backup é interpretado:
 - `POST /api/conciliacao/extratos/analisar` — lê a planilha e devolve o que entendeu, sem gravar (Master/Gerente)
 - `POST /api/conciliacao/extratos` — grava as transações do extrato (Master/Gerente)
 - `GET /api/acumulados` (aceita `?de=&ate=`) / `POST /api/acumulados` / `DELETE /api/acumulados/:id` — Master e Gerente
+- `GET /api/acumulados/resumo` — comparativos (hoje × mesmo dia da semana passada, 7 dias × 7 anteriores, mês até hoje × mesmo período do mês passado), série de 30 dias e os dias sem lançamento das duas últimas semanas
 - `GET /api/venda-prazo` — saldo devedor por cliente; `GET /api/venda-prazo/clientes/:id` — extrato
 - `POST /api/venda-prazo/movimentos` — lança compra ou pagamento do cliente
 - `GET|POST /api/cadastros/{clientes,funcionarios,bancos,formas-pagamento}` (+ `PUT`/`DELETE` por id)

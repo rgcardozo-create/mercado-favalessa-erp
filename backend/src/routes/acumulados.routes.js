@@ -9,6 +9,7 @@ const router = express.Router();
 // para Master e Gerente, nunca no login "Loja" (SPEC.md, seção 3).
 router.use(authenticate, authorize('master', 'gerente'));
 
+router.get('/resumo', asyncHandler(acumuladosController.resumoVendas));
 router.get('/', asyncHandler(acumuladosController.listar));
 router.post('/', asyncHandler(acumuladosController.criar));
 router.delete('/:id', asyncHandler(acumuladosController.deletar));
