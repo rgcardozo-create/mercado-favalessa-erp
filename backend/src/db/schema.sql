@@ -357,6 +357,12 @@ UPDATE conciliacao_dinheiro d SET impressao_digital = s.fp
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_impressao ON conciliacao_transacoes(impressao_digital);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_dinheiro_impressao ON conciliacao_dinheiro(impressao_digital);
 
+-- Como esse lançamento costuma ser pago (PIX, Boleto, Dinheiro...). É previsão,
+-- não registro: o que foi pago de fato fica em contas_pagamentos. Serve para
+-- separar na tela quem se paga por PIX de quem manda boleto — misturados, os
+-- dois viram uma lista só, grande demais para achar o que interessa.
+ALTER TABLE contas ADD COLUMN IF NOT EXISTS forma_prevista VARCHAR(60);
+
 -- Em que banco o pagamento saiu. Opcional: dinheiro do caixa não tem banco, e
 -- as baixas importadas do sistema antigo não trazem essa informação.
 ALTER TABLE contas_pagamentos ADD COLUMN IF NOT EXISTS banco_id INTEGER REFERENCES bancos(id);

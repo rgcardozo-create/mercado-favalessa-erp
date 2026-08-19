@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.7.0';
+const VERSAO = '1.8.0';
 
 const state = {
   sessao: getSessao(),
@@ -302,6 +302,7 @@ function formEditarContaHTML(conta) {
         <label>${ehDespesa ? 'Data' : 'Vencimento'}
           <input type="date" name="vencimento" required value="${String(conta.vencimento).slice(0, 10)}" />
         </label>
+        ${campoFormaPrevistaHTML(conta.forma_prevista)}
         <button type="submit">Salvar alterações</button>
       </form>
     </td></tr>
@@ -442,11 +443,29 @@ function linhaPainelHTML(conta) {
         ? `<form data-action="form-baixa" data-id="${conta.id}" class="form-inline form-baixa-painel">
             <label>Valor <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" /></label>
             <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
-            ${camposFormaEBancoHTML()}
+            ${camposFormaEBancoHTML({ forma: conta.forma_prevista })}
             <button type="submit">Confirmar pagamento</button>
           </form>`
         : ''
     }
+  `;
+}
+
+// Como esse lançamento costuma ser pago. É previsão, não baixa: serve para
+// separar as listas e para já vir escolhido na hora de pagar.
+function campoFormaPrevistaHTML(atual) {
+  return `
+    <label>Como costuma pagar
+      <select name="forma_prevista">
+        <option value="">— não definido —</option>
+        ${state.formasPagamento
+          .map(
+            (f) =>
+              `<option value="${escapar(f.nome)}" ${f.nome === atual ? 'selected' : ''}>${escapar(f.nome)}</option>`
+          )
+          .join('')}
+      </select>
+    </label>
   `;
 }
 
@@ -495,7 +514,7 @@ function formBaixaHTML(conta) {
           <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" />
         </label>
         <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
-        ${camposFormaEBancoHTML()}
+        ${camposFormaEBancoHTML({ forma: conta.forma_prevista })}
         <button type="submit">Confirmar pagamento</button>
       </form>
       <p class="vazio">Saldo em aberto: <strong>${brl(conta.saldo)}</strong>${
@@ -1517,6 +1536,7 @@ function contasHTML() {
         ${ehDespesa ? `<label>Categoria <input type="text" name="categoria" placeholder="Manutenção, Outros..." value="${escapar(pendente.categoria || '')}" /></label>` : ''}
         <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${escapar(pendente.valor || '')}" /></label>
         <label>${ehDespesa ? 'Data' : 'Vencimento'} <input type="date" name="vencimento" required value="${escapar(pendente.vencimento || '')}" /></label>
+        ${campoFormaPrevistaHTML(pendente.forma_prevista)}
         <button type="submit">Cadastrar</button>
       </form>
     </section>
@@ -1547,24 +1567,71 @@ function contasHTML() {
 
     ${state.carregando ? '<p>Carregando…</p>' : ''}
 
-    <table class="tabela-contas">
-      <thead>
-        <tr>
-          <th>${ehFornecedor ? 'Fornecedor' : 'Categoria'}</th>
-          <th>Descrição</th><th>${ehDespesa ? 'Data' : 'Vencimento'}</th><th>Pago em</th>
-          <th>Valor</th><th>Saldo</th><th>Status</th>
-          <th${podeGerir ? '' : ' style="display:none"'}>Ações</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${
-          state.contas.length
-            ? state.contas.map(linhaConta).join('')
-            : `<tr><td colspan="8">${textoListaVazia()}</td></tr>`
-        }
-      </tbody>
-    </table>
+    ${listaContasHTML({ ehFornecedor, ehDespesa, podeGerir })}
   `;
+}
+
+// Ordem fixa das listas por forma de pagamento. Fixa de propósito: o dono decora
+// onde cada bloco fica, e lista que muda de lugar conforme o dia obriga a
+// procurar de novo toda vez.
+const ORDEM_FORMAS = ['PIX', 'Dinheiro', 'Transferência', 'Cartão', 'Boleto'];
+const SEM_FORMA = 'Sem forma definida';
+
+function posicaoForma(nome) {
+  const i = ORDEM_FORMAS.findIndex((f) => f.toLowerCase() === String(nome).toLowerCase());
+  if (i >= 0) return i;
+  return nome === SEM_FORMA ? ORDEM_FORMAS.length + 1 : ORDEM_FORMAS.length;
+}
+
+// Quem se paga por PIX e quem manda boleto viram listas separadas — juntos, dá
+// uma lista só, grande demais para achar o que interessa. Só agrupa quando há
+// mais de uma forma em jogo; do contrário, uma tabela só, como sempre foi.
+function listaContasHTML({ ehFornecedor, ehDespesa, podeGerir }) {
+  const cabecalho = `
+    <thead>
+      <tr>
+        <th>${ehFornecedor ? 'Fornecedor' : 'Categoria'}</th>
+        <th>Descrição</th><th>${ehDespesa ? 'Data' : 'Vencimento'}</th><th>Pago em</th>
+        <th>Valor</th><th>Saldo</th><th>Status</th>
+        <th${podeGerir ? '' : ' style="display:none"'}>Ações</th>
+      </tr>
+    </thead>`;
+
+  if (!state.contas.length) {
+    return `<table class="tabela-contas">${cabecalho}
+      <tbody><tr><td colspan="8">${textoListaVazia()}</td></tr></tbody></table>`;
+  }
+
+  const grupos = new Map();
+  for (const conta of state.contas) {
+    const forma = conta.forma_prevista || SEM_FORMA;
+    if (!grupos.has(forma)) grupos.set(forma, []);
+    grupos.get(forma).push(conta);
+  }
+
+  if (grupos.size < 2) {
+    return `<table class="tabela-contas">${cabecalho}
+      <tbody>${state.contas.map(linhaConta).join('')}</tbody></table>`;
+  }
+
+  return [...grupos.entries()]
+    .sort((a, b) => posicaoForma(a[0]) - posicaoForma(b[0]) || a[0].localeCompare(b[0]))
+    .map(([forma, contas]) => {
+      const emAberto = contas.reduce((acc, c) => (c.quitado ? acc : acc + Number(c.saldo)), 0);
+      return `
+        <section class="grupo-forma">
+          <div class="grupo-cabecalho">
+            <h2>${escapar(forma)}</h2>
+            <span class="grupo-total">${contas.length} lançamento(s)
+              ${emAberto ? `&middot; em aberto <strong>${brl(emAberto)}</strong>` : ''}</span>
+          </div>
+          <table class="tabela-contas">${cabecalho}
+            <tbody>${contas.map(linhaConta).join('')}</tbody>
+          </table>
+        </section>
+      `;
+    })
+    .join('');
 }
 
 function telaHTML() {
@@ -2171,6 +2238,7 @@ async function onNovaConta(ev) {
     descricao: fd.get('descricao'),
     valor: fd.get('valor'),
     vencimento: fd.get('vencimento'),
+    forma_prevista: fd.get('forma_prevista') || null,
   };
   await enviarNovaConta(payload);
 }
@@ -2222,6 +2290,7 @@ async function onEditarConta(ev) {
         descricao: fd.get('descricao'),
         valor: fd.get('valor'),
         vencimento: fd.get('vencimento'),
+        forma_prevista: fd.get('forma_prevista') || null,
       }),
     });
     state.edicaoContaId = null;
