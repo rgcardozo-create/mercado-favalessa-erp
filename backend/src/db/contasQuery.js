@@ -8,12 +8,13 @@ const SELECT_CONTAS_COM_SALDO = `
     c.*,
     f.nome AS fornecedor_nome,
     COALESCE(p.total_pago, 0) AS total_pago,
+    to_char(p.ultimo_pagamento, 'YYYY-MM-DD') AS ultimo_pagamento,
     c.valor - COALESCE(p.total_pago, 0) AS saldo,
     (COALESCE(p.total_pago, 0) > 0 AND c.valor - COALESCE(p.total_pago, 0) <= 0) AS quitado
   FROM contas c
   LEFT JOIN fornecedores f ON f.id = c.fornecedor_id
   LEFT JOIN (
-    SELECT conta_id, SUM(valor) AS total_pago
+    SELECT conta_id, SUM(valor) AS total_pago, MAX(data_pagamento) AS ultimo_pagamento
     FROM contas_pagamentos
     GROUP BY conta_id
   ) p ON p.conta_id = c.id

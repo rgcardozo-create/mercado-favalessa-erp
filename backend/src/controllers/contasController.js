@@ -1,6 +1,6 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
-const { SELECT_CONTAS_COM_SALDO, SEM_ACENTO, TIPOS_VALIDOS } = require('../db/contasQuery');
+const { SELECT_CONTAS_COM_SALDO, SEM_ACENTO, HOJE_SP, TIPOS_VALIDOS } = require('../db/contasQuery');
 
 // Duas contas iguais no fornecedor, na descrição, no vencimento E no valor são,
 // na prática, o mesmo boleto lançado duas vezes. Repetir fornecedor e descrição é
@@ -38,8 +38,17 @@ function respostaDuplicada(res, existente) {
   });
 }
 
+// Recorte por mês. A data que importa muda com o estado da conta: quitada
+// interessa por quando foi paga ("o que paguei em agosto"), pendente interessa
+// por quando vence. Sem isso, a lista de quitadas cresce para sempre.
+const MES_REF = `CASE WHEN t.quitado THEN t.ultimo_pagamento::date ELSE t.vencimento END`;
+const MESES = {
+  atual: `date_trunc('month', ${MES_REF}) = date_trunc('month', ${HOJE_SP})`,
+  anterior: `date_trunc('month', ${MES_REF}) = date_trunc('month', ${HOJE_SP}) - interval '1 month'`,
+};
+
 async function listar(req, res) {
-  const { status, tipo, busca } = req.query; // status: pendente|quitado — tipo: fornecedor|fixa|imposto|despesa
+  const { status, tipo, busca, mes } = req.query; // status: pendente|quitado — tipo: fornecedor|fixa|imposto|despesa
   const filtros = [];
   const params = [];
 
@@ -65,6 +74,10 @@ async function listar(req, res) {
     const alvo = `coalesce(t.fornecedor_nome, '') || ' ' || t.descricao || ' ' || coalesce(t.categoria, '')`;
     filtros.push(`${SEM_ACENTO(alvo)} LIKE ${SEM_ACENTO(`$${params.length}`)} ESCAPE '\\'`);
   }
+
+  // `mes` só escolhe uma expressão de uma lista fixa; valor desconhecido vira
+  // "todos", que é não filtrar.
+  if (MESES[mes]) filtros.push(MESES[mes]);
 
   const where = filtros.length ? ` WHERE ${filtros.join(' AND ')}` : '';
   const query = `SELECT * FROM (${SELECT_CONTAS_COM_SALDO}) t${where} ORDER BY t.vencimento`;
@@ -240,4 +253,83 @@ async function registrarPagamento(req, res) {
   return res.status(201).json(pagamento);
 }
 
-module.exports = { listar, obter, criar, atualizar, deletar, registrarPagamento };
+// Baixa registrada errada (data trocada, valor digitado a mais) tem que poder ser
+// corrigida — sem isso o único jeito seria apagar a conta e lançar tudo de novo.
+async function atualizarPagamento(req, res) {
+  const { id, pagamentoId } = req.params;
+  const { valor, data_pagamento, forma_pagamento, banco_id } = req.body;
+
+  if (valor !== undefined && Number(valor) <= 0) {
+    return res.status(400).json({ error: 'valor precisa ser maior que zero.' });
+  }
+
+  const bancoId = banco_id ? Number(banco_id) : null;
+  if (bancoId) {
+    const { rows: banco } = await pool.query('SELECT id FROM bancos WHERE id = $1', [bancoId]);
+    if (!banco[0]) return res.status(400).json({ error: 'Banco não encontrado.' });
+  }
+
+  // `banco_id` e `forma_pagamento` são apagáveis (voltar para "sem banco"), então
+  // vão direto em vez de COALESCE — o que não veio no corpo é que fica como está.
+  const { rows } = await pool.query(
+    `UPDATE contas_pagamentos
+        SET valor = COALESCE($1, valor),
+            data_pagamento = COALESCE($2, data_pagamento),
+            forma_pagamento = $3,
+            banco_id = $4
+      WHERE id = $5 AND conta_id = $6
+      RETURNING *`,
+    [
+      valor === undefined ? null : valor,
+      data_pagamento || null,
+      forma_pagamento || null,
+      bancoId,
+      pagamentoId,
+      id,
+    ]
+  );
+
+  if (!rows[0]) return res.status(404).json({ error: 'Pagamento não encontrado nesta conta.' });
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'pagamento-editado',
+    entidade: 'contas',
+    entidadeId: Number(id),
+    dados: rows[0],
+  });
+
+  return res.json(rows[0]);
+}
+
+async function excluirPagamento(req, res) {
+  const { id, pagamentoId } = req.params;
+
+  const { rows } = await pool.query(
+    'DELETE FROM contas_pagamentos WHERE id = $1 AND conta_id = $2 RETURNING *',
+    [pagamentoId, id]
+  );
+
+  if (!rows[0]) return res.status(404).json({ error: 'Pagamento não encontrado nesta conta.' });
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'pagamento-excluido',
+    entidade: 'contas',
+    entidadeId: Number(id),
+    dados: rows[0],
+  });
+
+  return res.status(204).send();
+}
+
+module.exports = {
+  listar,
+  obter,
+  criar,
+  atualizar,
+  deletar,
+  registrarPagamento,
+  atualizarPagamento,
+  excluirPagamento,
+};

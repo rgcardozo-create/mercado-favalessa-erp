@@ -21,5 +21,15 @@ router.post(
   authorize('master', 'gerente'),
   asyncHandler(contasController.registrarPagamento)
 );
+router.put(
+  '/:id/pagamentos/:pagamentoId',
+  authorize('master', 'gerente'),
+  asyncHandler(contasController.atualizarPagamento)
+);
+router.delete(
+  '/:id/pagamentos/:pagamentoId',
+  authorize('master', 'gerente'),
+  asyncHandler(contasController.excluirPagamento)
+);
 
 module.exports = router;
