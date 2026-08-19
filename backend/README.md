@@ -13,6 +13,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - **Acumulado** (conferência de caixa), só para Master e Gerente.
 - **Venda a prazo** com saldo devedor por cliente e extrato individual.
 - **Cadastros** de clientes, funcionários, bancos e formas de pagamento.
+- **Correção de lançamento e de baixa**: dá para editar a conta (descrição, valor, vencimento, fornecedor) e também corrigir ou estornar um pagamento já registrado — data trocada e valor digitado errado se resolvem sem apagar a conta inteira.
 - **Baixa com forma de pagamento e banco**: ao dar baixa, o valor vem preenchido com o saldo mas é editável (pagamento parcial), a forma sai do cadastro de formas de pagamento e o banco do cadastro de bancos. O banco é opcional — dinheiro do caixa não sai de banco nenhum.
 - **Relatórios** por período.
 - **Folha de pagamento e Extras**, só para Master e ainda atrás de uma senha adicional.
@@ -91,12 +92,16 @@ Detalhes de como o backup é interpretado:
 - `POST /api/auth/login` — `{ email, senha }` → `{ token, usuario }`
 - `GET /api/auth/me` — dados do usuário autenticado
 - `GET /api/fornecedores` / `POST /api/fornecedores`
-- `GET /api/contas` (aceita `?status=pendente|quitado`, `?tipo=fornecedor|fixa|imposto|despesa` e `?busca=`)
+- `GET /api/contas` (aceita `?status=pendente|quitado`, `?tipo=fornecedor|fixa|imposto|despesa`, `?busca=` e `?mes=atual|anterior`)
   - `busca` procura em fornecedor, descrição e categoria de uma vez, ignorando acento e maiúscula. `%` e `_` digitados valem como texto.
+  - `mes` recorta pelo mês: conta quitada entra pela data do pagamento, pendente pelo vencimento. Sem o parâmetro, todo o período.
+  - cada conta traz `ultimo_pagamento` (data da última baixa) além de `total_pago`, `saldo` e `quitado`.
 - `GET /api/contas/:id` — inclui lista de pagamentos
 - `POST /api/contas` — cadastra um lançamento (`tipo` padrão `fornecedor`; `categoria` usada em Outras despesas)
 - `PUT /api/contas/:id` / `DELETE /api/contas/:id`
 - `POST /api/contas/:id/pagamentos` — registra uma baixa (parcial ou total); aceita `forma_pagamento` (nome) e `banco_id` (opcional)
+- `PUT /api/contas/:id/pagamentos/:pagamentoId` — corrige uma baixa (valor, data, forma, banco)
+- `DELETE /api/contas/:id/pagamentos/:pagamentoId` — estorna a baixa; a conta volta a ficar pendente pelo valor
 - `GET /api/painel-do-dia` — fixas, impostos e boletos com totais (Master/Gerente).
   - `?filtro=` recorta os boletos de fornecedor: `hoje` (padrão), `ontem`, `atrasados`, `semana`.
   - `?filtroFixas=` e `?filtroImpostos=` recortam os blocos fixos: `ate_hoje` (padrão — vencidas mais as de hoje), `atrasados`, `hoje`, `semana`, `todos`.

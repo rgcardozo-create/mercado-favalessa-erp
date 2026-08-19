@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.1.0';
+const VERSAO = '1.2.0';
 
 const state = {
   sessao: getSessao(),
@@ -48,6 +48,12 @@ const state = {
   extratoResultado: null,
   periodo: { de: '', ate: '' },
   statusFiltro: '',
+  // Recorte por mês da lista de contas: '' (tudo), 'atual' ou 'anterior'.
+  mesFiltro: '',
+  // Conta expandida: detalhe carregado à parte, com os pagamentos já feitos.
+  detalheConta: null,
+  edicaoContaId: null,
+  pagamentoEditandoId: null,
   buscaContas: '',
   // Lançamento barrado por já existir igual: guarda a mensagem e o que foi
   // digitado, para o usuário corrigir o valor ou confirmar mesmo assim.
@@ -72,6 +78,9 @@ function limparBuscaContas() {
   clearTimeout(timerBusca);
   state.buscaContas = '';
   state.duplicidade = null;
+  state.edicaoContaId = null;
+  state.pagamentoEditandoId = null;
+  state.detalheConta = null;
   focoBusca = false;
 }
 
@@ -154,6 +163,7 @@ async function carregarDados() {
       const params = new URLSearchParams({ tipo: state.tipo });
       if (state.statusFiltro) params.set('status', state.statusFiltro);
       if (state.buscaContas.trim()) params.set('busca', state.buscaContas.trim());
+      if (state.mesFiltro) params.set('mes', state.mesFiltro);
       const [contas, fornecedores, formas, bancos] = await Promise.all([
         apiFetch(`/contas?${params}`),
         apiFetch('/fornecedores'),
@@ -200,27 +210,153 @@ function badgeStatus(conta) {
 function linhaConta(conta) {
   const podeGerir = podeGerenciar();
   const baixaAberta = state.baixaAbertaId === conta.id;
+  const editando = state.edicaoContaId === conta.id;
 
   return `
     <tr>
       <td>${(conta.tipo === 'fornecedor' ? conta.fornecedor_nome : conta.categoria) || '—'}</td>
       <td>${conta.descricao}</td>
       <td>${dateBR(conta.vencimento)}</td>
+      <td>${conta.ultimo_pagamento ? dateBR(conta.ultimo_pagamento) : '—'}</td>
       <td>${brl(conta.valor)}</td>
       <td>${brl(conta.saldo)}</td>
       <td>${badgeStatus(conta)}</td>
       <td class="acoes">
         <div class="acoes-linha">
           ${
-            podeGerir && !conta.quitado
-              ? `<button data-action="toggle-baixa" data-id="${conta.id}">${baixaAberta ? 'Cancelar' : 'Dar baixa'}</button>`
+            podeGerir
+              ? `<button data-action="toggle-baixa" data-id="${conta.id}">${
+                  baixaAberta ? 'Fechar' : conta.quitado ? 'Pagamentos' : 'Dar baixa'
+                }</button>`
+              : ''
+          }
+          ${
+            podeGerir
+              ? `<button data-action="toggle-editar" data-id="${conta.id}" class="secundario">${editando ? 'Fechar' : 'Editar'}</button>`
               : ''
           }
           ${podeGerir ? `<button data-action="excluir" data-id="${conta.id}" class="perigo">Excluir</button>` : ''}
         </div>
       </td>
     </tr>
-    ${baixaAberta ? formBaixaHTML(conta) : ''}
+    ${editando ? formEditarContaHTML(conta) : ''}
+    ${baixaAberta ? blocoBaixaHTML(conta) : ''}
+  `;
+}
+
+// Corrigir o próprio lançamento: valor digitado errado, vencimento trocado,
+// descrição incompleta. O tipo não muda — para isso, exclua e lance de novo.
+function formEditarContaHTML(conta) {
+  const ehFornecedor = conta.tipo === 'fornecedor';
+  const ehDespesa = conta.tipo === 'despesa';
+
+  return `
+    <tr class="linha-baixa"><td colspan="8">
+      <form data-action="form-editar-conta" data-id="${conta.id}" class="form-inline">
+        ${
+          ehFornecedor
+            ? `<label>Fornecedor
+                <select name="fornecedor_id">
+                  <option value="">— sem fornecedor —</option>
+                  ${state.fornecedores
+                    .map(
+                      (f) =>
+                        `<option value="${f.id}" ${String(conta.fornecedor_id) === String(f.id) ? 'selected' : ''}>${escapar(f.nome)}</option>`
+                    )
+                    .join('')}
+                </select>
+              </label>`
+            : ''
+        }
+        <label>Descrição <input type="text" name="descricao" required value="${escapar(conta.descricao)}" /></label>
+        ${ehDespesa ? `<label>Categoria <input type="text" name="categoria" value="${escapar(conta.categoria || '')}" /></label>` : ''}
+        <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${conta.valor}" /></label>
+        <label>${ehDespesa ? 'Data' : 'Vencimento'}
+          <input type="date" name="vencimento" required value="${String(conta.vencimento).slice(0, 10)}" />
+        </label>
+        <button type="submit">Salvar alterações</button>
+      </form>
+    </td></tr>
+  `;
+}
+
+// Área expandida da conta: o que já foi pago (com correção e estorno) e, se
+// ainda houver saldo, o formulário de nova baixa.
+function blocoBaixaHTML(conta) {
+  const d = state.detalheConta;
+  const carregando = !d || d.id !== conta.id;
+  const pagamentos = carregando ? [] : d.pagamentos;
+
+  const listaPagamentos = carregando
+    ? '<p class="vazio">Carregando pagamentos…</p>'
+    : pagamentos.length
+      ? `<table class="tabela-contas tabela-pagamentos">
+          <thead><tr><th>Pago em</th><th>Valor</th><th>Forma</th><th>Banco</th><th>Ações</th></tr></thead>
+          <tbody>
+            ${pagamentos.map((p) => linhaPagamentoHTML(conta, p)).join('')}
+          </tbody>
+        </table>`
+      : '<p class="vazio">Nenhum pagamento registrado nesta conta.</p>';
+
+  return `
+    <tr class="linha-baixa"><td colspan="8">
+      ${listaPagamentos}
+      ${conta.quitado ? '' : formBaixaHTML(conta)}
+    </td></tr>
+  `;
+}
+
+function linhaPagamentoHTML(conta, p) {
+  const editando = state.pagamentoEditandoId === p.id;
+
+  if (editando) {
+    return `
+      <tr><td colspan="5">
+        <form data-action="form-editar-pagamento" data-conta="${conta.id}" data-id="${p.id}" class="form-inline">
+          <label>Valor pago <input type="number" step="0.01" min="0.01" name="valor" required value="${p.valor}" /></label>
+          <label>Data <input type="date" name="data_pagamento" required value="${String(p.data_pagamento).slice(0, 10)}" /></label>
+          <label>Forma de pagamento
+            <select name="forma_pagamento" required>
+              <option value="">— escolha —</option>
+              ${state.formasPagamento
+                .map(
+                  (f) =>
+                    `<option value="${escapar(f.nome)}" ${f.nome === p.forma_pagamento ? 'selected' : ''}>${escapar(f.nome)}</option>`
+                )
+                .join('')}
+            </select>
+          </label>
+          <label>Banco
+            <select name="banco_id">
+              <option value="">— sem banco —</option>
+              ${state.bancos
+                .map(
+                  (b) =>
+                    `<option value="${b.id}" ${String(b.id) === String(p.banco_id) ? 'selected' : ''}>${escapar(b.nome)}</option>`
+                )
+                .join('')}
+            </select>
+          </label>
+          <button type="submit">Salvar pagamento</button>
+          <button type="button" data-action="cancelar-editar-pagamento" class="secundario">Cancelar</button>
+        </form>
+      </td></tr>
+    `;
+  }
+
+  return `
+    <tr>
+      <td>${dateBR(p.data_pagamento)}</td>
+      <td>${brl(p.valor)}</td>
+      <td>${escapar(p.forma_pagamento || '—')}</td>
+      <td>${escapar(p.banco_nome || '—')}</td>
+      <td class="acoes">
+        <div class="acoes-linha">
+          <button data-action="editar-pagamento" data-id="${p.id}" class="secundario">Editar</button>
+          <button data-action="excluir-pagamento" data-conta="${conta.id}" data-id="${p.id}" class="perigo">Estornar</button>
+        </div>
+      </td>
+    </tr>
   `;
 }
 
@@ -319,7 +455,7 @@ function formBaixaHTML(conta) {
     .join('');
 
   return `
-    <tr class="linha-baixa"><td colspan="7">
+    <div class="nova-baixa">
       <form data-action="form-baixa" data-id="${conta.id}" class="form-inline">
         <label>Valor pago
           <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" />
@@ -345,7 +481,7 @@ function formBaixaHTML(conta) {
       <p class="vazio">Saldo em aberto: <strong>${brl(conta.saldo)}</strong>${
         Number(conta.total_pago) > 0 ? ` &middot; já pago ${brl(conta.total_pago)} de ${brl(conta.valor)}` : ''
       }. Pagou menos? Ajuste o valor — a conta continua pendente pela diferença.</p>
-    </td></tr>
+    </div>
   `;
 }
 
@@ -1135,6 +1271,13 @@ function adminHTML() {
   `;
 }
 
+function textoListaVazia() {
+  if (state.buscaContas.trim()) return 'Nenhum lançamento encontrado para essa busca.';
+  if (state.mesFiltro === 'atual') return 'Nenhum lançamento neste mês.';
+  if (state.mesFiltro === 'anterior') return 'Nenhum lançamento no mês passado.';
+  return 'Nenhum lançamento cadastrado.';
+}
+
 function contasHTML() {
   const podeGerir = podeGerenciar();
   const ehFornecedor = state.tipo === 'fornecedor';
@@ -1208,6 +1351,11 @@ function contasHTML() {
       <button data-status="" class="${state.statusFiltro === '' ? 'ativo' : ''}">Todas</button>
       <button data-status="pendente" class="${state.statusFiltro === 'pendente' ? 'ativo' : ''}">Pendentes</button>
       <button data-status="quitado" class="${state.statusFiltro === 'quitado' ? 'ativo' : ''}">Quitadas</button>
+      <select id="filtro-mes" title="Recorte por mês">
+        <option value="" ${state.mesFiltro === '' ? 'selected' : ''}>Todo o período</option>
+        <option value="atual" ${state.mesFiltro === 'atual' ? 'selected' : ''}>Mês atual</option>
+        <option value="anterior" ${state.mesFiltro === 'anterior' ? 'selected' : ''}>Mês passado</option>
+      </select>
       <form class="busca" data-action="busca-contas">
         <input
           type="search"
@@ -1228,7 +1376,8 @@ function contasHTML() {
       <thead>
         <tr>
           <th>${ehFornecedor ? 'Fornecedor' : 'Categoria'}</th>
-          <th>Descrição</th><th>${ehDespesa ? 'Data' : 'Vencimento'}</th><th>Valor</th><th>Saldo</th><th>Status</th>
+          <th>Descrição</th><th>${ehDespesa ? 'Data' : 'Vencimento'}</th><th>Pago em</th>
+          <th>Valor</th><th>Saldo</th><th>Status</th>
           <th${podeGerir ? '' : ' style="display:none"'}>Ações</th>
         </tr>
       </thead>
@@ -1236,7 +1385,7 @@ function contasHTML() {
         ${
           state.contas.length
             ? state.contas.map(linhaConta).join('')
-            : `<tr><td colspan="7">${state.buscaContas.trim() ? 'Nenhum lançamento encontrado para essa busca.' : 'Nenhum lançamento cadastrado.'}</td></tr>`
+            : `<tr><td colspan="8">${textoListaVazia()}</td></tr>`
         }
       </tbody>
     </table>
@@ -1301,6 +1450,13 @@ function bind() {
 
   root.querySelectorAll('[data-status]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      // Quitadas só cresce: um ano de histórico vira uma lista interminável.
+      // Por isso, ao entrar nela, o recorte começa no mês atual — e o seletor
+      // continua ali para quem quiser o período inteiro. Ao sair, o recorte
+      // volta a ser tudo: em Pendentes, esconder mês antigo esconderia atraso.
+      if (btn.dataset.status !== state.statusFiltro) {
+        state.mesFiltro = btn.dataset.status === 'quitado' ? 'atual' : '';
+      }
       state.statusFiltro = btn.dataset.status;
       focoBusca = false; // clicou fora da busca: o foco é de quem clicou
       carregarDados();
@@ -1361,10 +1517,60 @@ function bind() {
   root.querySelectorAll('[data-action="toggle-baixa"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = Number(btn.dataset.id);
-      state.baixaAbertaId = state.baixaAbertaId === id ? null : id;
+      const abrindo = state.baixaAbertaId !== id;
+      state.baixaAbertaId = abrindo ? id : null;
+      state.edicaoContaId = null;
+      state.pagamentoEditandoId = null;
+      state.detalheConta = null;
+      render();
+      if (abrindo) carregarDetalheConta(id);
+    });
+  });
+
+  root.querySelectorAll('[data-action="toggle-editar"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.id);
+      state.edicaoContaId = state.edicaoContaId === id ? null : id;
+      state.baixaAbertaId = null;
       render();
     });
   });
+
+  const formEditarConta = root.querySelector('[data-action="form-editar-conta"]');
+  if (formEditarConta) formEditarConta.addEventListener('submit', onEditarConta);
+
+  root.querySelectorAll('[data-action="editar-pagamento"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.pagamentoEditandoId = Number(btn.dataset.id);
+      render();
+    });
+  });
+
+  const btnCancelarPag = root.querySelector('[data-action="cancelar-editar-pagamento"]');
+  if (btnCancelarPag) {
+    btnCancelarPag.addEventListener('click', () => {
+      state.pagamentoEditandoId = null;
+      render();
+    });
+  }
+
+  const formEditarPagamento = root.querySelector('[data-action="form-editar-pagamento"]');
+  if (formEditarPagamento) formEditarPagamento.addEventListener('submit', onEditarPagamento);
+
+  root.querySelectorAll('[data-action="excluir-pagamento"]').forEach((btn) => {
+    btn.addEventListener('click', () =>
+      onExcluirPagamento(Number(btn.dataset.conta), Number(btn.dataset.id))
+    );
+  });
+
+  const seletorMes = root.querySelector('#filtro-mes');
+  if (seletorMes) {
+    seletorMes.addEventListener('change', (ev) => {
+      state.mesFiltro = ev.target.value;
+      focoBusca = false;
+      carregarDados();
+    });
+  }
 
   root.querySelectorAll('[data-action="excluir"]').forEach((btn) => {
     btn.addEventListener('click', () => onExcluir(Number(btn.dataset.id)));
@@ -1802,6 +2008,79 @@ function onConfirmarDuplicado() {
   enviarNovaConta({ ...payload, permitir_duplicado: true });
 }
 
+// O detalhe (com os pagamentos) vem numa chamada à parte: carregar tudo junto
+// da lista traria centenas de pagamentos que quase nunca são olhados.
+async function carregarDetalheConta(id) {
+  try {
+    state.detalheConta = await apiFetch(`/contas/${id}`);
+  } catch (err) {
+    state.erro = err.message;
+  }
+  render();
+}
+
+async function onEditarConta(ev) {
+  ev.preventDefault();
+  const id = ev.target.dataset.id;
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch(`/contas/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        fornecedor_id: fd.get('fornecedor_id') || null,
+        categoria: fd.get('categoria') || null,
+        descricao: fd.get('descricao'),
+        valor: fd.get('valor'),
+        vencimento: fd.get('vencimento'),
+      }),
+    });
+    state.edicaoContaId = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onEditarPagamento(ev) {
+  ev.preventDefault();
+  const contaId = ev.target.dataset.conta;
+  const id = ev.target.dataset.id;
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch(`/contas/${contaId}/pagamentos/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        valor: fd.get('valor'),
+        data_pagamento: fd.get('data_pagamento'),
+        forma_pagamento: fd.get('forma_pagamento') || null,
+        banco_id: fd.get('banco_id') || null,
+      }),
+    });
+    state.pagamentoEditandoId = null;
+    state.erro = null;
+    await carregarDetalheConta(contaId);
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onExcluirPagamento(contaId, id) {
+  if (!confirm('Estornar este pagamento? A conta volta a ficar pendente pelo valor.')) return;
+  try {
+    await apiFetch(`/contas/${contaId}/pagamentos/${id}`, { method: 'DELETE' });
+    state.erro = null;
+    await carregarDetalheConta(contaId);
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
 async function onFormBaixa(ev) {
   ev.preventDefault();
   const id = ev.target.dataset.id;
@@ -1816,7 +2095,9 @@ async function onFormBaixa(ev) {
         banco_id: fd.get('banco_id') || null,
       }),
     });
-    state.baixaAbertaId = null;
+    // A conta continua aberta: quem paga em partes costuma conferir logo o que
+    // ficou registrado.
+    await carregarDetalheConta(id);
     carregarDados();
   } catch (err) {
     state.erro = err.message;
