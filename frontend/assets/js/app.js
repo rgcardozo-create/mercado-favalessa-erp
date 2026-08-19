@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.4.0';
+const VERSAO = '1.5.0';
 
 const state = {
   sessao: getSessao(),
@@ -212,10 +212,18 @@ function loginHTML() {
   `;
 }
 
+// Quatro situações, cada uma com a cor do que ela pede: verde já resolveu,
+// vermelho passou do prazo, amarelo é para hoje e azul claro é só aviso.
+// "Pendente" dizia a mesma coisa para o boleto de ontem e o do mês que vem.
 function badgeStatus(conta) {
-  return conta.quitado
-    ? '<span class="badge quitado">Quitado</span>'
-    : '<span class="badge pendente">Pendente</span>';
+  if (conta.quitado) return '<span class="badge quitado">Quitada</span>';
+
+  const hoje = todayISO();
+  const vencimento = String(conta.vencimento).slice(0, 10);
+
+  if (vencimento < hoje) return '<span class="badge vencida">Vencida</span>';
+  if (vencimento === hoje) return '<span class="badge vence-hoje">Vence hoje</span>';
+  return '<span class="badge a-vencer">A vencer</span>';
 }
 
 function linhaConta(conta) {
