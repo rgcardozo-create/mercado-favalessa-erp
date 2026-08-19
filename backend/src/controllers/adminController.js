@@ -61,7 +61,8 @@ async function auditoria(req, res) {
 async function exportarBackup(req, res) {
   const tabelas = [
     'fornecedores', 'contas', 'contas_pagamentos', 'clientes', 'funcionarios',
-    'bancos', 'mov_prazo', 'conciliacao_transacoes', 'conciliacao_dinheiro', 'acumulados',
+    'bancos', 'formas_pagamento', 'mov_prazo', 'conciliacao_transacoes', 'conciliacao_dinheiro',
+    'acumulados',
   ];
 
   const dados = {};

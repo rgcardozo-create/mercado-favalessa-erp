@@ -274,21 +274,26 @@ input[type="file"] { padding: 6px; font-size: 13px; }
   border: 1px solid var(--borda);
 }
 .tabela-contas th, .tabela-contas td {
-  padding: 10px 12px;
+  padding: 7px 10px;
   text-align: left;
   border-bottom: 1px solid var(--borda);
-  font-size: 14px;
+  font-size: 13px;
 }
 .tabela-contas th {
   background: var(--azul-suave);
   color: var(--azul);
   font-weight: 600;
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 .tabela-contas tr:last-child td { border-bottom: none; }
 .tabela-contas tbody tr:hover { background: #FAFCFF; }
-.tabela-contas td.ações { display: flex; gap: 6px; flex-wrap: wrap; }
+/* Os botões da linha ficam num container próprio: `display: flex` no <td>
+   tirava a célula do alinhamento da tabela e esticava a linha inteira. */
+.tabela-contas td.acoes { white-space: nowrap; width: 1%; }
+.acoes-linha { display: flex; gap: 5px; align-items: center; }
+.tabela-contas .acoes-linha button { padding: 4px 9px; font-size: 12px; font-weight: 500; }
 .linha-baixa td { background: var(--azul-suave); }
 
 code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font-size: 12px; }

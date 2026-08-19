@@ -15,6 +15,9 @@ const state = {
   tipo: 'fornecedor',
   contas: [],
   fornecedores: [],
+  // Listas do cadastro que a baixa usa: forma de pagamento e banco.
+  formasPagamento: [],
+  bancos: [],
   painel: null,
   filtroBoletos: 'hoje',
   filtroFixas: 'ate_hoje',
@@ -147,12 +150,16 @@ async function carregarDados() {
       const params = new URLSearchParams({ tipo: state.tipo });
       if (state.statusFiltro) params.set('status', state.statusFiltro);
       if (state.buscaContas.trim()) params.set('busca', state.buscaContas.trim());
-      const [contas, fornecedores] = await Promise.all([
+      const [contas, fornecedores, formas, bancos] = await Promise.all([
         apiFetch(`/contas?${params}`),
         apiFetch('/fornecedores'),
+        apiFetch('/cadastros/formas-pagamento'),
+        apiFetch('/cadastros/bancos'),
       ]);
       state.contas = contas;
       state.fornecedores = fornecedores;
+      state.formasPagamento = formas;
+      state.bancos = bancos;
     }
   } catch (err) {
     state.erro = err.message;
@@ -198,27 +205,18 @@ function linhaConta(conta) {
       <td>${brl(conta.valor)}</td>
       <td>${brl(conta.saldo)}</td>
       <td>${badgeStatus(conta)}</td>
-      <td class="ações">
-        ${
-          podeGerir && !conta.quitado
-            ? `<button data-action="toggle-baixa" data-id="${conta.id}">${baixaAberta ? 'Cancelar' : 'Dar baixa'}</button>`
-            : ''
-        }
-        ${podeGerir ? `<button data-action="excluir" data-id="${conta.id}" class="perigo">Excluir</button>` : ''}
+      <td class="acoes">
+        <div class="acoes-linha">
+          ${
+            podeGerir && !conta.quitado
+              ? `<button data-action="toggle-baixa" data-id="${conta.id}">${baixaAberta ? 'Cancelar' : 'Dar baixa'}</button>`
+              : ''
+          }
+          ${podeGerir ? `<button data-action="excluir" data-id="${conta.id}" class="perigo">Excluir</button>` : ''}
+        </div>
       </td>
     </tr>
-    ${
-      baixaAberta
-        ? `<tr class="linha-baixa"><td colspan="7">
-            <form data-action="form-baixa" data-id="${conta.id}" class="form-inline">
-              <label>Valor <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" /></label>
-              <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
-              <label>Forma <input type="text" name="forma_pagamento" placeholder="pix, dinheiro..." /></label>
-              <button type="submit">Confirmar pagamento</button>
-            </form>
-          </td></tr>`
-        : ''
-    }
+    ${baixaAberta ? formBaixaHTML(conta) : ''}
   `;
 }
 
@@ -298,6 +296,52 @@ function linhaPainelHTML(conta) {
           </form>`
         : ''
     }
+  `;
+}
+
+// Formulário da baixa. O valor vem preenchido com o saldo mas é editável — é
+// nele que se registra o que foi pago de verdade, inclusive pagamento parcial.
+// Forma e banco saem dos Cadastros, não de texto livre.
+function formBaixaHTML(conta) {
+  // A forma é guardada pelo nome (é assim que o histórico importado já está),
+  // o banco por id, que é chave estrangeira. Nenhum dos dois vem escolhido de
+  // antemão: forma de pagamento errada por descuido do padrão é registro errado.
+  const formaPadrao = state.formasPagamento.find((f) => f.padrao);
+  const opcoesForma = state.formasPagamento
+    .map(
+      (f) =>
+        `<option value="${escapar(f.nome)}" ${formaPadrao && formaPadrao.id === f.id ? 'selected' : ''}>${escapar(f.nome)}</option>`
+    )
+    .join('');
+
+  return `
+    <tr class="linha-baixa"><td colspan="7">
+      <form data-action="form-baixa" data-id="${conta.id}" class="form-inline">
+        <label>Valor pago
+          <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" />
+        </label>
+        <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
+        <label>Forma de pagamento
+          <select name="forma_pagamento" required ${state.formasPagamento.length ? '' : 'disabled'}>
+            ${
+              state.formasPagamento.length
+                ? `<option value="" ${formaPadrao ? '' : 'selected'}>— escolha —</option>${opcoesForma}`
+                : '<option value="">— cadastre em Cadastros › Formas de pagamento —</option>'
+            }
+          </select>
+        </label>
+        <label>Banco
+          <select name="banco_id">
+            <option value="">— sem banco —</option>
+            ${state.bancos.map((b) => `<option value="${b.id}">${escapar(b.nome)}</option>`).join('')}
+          </select>
+        </label>
+        <button type="submit">Confirmar pagamento</button>
+      </form>
+      <p class="vazio">Saldo em aberto: <strong>${brl(conta.saldo)}</strong>${
+        Number(conta.total_pago) > 0 ? ` &middot; já pago ${brl(conta.total_pago)} de ${brl(conta.valor)}` : ''
+      }. Pagou menos? Ajuste o valor — a conta continua pendente pela diferença.</p>
+    </td></tr>
   `;
 }
 
@@ -730,6 +774,7 @@ const CADASTROS = [
   { chave: 'clientes', rotulo: 'Clientes' },
   { chave: 'funcionarios', rotulo: 'Funcionários' },
   { chave: 'bancos', rotulo: 'Bancos' },
+  { chave: 'formas-pagamento', rotulo: 'Formas de pagamento' },
 ];
 
 function cadastrosHTML() {
@@ -741,12 +786,19 @@ function cadastrosHTML() {
     clientes: ['codigo', 'nome', 'telefone', 'cpf_cnpj'],
     funcionarios: ['codigo', 'nome', 'telefone', 'cpf', 'pix'],
     bancos: ['nome'],
+    'formas-pagamento': ['nome'],
   }[tipo];
 
   const rotulos = {
     codigo: 'Código', nome: 'Nome', telefone: 'Telefone',
     cpf_cnpj: 'CPF/CNPJ', cpf: 'CPF', pix: 'PIX',
   };
+
+  const ajuda = {
+    'formas-pagamento':
+      'Estas são as opções que aparecem ao dar baixa em uma conta (Dinheiro, PIX, Boleto…).',
+    bancos: 'Os bancos aparecem na baixa, para registrar de onde o dinheiro saiu.',
+  }[tipo];
 
   return `
     ${cabecalho}
@@ -756,6 +808,8 @@ function cadastrosHTML() {
         (c) => `<button data-cadastro="${c.chave}" class="${tipo === c.chave ? 'ativo' : ''}">${c.rotulo}</button>`
       ).join('')}
     </div>
+
+    ${ajuda ? `<p class="vazio">${ajuda}</p>` : ''}
 
     <section class="cartoes-form">
       <form data-action="novo-cadastro" class="form-inline">
@@ -780,7 +834,7 @@ function cadastrosHTML() {
                 .map(
                   (r) => `<tr>
                     ${colunas.map((c) => `<td>${r[c] || '—'}</td>`).join('')}
-                    <td>${podeGerenciar() ? `<button data-action="excluir-cadastro" data-id="${r.id}" class="perigo">Excluir</button>` : ''}</td>
+                    <td class="acoes"><div class="acoes-linha">${podeGerenciar() ? `<button data-action="excluir-cadastro" data-id="${r.id}" class="perigo">Excluir</button>` : ''}</div></td>
                   </tr>`
                 )
                 .join('')
@@ -1755,6 +1809,7 @@ async function onFormBaixa(ev) {
         valor: fd.get('valor'),
         data_pagamento: fd.get('data_pagamento'),
         forma_pagamento: fd.get('forma_pagamento') || null,
+        banco_id: fd.get('banco_id') || null,
       }),
     });
     state.baixaAbertaId = null;
