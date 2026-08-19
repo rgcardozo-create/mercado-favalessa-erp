@@ -103,6 +103,17 @@ CREATE TABLE IF NOT EXISTS funcionarios (
   criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Formas de pagamento (Dinheiro, PIX, Boleto...). Existem como cadastro para a
+-- baixa ser escolhida numa lista em vez de digitada de novo a cada pagamento —
+-- texto livre vira "pix", "PIX" e "Pix" no mesmo relatório.
+CREATE TABLE IF NOT EXISTS formas_pagamento (
+  id          SERIAL PRIMARY KEY,
+  nome        VARCHAR(60) NOT NULL,
+  padrao      BOOLEAN NOT NULL DEFAULT false,
+  legado_id   VARCHAR(40) UNIQUE,
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS bancos (
   id          SERIAL PRIMARY KEY,
   nome        VARCHAR(120) NOT NULL,
@@ -345,6 +356,23 @@ UPDATE conciliacao_dinheiro d SET impressao_digital = s.fp
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_impressao ON conciliacao_transacoes(impressao_digital);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_dinheiro_impressao ON conciliacao_dinheiro(impressao_digital);
+
+-- Em que banco o pagamento saiu. Opcional: dinheiro do caixa não tem banco, e
+-- as baixas importadas do sistema antigo não trazem essa informação.
+ALTER TABLE contas_pagamentos ADD COLUMN IF NOT EXISTS banco_id INTEGER REFERENCES bancos(id);
+
+-- Nome de forma de pagamento é único ignorando caixa e espaços, senão a lista da
+-- baixa enche de repetido.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_formas_pagamento_nome
+  ON formas_pagamento (lower(btrim(nome)));
+
+-- Só na primeira vez: sem nenhuma forma cadastrada a baixa não teria o que
+-- oferecer. São as mesmas do sistema antigo.
+INSERT INTO formas_pagamento (nome, padrao)
+SELECT v.nome, v.padrao
+  FROM (VALUES ('Dinheiro', false), ('PIX', true), ('Cartão', false),
+               ('Boleto', false), ('Transferência', false)) AS v(nome, padrao)
+ WHERE NOT EXISTS (SELECT 1 FROM formas_pagamento);
 
 CREATE INDEX IF NOT EXISTS idx_contas_vencimento ON contas(vencimento);
 CREATE INDEX IF NOT EXISTS idx_contas_tipo ON contas(tipo);

@@ -196,6 +196,7 @@ async function importarDados(backup, { dryRun = false } = {}) {
     clientes: 0,
     funcionarios: 0,
     bancos: 0,
+    formasPagamento: 0,
     movPrazo: 0,
     movPrazoSemCliente: 0,
     folha: 0,
@@ -398,6 +399,32 @@ async function importarDados(backup, { dryRun = false } = {}) {
         chaveConflito: 'legado_id',
       });
       resumo.funcionarios = funcionarios.length;
+    }
+
+    const formasPagamento = (backup.formasPagamento || []).map((f) => [
+      normalizarNome(f.nome) || '(sem nome)',
+      Boolean(f.padrao),
+      f.id,
+    ]);
+    if (formasPagamento.length) {
+      // Instalação nova já vem com as formas padrão, sem legado_id. Quando o
+      // backup traz as mesmas pelo nome, elas adotam o id antigo em vez de
+      // esbarrar no índice único de nome.
+      for (const [nome, , legadoId] of formasPagamento) {
+        await client.query(
+          `UPDATE formas_pagamento SET legado_id = $1
+            WHERE legado_id IS NULL AND lower(btrim(nome)) = lower(btrim($2))`,
+          [legadoId, nome]
+        );
+      }
+
+      await inserirEmLote(client, {
+        tabela: 'formas_pagamento',
+        colunas: ['nome', 'padrao', 'legado_id'],
+        linhas: formasPagamento,
+        chaveConflito: 'legado_id',
+      });
+      resumo.formasPagamento = formasPagamento.length;
     }
 
     const bancos = (backup.bancos || []).map((b) => [
@@ -622,6 +649,7 @@ async function main() {
   console.log(`  Clientes:                            ${resumo.clientes}`);
   console.log(`  Funcionários:                        ${resumo.funcionarios}`);
   console.log(`  Bancos:                              ${resumo.bancos}`);
+  console.log(`  Formas de pagamento:                 ${resumo.formasPagamento}`);
   console.log(`  Venda a prazo (movimentos):          ${resumo.movPrazo}` +
     (resumo.movPrazoSemCliente ? ` (${resumo.movPrazoSemCliente} sem cliente)` : ''));
   console.log(`  Folha (lançamentos):                 ${resumo.folha}`);

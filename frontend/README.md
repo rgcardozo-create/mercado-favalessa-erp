@@ -34,7 +34,7 @@ O service worker guarda em cache **apenas o casco** (HTML/CSS/JS), para o app ab
 | Venda a prazo | ✅ | ✅ | ✅ |
 | Conciliação | ✅ | ✅ | ✅ |
 | Acumulado | ✅ | ✅ | ❌ |
-| Cadastros | ✅ | ✅ | ✅ (sem excluir) |
+| Cadastros (clientes, funcionários, bancos, formas de pagamento) | ✅ | ✅ | ✅ (sem excluir) |
 | Relatórios | ✅ | ✅ | ❌ |
 | Folha | ✅ (+ senha) | ❌ | ❌ |
 | Administração | ✅ | ❌ | ❌ |

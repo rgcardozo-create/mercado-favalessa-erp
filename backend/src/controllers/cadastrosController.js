@@ -1,8 +1,9 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 
-// Cadastros simples (clientes, funcionários, bancos) compartilham a mesma forma,
-// então são gerados a partir de uma descrição em vez de três controllers iguais.
+// Cadastros simples (clientes, funcionários, bancos, formas de pagamento)
+// compartilham a mesma forma, então são gerados a partir de uma descrição em vez
+// de quatro controllers iguais.
 const ENTIDADES = {
   clientes: {
     tabela: 'clientes',
@@ -19,7 +20,18 @@ const ENTIDADES = {
     campos: ['nome', 'padrao'],
     ordem: 'nome',
   },
+  'formas-pagamento': {
+    tabela: 'formas_pagamento',
+    campos: ['nome', 'padrao'],
+    ordem: 'nome',
+  },
 };
+
+// Nome repetido é erro de digitação, não falha do servidor: o banco recusa pelo
+// índice único e aqui isso vira uma mensagem que o usuário entende.
+function ehNomeRepetido(err) {
+  return err && err.code === '23505';
+}
 
 function criarHandlers(chave) {
   const { tabela, campos, ordem } = ENTIDADES[chave];
@@ -34,13 +46,24 @@ function criarHandlers(chave) {
       return res.status(400).json({ error: 'nome é obrigatório.' });
     }
 
-    const valores = campos.map((c) => (req.body[c] === undefined ? null : req.body[c]));
-    const marcadores = campos.map((_, i) => `$${i + 1}`).join(', ');
+    // Só entram as colunas que vieram no formulário: mandar null no que não veio
+    // atropelaria os defaults do banco (`padrao` e `ativo` são NOT NULL).
+    const usados = campos.filter((c) => req.body[c] !== undefined);
+    const valores = usados.map((c) => (req.body[c] === '' ? null : req.body[c]));
+    const marcadores = usados.map((_, i) => `$${i + 1}`).join(', ');
 
-    const { rows } = await pool.query(
-      `INSERT INTO ${tabela} (${campos.join(', ')}) VALUES (${marcadores}) RETURNING *`,
-      valores
-    );
+    let rows;
+    try {
+      ({ rows } = await pool.query(
+        `INSERT INTO ${tabela} (${usados.join(', ')}) VALUES (${marcadores}) RETURNING *`,
+        valores
+      ));
+    } catch (err) {
+      if (ehNomeRepetido(err)) {
+        return res.status(409).json({ error: `Já existe um cadastro com o nome "${req.body.nome}".` });
+      }
+      throw err;
+    }
 
     await registrarAuditoria({
       usuarioId: req.user.id,
@@ -58,10 +81,18 @@ function criarHandlers(chave) {
     const valores = campos.map((c) => (req.body[c] === undefined ? null : req.body[c]));
     const sets = campos.map((c, i) => `${c} = COALESCE($${i + 1}, ${c})`).join(', ');
 
-    const { rows } = await pool.query(
-      `UPDATE ${tabela} SET ${sets} WHERE id = $${campos.length + 1} RETURNING *`,
-      [...valores, id]
-    );
+    let rows;
+    try {
+      ({ rows } = await pool.query(
+        `UPDATE ${tabela} SET ${sets} WHERE id = $${campos.length + 1} RETURNING *`,
+        [...valores, id]
+      ));
+    } catch (err) {
+      if (ehNomeRepetido(err)) {
+        return res.status(409).json({ error: `Já existe um cadastro com o nome "${req.body.nome}".` });
+      }
+      throw err;
+    }
 
     if (!rows[0]) {
       return res.status(404).json({ error: 'Registro não encontrado.' });

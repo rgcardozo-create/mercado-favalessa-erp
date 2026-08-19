@@ -81,7 +81,11 @@ async function obter(req, res) {
   }
 
   const { rows: pagamentos } = await pool.query(
-    'SELECT * FROM contas_pagamentos WHERE conta_id = $1 ORDER BY data_pagamento',
+    `SELECT p.*, b.nome AS banco_nome
+       FROM contas_pagamentos p
+       LEFT JOIN bancos b ON b.id = p.banco_id
+      WHERE p.conta_id = $1
+      ORDER BY p.data_pagamento`,
     [id]
   );
 
@@ -199,7 +203,7 @@ async function deletar(req, res) {
 
 async function registrarPagamento(req, res) {
   const { id } = req.params;
-  const { valor, data_pagamento, forma_pagamento } = req.body;
+  const { valor, data_pagamento, forma_pagamento, banco_id } = req.body;
 
   if (!valor || Number(valor) <= 0 || !data_pagamento) {
     return res.status(400).json({ error: 'valor (maior que zero) e data_pagamento são obrigatórios.' });
@@ -210,10 +214,18 @@ async function registrarPagamento(req, res) {
     return res.status(404).json({ error: 'Conta não encontrada.' });
   }
 
+  // Banco é opcional — dinheiro do caixa não sai de banco nenhum —, mas quando
+  // vem tem que existir, senão a baixa guardaria uma referência solta.
+  const bancoId = banco_id ? Number(banco_id) : null;
+  if (bancoId) {
+    const { rows: banco } = await pool.query('SELECT id FROM bancos WHERE id = $1', [bancoId]);
+    if (!banco[0]) return res.status(400).json({ error: 'Banco não encontrado.' });
+  }
+
   const { rows } = await pool.query(
-    `INSERT INTO contas_pagamentos (conta_id, valor, data_pagamento, forma_pagamento, pago_por)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [id, valor, data_pagamento, forma_pagamento || null, req.user.id]
+    `INSERT INTO contas_pagamentos (conta_id, valor, data_pagamento, forma_pagamento, banco_id, pago_por)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [id, valor, data_pagamento, forma_pagamento || null, bancoId, req.user.id]
   );
   const pagamento = rows[0];
 
