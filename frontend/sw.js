@@ -4,7 +4,9 @@
 // abrir rápido e instalar na tela inicial do celular. Chamadas de API NUNCA são
 // cacheadas — num sistema com três pessoas mexendo ao mesmo tempo, mostrar saldo
 // ou conta vencida a partir de cache velho seria pior do que não abrir.
-const CACHE = 'mf-casco-v1';
+// Trocar o nome descarta o cache antigo inteiro no `activate` — é o que garante
+// que ninguém fique com o casco de um deploy anterior.
+const CACHE = 'mf-casco-v2';
 
 const CASCO = [
   './',

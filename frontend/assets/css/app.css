@@ -96,6 +96,7 @@ button.ativo { background: var(--azul); }
 .topo { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
 .topo h1 { color: var(--azul); margin: 0 0 4px; font-size: 26px; }
 .usuario-atual { color: var(--texto-suave); font-size: 13px; margin: 0; }
+.versao { color: #98A2B3; font-size: 11px; }
 
 .badge {
   display: inline-block;

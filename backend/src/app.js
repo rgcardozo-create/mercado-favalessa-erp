@@ -60,10 +60,13 @@ const PASTA_FRONTEND = path.join(__dirname, '..', '..', 'frontend');
 if (fs.existsSync(path.join(PASTA_FRONTEND, 'index.html'))) {
   app.use(
     express.static(PASTA_FRONTEND, {
-      // O casco muda a cada deploy; o service worker não pode ficar preso a uma
-      // versão antiga, senão o usuário nunca recebe a atualização.
-      setHeaders(res, caminho) {
-        if (caminho.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache');
+      // `no-cache` não é "não guarde": é "guarde, mas confirme comigo antes de
+      // usar". Com ETag a confirmação custa um 304 vazio, e o usuário nunca fica
+      // preso a um CSS ou JS de antes do deploy — que foi o que aconteceu quando
+      // o navegador continuou mostrando a tela antiga depois de uma atualização.
+      etag: true,
+      setHeaders(res) {
+        res.setHeader('Cache-Control', 'no-cache');
       },
     })
   );
@@ -76,7 +79,10 @@ app.use((req, res) => {
   }
 
   const indexHtml = path.join(PASTA_FRONTEND, 'index.html');
-  if (fs.existsSync(indexHtml)) return res.sendFile(indexHtml);
+  if (fs.existsSync(indexHtml)) {
+    res.setHeader('Cache-Control', 'no-cache');
+    return res.sendFile(indexHtml);
+  }
 
   return res.status(404).json({ error: 'Rota não encontrada.' });
 });
