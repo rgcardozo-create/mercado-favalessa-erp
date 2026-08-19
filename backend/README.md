@@ -6,6 +6,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 
 - Autenticação com JWT (login por usuário/senha, sem mais senha única).
 - 3 perfis: `master`, `gerente`, `loja`.
+- **Parcelamento no cadastro**: informe quantas parcelas e de quanto em quanto tempo (mensal no mesmo dia, ou 7/15/20/21/30 dias) e o sistema cria todas de uma vez, cada uma com seu vencimento e sua numeração. Serve tanto para o boleto em 3x quanto para o financiamento em 48x das despesas fixas. Tudo numa transação: ou nascem todas, ou nenhuma.
 - **Forma de pagamento prevista** por lançamento (`forma_prevista`): separa em listas quem se paga por PIX de quem manda boleto, e já vem escolhida na hora de dar baixa. É previsão — o que foi pago de fato continua em `contas_pagamentos`.
 - **Aviso de lançamento repetido**: cadastrar (ou editar para) fornecedor, descrição, vencimento e valor iguais aos de outra conta responde `409` com a conta que já existe. Repetir só o fornecedor e a descrição é normal e passa direto; parcelas diferem no vencimento e dois boletos do mesmo dia diferem no valor. Para casos legítimos, o mesmo POST/PUT com `permitir_duplicado: true` grava assim mesmo.
 - **Contas a pagar nas quatro telas** — Fornecedores, Despesas fixas, Impostos e Outras despesas — com pagamentos parciais (baixas) em tabela filha.
@@ -100,6 +101,8 @@ Detalhes de como o backup é interpretado:
   - cada conta traz `ultimo_pagamento` (data da última baixa) além de `total_pago`, `saldo` e `quitado`.
 - `GET /api/contas/:id` — inclui lista de pagamentos
 - `POST /api/contas` — cadastra um lançamento (`tipo` padrão `fornecedor`; `categoria` usada em Outras despesas; `forma_prevista` opcional)
+  - `parcelas` (1 a 60, padrão 1) e `intervalo` (`mensal` padrão, ou `7`/`15`/`20`/`21`/`30` dias) geram o carnê inteiro; o `valor` informado é o de **cada** parcela
+  - a resposta traz `parcelas_criadas` e a lista completa em `contas`
 - `PUT /api/contas/:id` / `DELETE /api/contas/:id`
 - `POST /api/contas/:id/pagamentos` — registra uma baixa (parcial ou total); aceita `forma_pagamento` (nome) e `banco_id` (opcional)
 - `PUT /api/contas/:id/pagamentos/:pagamentoId` — corrige uma baixa (valor, data, forma, banco)

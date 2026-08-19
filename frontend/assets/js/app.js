@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.8.0';
+const VERSAO = '1.9.0';
 
 const state = {
   sessao: getSessao(),
@@ -243,7 +243,9 @@ function linhaConta(conta) {
   return `
     <tr>
       <td>${(conta.tipo === 'fornecedor' ? conta.fornecedor_nome : conta.categoria) || '—'}</td>
-      <td>${conta.descricao}</td>
+      <td>${escapar(conta.descricao)}${
+        conta.total_parcelas > 1 ? ` <small class="parcela">${conta.parcela}/${conta.total_parcelas}</small>` : ''
+      }</td>
       <td>${dateBR(conta.vencimento)}</td>
       <td>${conta.ultimo_pagamento ? dateBR(conta.ultimo_pagamento) : '—'}</td>
       <td>${brl(conta.valor)}</td>
@@ -1537,7 +1539,22 @@ function contasHTML() {
         <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${escapar(pendente.valor || '')}" /></label>
         <label>${ehDespesa ? 'Data' : 'Vencimento'} <input type="date" name="vencimento" required value="${escapar(pendente.vencimento || '')}" /></label>
         ${campoFormaPrevistaHTML(pendente.forma_prevista)}
+        <label>Parcelas
+          <input type="number" min="1" max="60" step="1" name="parcelas" value="${escapar(pendente.parcelas || 1)}" />
+        </label>
+        <label>A cada
+          <select name="intervalo">
+            <option value="mensal" ${pendente.intervalo === '7' || pendente.intervalo === '15' || pendente.intervalo === '20' || pendente.intervalo === '21' || pendente.intervalo === '30' ? '' : 'selected'}>mês (mesmo dia)</option>
+            ${['7', '15', '20', '21', '30']
+              .map((d) => `<option value="${d}" ${pendente.intervalo === d ? 'selected' : ''}>${d} dias</option>`)
+              .join('')}
+          </select>
+        </label>
         <button type="submit">Cadastrar</button>
+        <p class="vazio campo-largo">
+          Uma parcela é o normal — deixe <strong>1</strong>. Com mais de uma, o valor informado é o
+          <strong>de cada parcela</strong>, e o sistema cria todas de uma vez a partir do vencimento.
+        </p>
       </form>
     </section>
 
@@ -2239,6 +2256,8 @@ async function onNovaConta(ev) {
     valor: fd.get('valor'),
     vencimento: fd.get('vencimento'),
     forma_prevista: fd.get('forma_prevista') || null,
+    parcelas: fd.get('parcelas') || 1,
+    intervalo: fd.get('intervalo') || 'mensal',
   };
   await enviarNovaConta(payload);
 }

@@ -112,6 +112,26 @@ async function obter(req, res) {
   return res.json({ ...rows[0], pagamentos });
 }
 
+// Parcelamento: um boleto em 3x é lançado uma vez e vira três contas, cada uma
+// com seu vencimento. O intervalo é em dias, menos "mensal", que anda de mês em
+// mês mantendo o dia — quem paga todo dia 10 espera 10/09, não 09/09 (que é o
+// que dariam 30 dias corridos). Mês curto encosta no último dia (31/01 -> 28/02).
+const INTERVALOS = ['mensal', '7', '15', '20', '21', '30'];
+const MAX_PARCELAS = 60;
+
+async function datasDasParcelas({ vencimento, parcelas, intervalo }) {
+  const sql =
+    intervalo === 'mensal'
+      ? `SELECT to_char(($1::date + (g.i || ' month')::interval)::date, 'YYYY-MM-DD') AS d
+           FROM generate_series(0, $2::int - 1) g(i) ORDER BY g.i`
+      : `SELECT to_char($1::date + (g.i * $3::int), 'YYYY-MM-DD') AS d
+           FROM generate_series(0, $2::int - 1) g(i) ORDER BY g.i`;
+
+  const params = intervalo === 'mensal' ? [vencimento, parcelas] : [vencimento, parcelas, Number(intervalo)];
+  const { rows } = await pool.query(sql, params);
+  return rows.map((r) => r.d);
+}
+
 async function criar(req, res) {
   const { fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista } = req.body;
   const tipo = req.body.tipo || 'fornecedor';
@@ -129,27 +149,69 @@ async function criar(req, res) {
   // Fornecedor só faz sentido em conta do tipo fornecedor.
   const fornecedorId = tipo === 'fornecedor' ? fornecedor_id || null : null;
 
+  const parcelas = Math.trunc(Number(req.body.parcelas) || 1);
+  if (!Number.isFinite(parcelas) || parcelas < 1 || parcelas > MAX_PARCELAS) {
+    return res.status(400).json({ error: `parcelas precisa ser um número entre 1 e ${MAX_PARCELAS}.` });
+  }
+  const intervalo = INTERVALOS.includes(String(req.body.intervalo)) ? String(req.body.intervalo) : 'mensal';
+
+  const datas = await datasDasParcelas({ vencimento, parcelas, intervalo });
+
   if (!req.body.permitir_duplicado) {
-    const existente = await contaDuplicada({ tipo, fornecedorId, descricao, valor, vencimento });
-    if (existente) return respostaDuplicada(res, existente);
+    for (const data of datas) {
+      const existente = await contaDuplicada({ tipo, fornecedorId, descricao, valor, vencimento: data });
+      if (existente) return respostaDuplicada(res, existente);
+    }
   }
 
-  const { rows } = await pool.query(
-    `INSERT INTO contas (tipo, categoria, fornecedor_id, descricao, valor, vencimento, forma_prevista, criado_por)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [tipo, categoria || null, fornecedorId, descricao, valor, vencimento, forma_prevista || null, req.user.id]
-  );
-  const conta = rows[0];
+  // Todas as parcelas nascem juntas ou nenhuma nasce: metade de um carnê lançado
+  // é pior do que nada, porque some no meio da lista sem ninguém perceber.
+  const cliente = await pool.connect();
+  let criadas;
+  try {
+    await cliente.query('BEGIN');
+    const inseridas = [];
+    for (let i = 0; i < datas.length; i += 1) {
+      const { rows } = await cliente.query(
+        `INSERT INTO contas
+           (tipo, categoria, fornecedor_id, descricao, valor, vencimento, forma_prevista,
+            parcela, total_parcelas, criado_por)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+        [
+          tipo,
+          categoria || null,
+          fornecedorId,
+          descricao,
+          valor,
+          datas[i],
+          forma_prevista || null,
+          parcelas > 1 ? i + 1 : null,
+          parcelas > 1 ? parcelas : null,
+          req.user.id,
+        ]
+      );
+      inseridas.push(rows[0]);
+    }
+    await cliente.query('COMMIT');
+    criadas = inseridas;
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
 
-  await registrarAuditoria({
-    usuarioId: req.user.id,
-    acao: 'create',
-    entidade: 'contas',
-    entidadeId: conta.id,
-    dados: conta,
-  });
+  for (const conta of criadas) {
+    await registrarAuditoria({
+      usuarioId: req.user.id,
+      acao: 'create',
+      entidade: 'contas',
+      entidadeId: conta.id,
+      dados: conta,
+    });
+  }
 
-  return res.status(201).json(conta);
+  return res.status(201).json({ ...criadas[0], parcelas_criadas: criadas.length, contas: criadas });
 }
 
 async function atualizar(req, res) {
@@ -175,6 +237,12 @@ async function atualizar(req, res) {
 
   // `tipo` não é editável: mudar o tipo de uma conta já lançada bagunçaria o
   // histórico e os totais por tela. Para trocar, exclua e lance de novo.
+  //
+  // A forma prevista não usa COALESCE: ela precisa poder voltar a ser vazia, e
+  // com COALESCE mandar vazio significaria "não mexe" — não havia como desfazer
+  // uma escolha errada. O critério é a presença do campo no corpo.
+  const mexeuNaForma = Object.prototype.hasOwnProperty.call(req.body, 'forma_prevista');
+
   const { rows } = await pool.query(
     `UPDATE contas
      SET fornecedor_id = COALESCE($1, fornecedor_id),
@@ -182,11 +250,11 @@ async function atualizar(req, res) {
          valor = COALESCE($3, valor),
          vencimento = COALESCE($4, vencimento),
          categoria = COALESCE($5, categoria),
-         forma_prevista = COALESCE($6, forma_prevista),
+         forma_prevista = CASE WHEN $6 THEN $7 ELSE forma_prevista END,
          atualizado_em = now()
-     WHERE id = $7
+     WHERE id = $8
      RETURNING *`,
-    [fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista || null, id]
+    [fornecedor_id, descricao, valor, vencimento, categoria, mexeuNaForma, forma_prevista || null, id]
   );
 
   if (!rows[0]) {

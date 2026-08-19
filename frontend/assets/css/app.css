@@ -309,6 +309,8 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 }
 .form-inline label { flex: 1; min-width: 120px; }
 .form-inline label.campo-largo { flex: 1 1 100%; }
+.form-inline .campo-largo { flex: 1 1 100%; margin: 0; }
+small.parcela { color: var(--azul); background: var(--azul-suave); border-radius: 4px; padding: 1px 5px; font-size: 11px; }
 
 .filtros { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 .filtros button { background: #fff; color: var(--azul); border: 1px solid var(--borda); }
