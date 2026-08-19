@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.3.0';
+const VERSAO = '1.4.0';
 
 const state = {
   sessao: getSessao(),
@@ -48,7 +48,8 @@ const state = {
   extratoCarregando: false,
   extratoResultado: null,
   periodo: { de: '', ate: '' },
-  statusFiltro: '',
+  // Abre já mostrando o que precisa de ação: vencidas e as que vencem hoje.
+  statusFiltro: 'vencidas',
   // Recorte por mês da lista de contas: '' (tudo), 'atual' ou 'anterior'.
   mesFiltro: '',
   // Conta expandida: detalhe carregado à parte, com os pagamentos já feitos.
@@ -1283,8 +1284,20 @@ function adminHTML() {
   `;
 }
 
+// Situações da tela de contas. "Vencidas e de hoje" é o padrão — a lista abre
+// no que precisa de ação, não no histórico inteiro.
+const FILTROS_STATUS = [
+  ['', 'Todas'],
+  ['vencidas', 'Vencidas e de hoje'],
+  ['a_vencer', 'A vencer'],
+  ['quitado', 'Quitadas'],
+];
+
 function textoListaVazia() {
   if (state.buscaContas.trim()) return 'Nenhum lançamento encontrado para essa busca.';
+  if (state.statusFiltro === 'vencidas') return 'Nada vencido nem vencendo hoje. Tudo em dia por aqui.';
+  if (state.statusFiltro === 'a_vencer') return 'Nenhum lançamento a vencer.';
+  if (state.statusFiltro === 'quitado') return 'Nenhum lançamento quitado neste recorte.';
   if (state.mesFiltro === 'atual') return 'Nenhum lançamento neste mês.';
   if (state.mesFiltro === 'anterior') return 'Nenhum lançamento no mês passado.';
   return 'Nenhum lançamento cadastrado.';
@@ -1360,9 +1373,10 @@ function contasHTML() {
     </section>
 
     <div class="filtros">
-      <button data-status="" class="${state.statusFiltro === '' ? 'ativo' : ''}">Todas</button>
-      <button data-status="pendente" class="${state.statusFiltro === 'pendente' ? 'ativo' : ''}">Pendentes</button>
-      <button data-status="quitado" class="${state.statusFiltro === 'quitado' ? 'ativo' : ''}">Quitadas</button>
+      ${FILTROS_STATUS.map(
+        ([valor, rotulo]) =>
+          `<button data-status="${valor}" class="${state.statusFiltro === valor ? 'ativo' : ''}">${rotulo}</button>`
+      ).join('')}
       <select id="filtro-mes" title="Recorte por mês">
         <option value="" ${state.mesFiltro === '' ? 'selected' : ''}>Todo o período</option>
         <option value="atual" ${state.mesFiltro === 'atual' ? 'selected' : ''}>Mês atual</option>
