@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.2.0';
+const VERSAO = '1.3.0';
 
 const state = {
   sessao: getSessao(),
@@ -26,6 +26,7 @@ const state = {
   filtroBoletos: 'hoje',
   filtroFixas: 'ate_hoje',
   filtroImpostos: 'ate_hoje',
+  filtroDespesas: 'ate_hoje',
   conciliacao: null,
   acumulados: null,
   vendaPrazo: null,
@@ -132,10 +133,19 @@ async function carregarDados() {
   render();
   try {
     if (state.tab === 'painel') {
-      state.painel = await apiFetch(
-        `/painel-do-dia?filtro=${state.filtroBoletos}` +
-          `&filtroFixas=${state.filtroFixas}&filtroImpostos=${state.filtroImpostos}`,
-      );
+      // Formas e bancos vêm junto porque dá para pagar direto do painel.
+      const [painel, formasPainel, bancosPainel] = await Promise.all([
+        apiFetch(
+          `/painel-do-dia?filtro=${state.filtroBoletos}` +
+            `&filtroFixas=${state.filtroFixas}&filtroImpostos=${state.filtroImpostos}` +
+            `&filtroDespesas=${state.filtroDespesas}`,
+        ),
+        apiFetch('/cadastros/formas-pagamento'),
+        apiFetch('/cadastros/bancos'),
+      ]);
+      state.painel = painel;
+      state.formasPagamento = formasPainel;
+      state.bancos = bancosPainel;
     } else if (state.tab === 'conciliacao') {
       state.conciliacao = await apiFetch('/conciliacao');
     } else if (state.tab === 'acumulado') {
@@ -315,28 +325,7 @@ function linhaPagamentoHTML(conta, p) {
         <form data-action="form-editar-pagamento" data-conta="${conta.id}" data-id="${p.id}" class="form-inline">
           <label>Valor pago <input type="number" step="0.01" min="0.01" name="valor" required value="${p.valor}" /></label>
           <label>Data <input type="date" name="data_pagamento" required value="${String(p.data_pagamento).slice(0, 10)}" /></label>
-          <label>Forma de pagamento
-            <select name="forma_pagamento" required>
-              <option value="">— escolha —</option>
-              ${state.formasPagamento
-                .map(
-                  (f) =>
-                    `<option value="${escapar(f.nome)}" ${f.nome === p.forma_pagamento ? 'selected' : ''}>${escapar(f.nome)}</option>`
-                )
-                .join('')}
-            </select>
-          </label>
-          <label>Banco
-            <select name="banco_id">
-              <option value="">— sem banco —</option>
-              ${state.bancos
-                .map(
-                  (b) =>
-                    `<option value="${b.id}" ${String(b.id) === String(p.banco_id) ? 'selected' : ''}>${escapar(b.nome)}</option>`
-                )
-                .join('')}
-            </select>
-          </label>
+          ${camposFormaEBancoHTML({ forma: p.forma_pagamento, banco: p.banco_id })}
           <button type="submit">Salvar pagamento</button>
           <button type="button" data-action="cancelar-editar-pagamento" class="secundario">Cancelar</button>
         </form>
@@ -394,8 +383,9 @@ const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho',
 // Uma linha do painel: descrição em destaque e, embaixo, o contexto que ajuda a
 // decidir (de onde vem, quando vence, parcela, quanto já foi pago).
 function linhaPainelHTML(conta) {
+  // O rótulo do tipo não entra: o título do bloco já diz de que lista é aquilo,
+  // e em coluna estreita cada palavra a mais come o nome da conta.
   const contexto = [
-    rotuloTipo(conta.tipo),
     dateBR(conta.vencimento),
     conta.total_parcelas > 1 ? `parc. ${conta.parcela}/${conta.total_parcelas}` : null,
     Number(conta.total_pago) > 0 ? `pago ${brl(conta.total_pago)} de ${brl(conta.valor)}` : null,
@@ -410,14 +400,17 @@ function linhaPainelHTML(conta) {
 
   const baixaAberta = state.baixaAbertaId === conta.id;
 
+  // Tudo numa linha só: descrição e contexto correm juntos e cortam com "…" se
+  // não couberem, para o valor e o botão nunca descerem para outra linha. A
+  // situação vira a cor da barra à esquerda em vez de uma etiqueta escrita —
+  // numa coluna estreita, a etiqueta comia o nome da conta.
   return `
-    <div class="linha-painel">
+    <div class="linha-painel situacao-${classeSituacao}" title="${situacao} · ${escapar(conta.descricao)}">
       <div class="linha-painel-info">
-        <strong>${conta.descricao}</strong>
-        <small>${contexto.join(' · ')}</small>
+        <strong>${escapar(conta.descricao)}</strong>
+        <small>${escapar(contexto.join(' · '))}</small>
       </div>
       <div class="linha-painel-acao">
-        <span class="badge ${classeSituacao}">${situacao}</span>
         <span class="linha-painel-valor">${brl(conta.saldo)}</span>
         ${
           podeGerenciar()
@@ -431,7 +424,7 @@ function linhaPainelHTML(conta) {
         ? `<form data-action="form-baixa" data-id="${conta.id}" class="form-inline form-baixa-painel">
             <label>Valor <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" /></label>
             <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
-            <label>Forma <input type="text" name="forma_pagamento" placeholder="pix, dinheiro..." /></label>
+            ${camposFormaEBancoHTML()}
             <button type="submit">Confirmar pagamento</button>
           </form>`
         : ''
@@ -439,21 +432,44 @@ function linhaPainelHTML(conta) {
   `;
 }
 
+// Forma e banco saem dos Cadastros e são iguais em toda baixa — no painel e na
+// tela de contas. A forma é guardada pelo nome (é assim que o histórico
+// importado já está), o banco por id, que é chave estrangeira. Nada vem
+// escolhido de antemão: forma de pagamento errada por descuido é registro errado.
+function camposFormaEBancoHTML(selecionados = {}) {
+  return `
+    <label>Forma de pagamento
+      <select name="forma_pagamento" required ${state.formasPagamento.length ? '' : 'disabled'}>
+        ${
+          state.formasPagamento.length
+            ? `<option value="">— escolha —</option>${state.formasPagamento
+                .map(
+                  (f) =>
+                    `<option value="${escapar(f.nome)}" ${f.nome === selecionados.forma ? 'selected' : ''}>${escapar(f.nome)}</option>`
+                )
+                .join('')}`
+            : '<option value="">— cadastre em Cadastros › Formas de pagamento —</option>'
+        }
+      </select>
+    </label>
+    <label>Banco
+      <select name="banco_id">
+        <option value="">— sem banco —</option>
+        ${state.bancos
+          .map(
+            (b) =>
+              `<option value="${b.id}" ${String(b.id) === String(selecionados.banco) ? 'selected' : ''}>${escapar(b.nome)}</option>`
+          )
+          .join('')}
+      </select>
+    </label>
+  `;
+}
+
 // Formulário da baixa. O valor vem preenchido com o saldo mas é editável — é
 // nele que se registra o que foi pago de verdade, inclusive pagamento parcial.
 // Forma e banco saem dos Cadastros, não de texto livre.
 function formBaixaHTML(conta) {
-  // A forma é guardada pelo nome (é assim que o histórico importado já está),
-  // o banco por id, que é chave estrangeira. Nenhum dos dois vem escolhido de
-  // antemão: forma de pagamento errada por descuido do padrão é registro errado.
-  const formaPadrao = state.formasPagamento.find((f) => f.padrao);
-  const opcoesForma = state.formasPagamento
-    .map(
-      (f) =>
-        `<option value="${escapar(f.nome)}" ${formaPadrao && formaPadrao.id === f.id ? 'selected' : ''}>${escapar(f.nome)}</option>`
-    )
-    .join('');
-
   return `
     <div class="nova-baixa">
       <form data-action="form-baixa" data-id="${conta.id}" class="form-inline">
@@ -461,21 +477,7 @@ function formBaixaHTML(conta) {
           <input type="number" step="0.01" min="0.01" name="valor" required value="${conta.saldo > 0 ? conta.saldo : ''}" />
         </label>
         <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
-        <label>Forma de pagamento
-          <select name="forma_pagamento" required ${state.formasPagamento.length ? '' : 'disabled'}>
-            ${
-              state.formasPagamento.length
-                ? `<option value="" ${formaPadrao ? '' : 'selected'}>— escolha —</option>${opcoesForma}`
-                : '<option value="">— cadastre em Cadastros › Formas de pagamento —</option>'
-            }
-          </select>
-        </label>
-        <label>Banco
-          <select name="banco_id">
-            <option value="">— sem banco —</option>
-            ${state.bancos.map((b) => `<option value="${b.id}">${escapar(b.nome)}</option>`).join('')}
-          </select>
-        </label>
+        ${camposFormaEBancoHTML()}
         <button type="submit">Confirmar pagamento</button>
       </form>
       <p class="vazio">Saldo em aberto: <strong>${brl(conta.saldo)}</strong>${
@@ -582,6 +584,16 @@ function painelHTML() {
         vazio: 'Nenhum imposto neste recorte.',
         extra: seletorHTML('filtro-impostos', OPCOES_FIXOS, p.filtro_impostos),
         rodape: restante(p.impostos, 'Os que vencem depois aparecem mudando o seletor acima.'),
+      })}
+
+      ${blocoPainelHTML({
+        titulo: 'Outras despesas',
+        icone: '🧰',
+        bloco: p.despesas,
+        classe: 'despesas',
+        vazio: 'Nenhuma outra despesa neste recorte.',
+        extra: seletorHTML('filtro-despesas', OPCOES_FIXOS, p.filtro_despesas),
+        rodape: restante(p.despesas, 'As que vencem depois aparecem mudando o seletor acima.'),
       })}
     </div>
 
@@ -1602,6 +1614,7 @@ function bind() {
     'filtro-boletos': 'filtroBoletos',
     'filtro-fixas': 'filtroFixas',
     'filtro-impostos': 'filtroImpostos',
+    'filtro-despesas': 'filtroDespesas',
   };
   for (const [id, chave] of Object.entries(SELETORES_PAINEL)) {
     const seletor = root.querySelector(`#${id}`);

@@ -8,7 +8,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - 3 perfis: `master`, `gerente`, `loja`.
 - **Aviso de lançamento repetido**: cadastrar (ou editar para) fornecedor, descrição, vencimento e valor iguais aos de outra conta responde `409` com a conta que já existe. Repetir só o fornecedor e a descrição é normal e passa direto; parcelas diferem no vencimento e dois boletos do mesmo dia diferem no valor. Para casos legítimos, o mesmo POST/PUT com `permitir_duplicado: true` grava assim mesmo.
 - **Contas a pagar nas quatro telas** — Fornecedores, Despesas fixas, Impostos e Outras despesas — com pagamentos parciais (baixas) em tabela filha.
-- Painel do dia (despesas fixas e impostos vencidos ou de hoje, mais os boletos do recorte escolhido), só para Master e Gerente.
+- Painel do dia (despesas fixas, impostos e outras despesas vencidos ou de hoje, mais os boletos de fornecedor do recorte escolhido), só para Master e Gerente.
 - **Conciliação** das maquininhas (Cielo, Stone, Itaú, Tickets) e do dinheiro por PDV.
 - **Acumulado** (conferência de caixa), só para Master e Gerente.
 - **Venda a prazo** com saldo devedor por cliente e extrato individual.
@@ -104,7 +104,7 @@ Detalhes de como o backup é interpretado:
 - `DELETE /api/contas/:id/pagamentos/:pagamentoId` — estorna a baixa; a conta volta a ficar pendente pelo valor
 - `GET /api/painel-do-dia` — fixas, impostos e boletos com totais (Master/Gerente).
   - `?filtro=` recorta os boletos de fornecedor: `hoje` (padrão), `ontem`, `atrasados`, `semana`.
-  - `?filtroFixas=` e `?filtroImpostos=` recortam os blocos fixos: `ate_hoje` (padrão — vencidas mais as de hoje), `atrasados`, `hoje`, `semana`, `todos`.
+  - `?filtroFixas=`, `?filtroImpostos=` e `?filtroDespesas=` recortam os três blocos fixos: `ate_hoje` (padrão — vencidas mais as de hoje), `atrasados`, `hoje`, `semana`, `todos`.
   - Valor desconhecido cai no padrão; nada do parâmetro entra no SQL.
 - `GET /api/conciliacao` — resumo por adquirente e dinheiro por PDV (aceita `?de=&ate=`)
 - `GET /api/conciliacao/transacoes` — listagem paginada (`?adquirente=&de=&ate=&pagina=&limite=`)
