@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.5.0';
+const VERSAO = '1.6.0';
 
 const state = {
   sessao: getSessao(),
@@ -29,6 +29,9 @@ const state = {
   filtroDespesas: 'ate_hoje',
   conciliacao: null,
   acumulados: null,
+  // Resumo de vendas: responde "estou vendendo bem?" e cobra os dias em branco.
+  resumoVendas: null,
+  diaAcumulado: null,
   vendaPrazo: null,
   cadastros: null,
   cadastroTipo: 'clientes',
@@ -145,12 +148,18 @@ async function carregarDados() {
         apiFetch('/cadastros/bancos'),
       ]);
       state.painel = painel;
+      state.resumoVendas = await apiFetch('/acumulados/resumo');
       state.formasPagamento = formasPainel;
       state.bancos = bancosPainel;
     } else if (state.tab === 'conciliacao') {
       state.conciliacao = await apiFetch('/conciliacao');
     } else if (state.tab === 'acumulado') {
-      state.acumulados = await apiFetch('/acumulados');
+      const [acumulados, resumo] = await Promise.all([
+        apiFetch('/acumulados'),
+        apiFetch('/acumulados/resumo'),
+      ]);
+      state.acumulados = acumulados;
+      state.resumoVendas = resumo;
     } else if (state.tab === 'venda-prazo') {
       state.vendaPrazo = await apiFetch('/venda-prazo');
     } else if (state.tab === 'cadastros') {
@@ -574,6 +583,8 @@ function painelHTML() {
     ${cabecalho}
     <p class="usuario-atual">Referência: ${dateBR(p.hoje)}</p>
 
+    ${faixaVendasHTML()}
+
     <div class="colunas-painel">
       ${blocoPainelHTML({
         titulo: 'Despesas fixas',
@@ -801,6 +812,131 @@ function conciliacaoHTML() {
   `;
 }
 
+// ── Resumo de vendas ─────────────────────────────────────────────────────────
+// A pergunta "estou vendendo bem?" só tem resposta se a série estiver completa,
+// então o dia em branco aparece com o mesmo destaque de um número ruim.
+
+function variacaoHTML(pct) {
+  if (pct === null || pct === undefined) return '<small class="variacao neutra">sem base para comparar</small>';
+  const sinal = pct >= 0 ? '+' : '';
+  const classe = pct >= 0 ? 'sobe' : 'desce';
+  return `<small class="variacao ${classe}">${sinal}${pct.toFixed(1).replace('.', ',')}%</small>`;
+}
+
+function cartaoVendaHTML(titulo, valor, comparacao, pct) {
+  return `
+    <div class="cartao-venda">
+      <span class="rotulo">${titulo}</span>
+      <strong>${valor === null ? '—' : brl(valor)}</strong>
+      <span class="comparacao">${comparacao} ${variacaoHTML(pct)}</span>
+    </div>
+  `;
+}
+
+// Faixa do painel: um lembrete que aparece todo dia, no lugar em que o dono já
+// olha. É o que impede a série de virar um buraco de duas semanas.
+function faixaVendasHTML() {
+  const r = state.resumoVendas;
+  if (!r) return '';
+
+  const pendentes = r.faltando.filter((d) => d !== r.hoje);
+
+  if (!r.lancado_hoje) {
+    return `
+      <section class="faixa-vendas pendente">
+        <div>
+          <strong>Venda de hoje ainda não lançada.</strong>
+          <small>
+            ${
+              pendentes.length
+                ? `E faltam <strong>${pendentes.length}</strong> dia(s) das últimas duas semanas.`
+                : 'O resto das duas últimas semanas está em dia.'
+            }
+            ${r.ultimo_lancamento ? `Último lançamento: ${dateBR(r.ultimo_lancamento)}.` : ''}
+          </small>
+        </div>
+        <button data-tab="acumulado">Lançar agora</button>
+      </section>
+    `;
+  }
+
+  return `
+    <section class="faixa-vendas">
+      <div>
+        <strong>Venda de hoje: ${brl(r.total_hoje)}</strong>
+        <small>
+          ${variacaoHTML(r.variacao_semana)} vs. mesmo dia da semana passada &middot;
+          últimos 7 dias ${brl(r.ultimos_7)} ${variacaoHTML(r.variacao_7)}
+          ${pendentes.length ? ` &middot; <strong>${pendentes.length}</strong> dia(s) sem lançar` : ''}
+        </small>
+      </div>
+      <button data-tab="acumulado">Ver acumulado</button>
+    </section>
+  `;
+}
+
+// Gráfico de barras dos 30 dias, em CSS puro: dia sem lançamento fica riscado,
+// para a falha saltar aos olhos em vez de parecer um dia de venda zero.
+function graficoVendasHTML(serie) {
+  const maior = Math.max(...serie.map((d) => Number(d.total)), 1);
+
+  return `
+    <div class="grafico-vendas">
+      ${serie
+        .map((d) => {
+          const altura = Math.max((Number(d.total) / maior) * 100, d.lancado ? 2 : 0);
+          const rotulo = `${dateBR(d.data)}: ${d.lancado ? brl(d.total) : 'sem lançamento'}`;
+          return `<div class="barra-dia ${d.lancado ? '' : 'sem-lancamento'}" title="${rotulo}">
+            <div class="barra" style="height: ${altura}%"></div>
+          </div>`;
+        })
+        .join('')}
+    </div>
+    <div class="grafico-legenda">
+      <span>${dateBR(serie[0].data)}</span>
+      <span>últimos 30 dias &middot; barra vazia = dia sem lançamento</span>
+      <span>${dateBR(serie[serie.length - 1].data)}</span>
+    </div>
+  `;
+}
+
+function resumoVendasHTML() {
+  const r = state.resumoVendas;
+  if (!r) return '';
+
+  const pendentes = r.faltando.filter((d) => d !== r.hoje);
+
+  return `
+    <section class="cartoes-resumo cartoes-venda">
+      ${cartaoVendaHTML('Hoje', r.total_hoje, 'mesmo dia da semana passada', r.variacao_semana)}
+      ${cartaoVendaHTML('Últimos 7 dias', r.ultimos_7, '7 dias anteriores', r.variacao_7)}
+      ${cartaoVendaHTML('Mês até hoje', r.mes_atual, 'mesmo período do mês passado', r.variacao_mes)}
+    </section>
+
+    ${
+      pendentes.length
+        ? `<div class="alerta aviso">
+            <p><strong>${pendentes.length} dia(s) sem lançamento</strong> nas últimas duas semanas.
+            Clique na data para lançar:</p>
+            <div class="acoes-alerta">
+              ${pendentes
+                .map((d) => `<button type="button" data-action="lancar-dia" data-dia="${d}" class="secundario">${dateBR(d)}</button>`)
+                .join('')}
+            </div>
+          </div>`
+        : ''
+    }
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Vendas dos últimos 30 dias</h2>
+        <span class="grupo-total">${brl(r.mes_atual)} <small>no mês</small></span>
+      </div>
+      ${graficoVendasHTML(r.ultimos_30)}
+    </section>
+  `;
+}
+
 function acumuladoHTML() {
   const cabecalho = cabecalhoHTML('Acumulado');
   if (!state.acumulados) {
@@ -811,10 +947,12 @@ function acumuladoHTML() {
   return `
     ${cabecalho}
 
+    ${resumoVendasHTML()}
+
     <section class="cartoes-form">
       <form data-action="novo-acumulado" class="form-inline">
         <h2>Conferência do dia</h2>
-        <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
+        <label>Data <input type="date" name="data" required value="${state.diaAcumulado || todayISO()}" /></label>
         <label>Dinheiro <input type="number" step="0.01" name="dinheiro" /></label>
         <label>Cartão <input type="number" step="0.01" name="cartao" /></label>
         <label>PIX <input type="number" step="0.01" name="pix" /></label>
@@ -1614,6 +1752,15 @@ function bind() {
     form.addEventListener('submit', onFormBaixa);
   });
 
+  root.querySelectorAll('[data-action="lancar-dia"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.diaAcumulado = btn.dataset.dia;
+      render();
+      const campo = root.querySelector('[data-action="novo-acumulado"] input[name=dinheiro]');
+      if (campo) campo.focus();
+    });
+  });
+
   const formAcumulado = root.querySelector('[data-action="novo-acumulado"]');
   if (formAcumulado) formAcumulado.addEventListener('submit', onNovoAcumulado);
 
@@ -1708,6 +1855,9 @@ async function onNovoAcumulado(ev) {
         outras: fd.get('outras') || 0,
       }),
     });
+    // Volta para hoje: o dia atrasado que acabou de ser lançado sai da lista de
+    // pendentes e deixar a data velha no formulário só causaria lançamento errado.
+    state.diaAcumulado = null;
     carregarDados();
   } catch (err) {
     state.erro = err.message;
