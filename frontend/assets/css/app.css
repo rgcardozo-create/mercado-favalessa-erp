@@ -144,11 +144,12 @@ input[type="file"] { padding: 6px; font-size: 13px; }
   background: var(--card);
   border: 1px solid var(--borda);
   border-radius: 12px;
-  padding: 16px;
-  margin-bottom: 16px;
+  padding: 13px;
+  margin-bottom: 14px;
 }
 .bloco-painel.fixas { border-top: 3px solid var(--azul); }
 .bloco-painel.impostos { border-top: 3px solid var(--amarelo); }
+.bloco-painel.despesas { border-top: 3px solid var(--verde); }
 .bloco-painel.boletos { border-top: 3px solid var(--azul-claro); }
 
 .bloco-cabecalho { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -159,30 +160,61 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .linha-painel {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 11px 12px;
+  gap: 10px;
+  padding: 7px 10px;
   border: 1px solid var(--borda);
   border-radius: 8px;
-  margin-bottom: 7px;
+  margin-bottom: 5px;
   background: #fff;
-  flex-wrap: wrap;
 }
 .linha-painel:hover { border-color: var(--azul-claro); }
-/* Sem o basis de 60%, o texto longo espreme a coluna e quebra letra a letra no celular. */
-.linha-painel-info { flex: 1 1 60%; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.linha-painel-info strong { font-size: 14px; color: var(--azul-escuro); }
-.linha-painel-info small { color: var(--texto-suave); font-size: 12px; line-height: 1.4; }
+/* Barra colorida no lugar da etiqueta de situação: mesma informação, sem roubar
+   a largura de que o nome da conta precisa. */
+.linha-painel.situacao-atrasada { border-left: 3px solid var(--vermelho); }
+.linha-painel.situacao-parcial { border-left: 3px solid var(--amarelo); }
+.linha-painel.situacao-aberta { border-left: 3px solid var(--azul-claro); }
+/* Descrição e contexto na mesma linha, cortando com reticências: assim o item
+   ocupa uma linha só, por mais comprido que seja o nome, e cabe mais na tela. */
+.linha-painel-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+/* Quando falta espaço, quem encolhe primeiro é o contexto (data, parcela): o
+   nome da conta é o que identifica a linha e só corta em último caso. */
+.linha-painel-info strong {
+  font-size: 13px;
+  color: var(--azul-escuro);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.linha-painel-info small {
+  color: var(--texto-suave);
+  font-size: 11px;
+  /* Base zero: o contexto só ocupa a sobra depois que o nome coube. */
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* Situação, valor e botão andam juntos: em coluna estreita eles descem como um
    bloco só, em vez de o botão se soltar sozinho embaixo. */
-.linha-painel-acao { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.linha-painel-acao { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: 0 0 auto; }
 .linha-painel-acao .badge { margin-left: 0; }
-.linha-painel-valor { font-weight: bold; color: var(--vermelho); white-space: nowrap; }
-.linha-painel button { padding: 6px 14px; font-size: 13px; white-space: nowrap; }
+.linha-painel-valor { font-weight: bold; color: var(--vermelho); white-space: nowrap; font-size: 13px; }
+.linha-painel .badge { font-size: 10px; padding: 2px 7px; }
+.linha-painel button { padding: 4px 11px; font-size: 12px; white-space: nowrap; }
 
 .form-baixa-painel { margin: 0 0 10px 12px; background: var(--azul-suave); }
 
 /* Fixas e impostos lado a lado: são as duas listas que ficam sempre à vista */
-.colunas-painel { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.colunas-painel { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; }
 .colunas-painel .bloco-painel { margin-bottom: 16px; }
 
 /* Cartões de resumo */
