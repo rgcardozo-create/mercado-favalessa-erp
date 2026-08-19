@@ -109,6 +109,10 @@ button.ativo { background: var(--azul); }
 .badge.role { background: var(--amarelo); color: #4A3B00; text-transform: uppercase; }
 .badge.tipo { background: var(--azul-suave); color: var(--azul); margin-left: 0; }
 .badge.quitado { background: var(--verde-suave); color: #04785C; }
+/* Vencida grita, vence hoje chama atenção, a vencer só informa. */
+.badge.vencida { background: var(--vermelho-suave); color: var(--vermelho); }
+.badge.vence-hoje { background: #FFF3C4; color: var(--vermelho); border: 1px solid var(--amarelo); font-weight: 700; }
+.badge.a-vencer { background: #EAF2FE; color: #2E5AAC; }
 .badge.pendente { background: var(--vermelho-suave); color: var(--vermelho); }
 .badge.atrasada { background: var(--vermelho-suave); color: var(--vermelho); }
 .badge.parcial { background: #F3E8FF; color: #6B21A8; }
