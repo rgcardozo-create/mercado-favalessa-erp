@@ -9,6 +9,10 @@ const TIPOS = [
   { tipo: 'despesa', rotulo: 'Outras despesas' },
 ];
 
+// Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
+// navegador já está com a última atualização ou ainda com uma cópia em cache.
+const VERSAO = '1.1.0';
+
 const state = {
   sessao: getSessao(),
   tab: 'painel',
@@ -227,7 +231,7 @@ function cabecalhoHTML(titulo) {
       <div>
         <div class="marca"><span class="marca-nome">FAVALESSA</span><span class="marca-sub">Mercado</span></div>
         <h1>${titulo}</h1>
-        <p class="usuario-atual">${usuario.nome} <span class="badge role">${usuario.role}</span></p>
+        <p class="usuario-atual">${usuario.nome} <span class="badge role">${usuario.role}</span> <span class="versao">v${VERSAO}</span></p>
       </div>
       <button id="btn-logout">Sair</button>
     </div>
