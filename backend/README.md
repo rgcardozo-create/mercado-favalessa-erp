@@ -92,7 +92,8 @@ Detalhes de como o backup é interpretado:
 - `POST /api/auth/login` — `{ email, senha }` → `{ token, usuario }`
 - `GET /api/auth/me` — dados do usuário autenticado
 - `GET /api/fornecedores` / `POST /api/fornecedores`
-- `GET /api/contas` (aceita `?status=pendente|quitado`, `?tipo=fornecedor|fixa|imposto|despesa`, `?busca=` e `?mes=atual|anterior`)
+- `GET /api/contas` (aceita `?status=vencidas|a_vencer|quitado|pendente`, `?tipo=fornecedor|fixa|imposto|despesa`, `?busca=` e `?mes=atual|anterior`)
+  - `vencidas` (o padrão da tela) traz o que já venceu mais o que vence hoje; `a_vencer`, só o que vence depois de hoje; `pendente` continua valendo como os dois juntos.
   - `busca` procura em fornecedor, descrição e categoria de uma vez, ignorando acento e maiúscula. `%` e `_` digitados valem como texto.
   - `mes` recorta pelo mês: conta quitada entra pela data do pagamento, pendente pelo vencimento. Sem o parâmetro, todo o período.
   - cada conta traz `ultimo_pagamento` (data da última baixa) além de `total_pago`, `saldo` e `quitado`.

@@ -47,15 +47,22 @@ const MESES = {
   anterior: `date_trunc('month', ${MES_REF}) = date_trunc('month', ${HOJE_SP}) - interval '1 month'`,
 };
 
+// Recortes por situação. `vencidas` é o padrão da tela: é o que precisa de ação
+// hoje. `pendente` continua aceito porque é o nome antigo do mesmo recorte sem
+// separar o que já venceu do que ainda vai vencer.
+const STATUS = {
+  pendente: 't.quitado = false',
+  quitado: 't.quitado = true',
+  vencidas: `t.quitado = false AND t.vencimento <= ${HOJE_SP}`,
+  a_vencer: `t.quitado = false AND t.vencimento > ${HOJE_SP}`,
+};
+
 async function listar(req, res) {
-  const { status, tipo, busca, mes } = req.query; // status: pendente|quitado — tipo: fornecedor|fixa|imposto|despesa
+  const { status, tipo, busca, mes } = req.query; // tipo: fornecedor|fixa|imposto|despesa
   const filtros = [];
   const params = [];
 
-  if (status === 'pendente' || status === 'quitado') {
-    params.push(status === 'quitado');
-    filtros.push(`t.quitado = $${params.length}`);
-  }
+  if (STATUS[status]) filtros.push(STATUS[status]);
 
   if (tipo) {
     if (!TIPOS_VALIDOS.includes(tipo)) {
