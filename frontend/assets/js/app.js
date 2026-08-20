@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.9.0';
+const VERSAO = '1.10.0';
 
 const state = {
   sessao: getSessao(),
@@ -32,6 +32,9 @@ const state = {
   // Resumo de vendas: responde "estou vendendo bem?" e cobra os dias em branco.
   resumoVendas: null,
   diaAcumulado: null,
+  // O que a conciliação já tem para o dia escolhido, para sugerir o fechamento.
+  sugestaoDia: null,
+  sugestaoCarregando: false,
   vendaPrazo: null,
   cadastros: null,
   cadastroTipo: 'clientes',
@@ -958,6 +961,85 @@ function resumoVendasHTML() {
   `;
 }
 
+const ROTULO_ADQUIRENTE = { cielo: 'Cielo', stone: 'Stone', itau: 'Rede / Itaú', tickets: 'Tickets / Vouchers' };
+
+// A conciliação sabe o cartão e o ticket do dia; o PDV sabe o dinheiro. Em vez de
+// gravar sozinho, mostra o que existe e diz o que falta — um dia com só um
+// adquirente importado daria um fechamento pela metade com cara de fechado.
+function sugestaoHTML() {
+  const s = state.sugestaoDia;
+  // O título segue o dia consultado, não o do formulário: os dois se separam no
+  // instante em que a pessoa troca a data para conferir outro dia.
+  const dia = (s && s.data) || state.diaAcumulado || todayISO();
+
+  const corpo = () => {
+    if (state.sugestaoCarregando) return '<p class="vazio">Consultando a conciliação…</p>';
+    if (!s) {
+      return `<p class="vazio">Veja o que os extratos já importados trazem para esse dia
+        e use como base do fechamento.</p>`;
+    }
+
+    const semDados = !s.por_adquirente.length && !s.sugestao.dinheiro;
+    const importadoAte = Object.entries(s.importado_ate)
+      .map(([a, ate]) => `${ROTULO_ADQUIRENTE[a] || a} até ${dateBR(ate)}`)
+      .join(' &middot; ');
+
+    const presentes = new Set(s.por_adquirente.map((a) => a.adquirente));
+    const faltando = ['cielo', 'stone', 'itau'].filter((a) => !presentes.has(a));
+
+    return `
+      ${
+        semDados
+          ? `<p class="vazio">Nenhuma transação importada para ${dateBR(s.data)}.
+             ${importadoAte ? `Importado até: ${importadoAte}.` : 'Nenhum extrato importado ainda.'}
+             Extrato de adquirente costuma sair só no dia seguinte.</p>`
+          : `<table class="tabela-contas tabela-pagamentos">
+              <thead><tr><th>Origem</th><th>Transações</th><th>Bruto</th></tr></thead>
+              <tbody>
+                ${s.por_adquirente
+                  .map(
+                    (a) => `<tr>
+                      <td>${ROTULO_ADQUIRENTE[a.adquirente] || a.adquirente}</td>
+                      <td>${a.transacoes}</td>
+                      <td>${brl(a.bruto)}</td>
+                    </tr>`
+                  )
+                  .join('')}
+                ${
+                  s.sugestao.dinheiro
+                    ? `<tr><td>Dinheiro (PDV)</td><td>${s.dinheiro_lancamentos}</td><td>${brl(s.sugestao.dinheiro)}</td></tr>`
+                    : ''
+                }
+              </tbody>
+            </table>
+            ${
+              faltando.length
+                ? `<p class="vazio"><strong>Atenção:</strong>
+                   ${faltando.map((a) => ROTULO_ADQUIRENTE[a]).join(' e ')}
+                   sem transação nesse dia — se o extrato ainda não foi importado, o total fica incompleto.
+                   ${importadoAte ? `Importado até: ${importadoAte}.` : ''}</p>`
+                : ''
+            }
+            <div class="acoes-alerta">
+              <button type="button" data-action="usar-sugestao">Usar no formulário</button>
+            </div>`
+      }
+    `;
+  };
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Conciliação do dia ${dateBR(dia)}</h2>
+        <button type="button" data-action="consultar-sugestao" class="secundario">
+          ${s ? 'Atualizar' : 'Consultar extratos'}
+        </button>
+      </div>
+      ${corpo()}
+    </section>
+  `;
+}
+
 function acumuladoHTML() {
   const cabecalho = cabecalhoHTML('Acumulado');
   if (!state.acumulados) {
@@ -969,6 +1051,8 @@ function acumuladoHTML() {
     ${cabecalho}
 
     ${resumoVendasHTML()}
+
+    ${sugestaoHTML()}
 
     <section class="cartoes-form">
       <form data-action="novo-acumulado" class="form-inline">
@@ -1839,9 +1923,28 @@ function bind() {
     form.addEventListener('submit', onFormBaixa);
   });
 
+  const btnConsultar = root.querySelector('[data-action="consultar-sugestao"]');
+  if (btnConsultar) btnConsultar.addEventListener('click', onConsultarSugestao);
+
+  const btnUsar = root.querySelector('[data-action="usar-sugestao"]');
+  if (btnUsar) {
+    btnUsar.addEventListener('click', () => {
+      const form = root.querySelector('[data-action="novo-acumulado"]');
+      if (!form || !state.sugestaoDia) return;
+      const { cartao, tickets, dinheiro } = state.sugestaoDia.sugestao;
+      // Só preenche: quem confere e salva é a pessoa, que sabe o que ainda falta.
+      form.querySelector('input[name=cartao]').value = cartao ? cartao.toFixed(2) : '';
+      form.querySelector('input[name=tickets]').value = tickets ? tickets.toFixed(2) : '';
+      form.querySelector('input[name=dinheiro]').value = dinheiro ? dinheiro.toFixed(2) : '';
+      form.querySelector('input[name=data]').value = state.sugestaoDia.data;
+      form.querySelector('input[name=pix]').focus();
+    });
+  }
+
   root.querySelectorAll('[data-action="lancar-dia"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.diaAcumulado = btn.dataset.dia;
+      state.sugestaoDia = null;
       render();
       const campo = root.querySelector('[data-action="novo-acumulado"] input[name=dinheiro]');
       if (campo) campo.focus();
@@ -1927,6 +2030,25 @@ function bind() {
   });
 }
 
+async function onConsultarSugestao() {
+  // A data consultada é a do próprio formulário: é ela que a pessoa está fechando.
+  const campo = root.querySelector('[data-action="novo-acumulado"] input[name=data]');
+  const dia = (campo && campo.value) || state.diaAcumulado || todayISO();
+
+  state.sugestaoCarregando = true;
+  state.erro = null;
+  render();
+  try {
+    state.sugestaoDia = await apiFetch(`/acumulados/sugestao?data=${dia}`);
+  } catch (err) {
+    state.erro = err.message;
+    state.sugestaoDia = null;
+  } finally {
+    state.sugestaoCarregando = false;
+    render();
+  }
+}
+
 async function onNovoAcumulado(ev) {
   ev.preventDefault();
   const fd = new FormData(ev.target);
@@ -1947,6 +2069,7 @@ async function onNovoAcumulado(ev) {
     // Volta para hoje: o dia atrasado que acabou de ser lançado sai da lista de
     // pendentes e deixar a data velha no formulário só causaria lançamento errado.
     state.diaAcumulado = null;
+    state.sugestaoDia = null;
     carregarDados();
   } catch (err) {
     state.erro = err.message;
