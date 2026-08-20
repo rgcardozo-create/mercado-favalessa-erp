@@ -112,6 +112,57 @@ async function resumoVendas(req, res) {
   });
 }
 
+// O que a conciliação já sabe sobre um dia. Serve de sugestão para o fechamento:
+// o extrato do adquirente conhece o cartão e o ticket, o PDV conhece o dinheiro.
+//
+// Sugestão, não gravação automática: o dia só está completo quando os três
+// adquirentes foram importados, e quase nunca estão no mesmo momento. Preencher
+// sozinho geraria um acumulado com metade da venda e cara de número fechado.
+async function sugestaoDoDia(req, res) {
+  const data = /^\d{4}-\d{2}-\d{2}$/.test(req.query.data || '') ? req.query.data : null;
+  if (!data) return res.status(400).json({ error: 'Informe a data no formato AAAA-MM-DD.' });
+
+  const { rows: porAdquirente } = await pool.query(
+    `SELECT adquirente::text AS adquirente,
+            count(*)::int AS transacoes,
+            COALESCE(sum(valor_bruto), 0) AS bruto,
+            COALESCE(sum(valor_liquido), 0) AS liquido
+       FROM conciliacao_transacoes
+      WHERE data = $1
+      GROUP BY adquirente
+      ORDER BY adquirente`,
+    [data]
+  );
+
+  const { rows: dinheiro } = await pool.query(
+    `SELECT COALESCE(sum(valor), 0) AS total, count(*)::int AS lancamentos
+       FROM conciliacao_dinheiro WHERE data = $1`,
+    [data]
+  );
+
+  // Até que dia cada adquirente foi importado. É isso que explica um dia vazio:
+  // quase sempre o arquivo daquele adquirente ainda não entrou.
+  const { rows: ultimos } = await pool.query(
+    `SELECT adquirente::text AS adquirente, to_char(max(data), 'YYYY-MM-DD') AS ate
+       FROM conciliacao_transacoes GROUP BY adquirente ORDER BY adquirente`
+  );
+
+  const soma = (filtro) =>
+    porAdquirente.filter(filtro).reduce((acc, a) => acc + Number(a.bruto), 0);
+
+  return res.json({
+    data,
+    por_adquirente: porAdquirente.map((a) => ({ ...a, bruto: Number(a.bruto), liquido: Number(a.liquido) })),
+    importado_ate: ultimos.reduce((acc, u) => ({ ...acc, [u.adquirente]: u.ate }), {}),
+    sugestao: {
+      cartao: soma((a) => a.adquirente !== 'tickets'),
+      tickets: soma((a) => a.adquirente === 'tickets'),
+      dinheiro: Number(dinheiro[0].total),
+    },
+    dinheiro_lancamentos: dinheiro[0].lancamentos,
+  });
+}
+
 async function criar(req, res) {
   const { data, observacoes } = req.body;
   if (!data) {
@@ -165,4 +216,4 @@ async function deletar(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { listar, criar, deletar, resumoVendas };
+module.exports = { listar, criar, deletar, resumoVendas, sugestaoDoDia };
