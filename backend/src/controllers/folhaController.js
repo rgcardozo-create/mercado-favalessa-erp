@@ -65,6 +65,34 @@ async function pendencias(req, res) {
   return res.json({ pendentes: rows[0].pendentes, desde: rows[0].desde });
 }
 
+// Funcionário que compra fiado é cliente do caderno como qualquer outro — o que
+// liga as duas pontas é o código, digitado igual nos dois cadastros. Foi a
+// escolha do dono: menos informação para preencher na hora da venda.
+const SALDO_FIADO_DO_FUNCIONARIO = `
+  SELECT c.id AS cliente_id, c.codigo, c.nome,
+         COALESCE(sum(m.valor) FILTER (WHERE m.tipo = 'compra'), 0)
+           - COALESCE(sum(m.valor) FILTER (WHERE m.tipo = 'pagamento'), 0) AS saldo
+    FROM funcionarios f
+    JOIN clientes c ON lower(btrim(c.codigo)) = lower(btrim(f.codigo))
+    LEFT JOIN mov_prazo m ON m.cliente_id = c.id
+   WHERE f.id = $1 AND f.codigo IS NOT NULL AND btrim(f.codigo) <> ''
+   GROUP BY c.id
+`;
+
+// O que esse funcionário deve no caderno, para virar o campo "compras" da folha.
+async function comprasDoFuncionario(req, res) {
+  const { rows } = await pool.query(SALDO_FIADO_DO_FUNCIONARIO, [req.params.id]);
+  if (!rows[0]) return res.json({ vinculado: false, saldo: 0 });
+
+  return res.json({
+    vinculado: true,
+    cliente_id: rows[0].cliente_id,
+    codigo: rows[0].codigo,
+    nome: rows[0].nome,
+    saldo: Number(rows[0].saldo),
+  });
+}
+
 async function listar(req, res) {
   const { de, ate } = req.query;
   const params = [];
@@ -115,9 +143,13 @@ async function criar(req, res) {
   const adiantamento = Number(req.body.adiantamento || 0);
   const abaterExtras = req.body.abater_extras !== false && funcionario_id && adiantamento > 0;
 
+  const compras = Number(req.body.compras || 0);
+  const liquidarFiado = req.body.liquidar_prazo !== false && funcionario_id && compras > 0;
+
   const cliente = await pool.connect();
   let criado;
   let extrasBaixados = 0;
+  let fiadoLiquidado = 0;
   try {
     await cliente.query('BEGIN');
 
@@ -164,6 +196,26 @@ async function criar(req, res) {
       }
     }
 
+    // A compra descontada aqui é paga aqui: sem isso a dívida continuaria de pé
+    // no caderno depois de já ter saído do salário.
+    if (liquidarFiado) {
+      const { rows: vinculo } = await cliente.query(SALDO_FIADO_DO_FUNCIONARIO, [funcionario_id]);
+      if (vinculo[0]) {
+        await cliente.query(
+          `INSERT INTO mov_prazo (cliente_id, tipo, valor, data, observacoes, criado_por)
+           VALUES ($1, 'pagamento', $2, $3, $4, $5)`,
+          [
+            vinculo[0].cliente_id,
+            compras,
+            data_ref || new Date().toISOString().slice(0, 10),
+            `Descontado na folha #${criado.id}`,
+            req.user.id,
+          ]
+        );
+        fiadoLiquidado = compras;
+      }
+    }
+
     await cliente.query('COMMIT');
   } catch (err) {
     await cliente.query('ROLLBACK');
@@ -180,7 +232,7 @@ async function criar(req, res) {
     dados: criado,
   });
 
-  return res.status(201).json({ ...criado, extras_baixados: extrasBaixados });
+  return res.status(201).json({ ...criado, extras_baixados: extrasBaixados, fiado_liquidado: fiadoLiquidado });
 }
 
 async function registrarPagamento(req, res) {
@@ -231,4 +283,13 @@ async function deletar(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { desbloquear, pendencias, listar, criar, registrarPagamento, deletar, SELECT_FOLHA };
+module.exports = {
+  desbloquear,
+  pendencias,
+  comprasDoFuncionario,
+  listar,
+  criar,
+  registrarPagamento,
+  deletar,
+  SELECT_FOLHA,
+};

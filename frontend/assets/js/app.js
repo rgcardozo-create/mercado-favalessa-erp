@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.11.0';
+const VERSAO = '1.12.0';
 
 const state = {
   sessao: getSessao(),
@@ -2077,21 +2077,9 @@ function bind() {
     formFolha.addEventListener('submit', onNovoLancamentoFolha);
     // Escolher o funcionário já traz o que ele tem de vale em aberto: é esse
     // valor que a folha do mês desconta.
-    formFolha.querySelector('select[name=funcionario_id]').addEventListener('change', (ev) => {
-      const id = ev.target.value;
-      const abertos = ((state.extras && state.extras.extras) || []).filter(
-        (e) => String(e.funcionario_id) === String(id) && Number(e.saldo) > 0
-      );
-      const total = abertos.reduce((acc, e) => acc + Number(e.saldo), 0);
-      formFolha.querySelector('input[name=adiantamento]').value = total ? total.toFixed(2) : '';
-      const aviso = formFolha.querySelector('#aviso-adiantamento');
-      if (aviso) {
-        aviso.innerHTML = total
-          ? `Este funcionário tem <strong>${brl(total)}</strong> em ${abertos.length} vale(s) em aberto.
-             Lançar a folha com esse adiantamento dá baixa neles.`
-          : 'Nenhum vale em aberto para este funcionário.';
-      }
-    });
+    formFolha.querySelector('select[name=funcionario_id]').addEventListener('change', (ev) =>
+      onEscolherFuncionarioFolha(ev.target.value, formFolha)
+    );
   }
 
   const formExtra = root.querySelector('[data-action="novo-extra"]');
@@ -2258,6 +2246,48 @@ async function onExcluirCadastro(id) {
     state.erro = err.message;
     render();
   }
+}
+
+// Escolher o funcionário traz o que ele já tem pendente: o vale em aberto vira o
+// adiantamento, e o que ele deve no caderno de fiado vira as compras. Os dois
+// campos continuam editáveis — o dono é quem decide quanto descontar no mês.
+async function onEscolherFuncionarioFolha(id, form) {
+  const aviso = form.querySelector('#aviso-adiantamento');
+
+  const abertos = ((state.extras && state.extras.extras) || []).filter(
+    (e) => String(e.funcionario_id) === String(id) && Number(e.saldo) > 0
+  );
+  const vales = abertos.reduce((acc, e) => acc + Number(e.saldo), 0);
+  form.querySelector('input[name=adiantamento]').value = vales ? vales.toFixed(2) : '';
+
+  let fiado = null;
+  if (id) {
+    try {
+      fiado = await apiFetch(`/folha/compras-prazo/${id}`);
+    } catch {
+      fiado = null;
+    }
+  }
+  const compras = fiado && fiado.vinculado && fiado.saldo > 0 ? fiado.saldo : 0;
+  form.querySelector('input[name=compras]').value = compras ? compras.toFixed(2) : '';
+
+  if (!aviso) return;
+  const partes = [];
+  if (vales) {
+    partes.push(
+      `<strong>${brl(vales)}</strong> em ${abertos.length} vale(s) em aberto — lançar a folha dá baixa neles`
+    );
+  }
+  if (compras) {
+    partes.push(
+      `<strong>${brl(compras)}</strong> de compras no caderno (código ${escapar(fiado.codigo)}) — lançar a folha quita essa dívida`
+    );
+  }
+  aviso.innerHTML = partes.length
+    ? partes.join('. ') + '.'
+    : id
+      ? 'Nada pendente para este funcionário: sem vale em aberto e sem compra no caderno.'
+      : 'Ao escolher o funcionário, adiantamento e compras vêm preenchidos com o que ele tem em aberto.';
 }
 
 async function onNovoLancamentoFolha(ev) {
