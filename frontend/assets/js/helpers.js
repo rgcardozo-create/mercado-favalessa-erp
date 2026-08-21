@@ -27,3 +27,18 @@ export function escapar(texto) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]
   );
 }
+
+// Valor curto para rótulo de gráfico: "3,5 mil" ocupa menos que "R$ 3.512,40" e
+// é o suficiente para comparar barras de olho.
+export function brlCurto(valor) {
+  const n = Number(valor) || 0;
+  if (n >= 1000) return `${(n / 1000).toFixed(1).replace('.', ',')} mil`;
+  return n.toFixed(0);
+}
+
+// "2026-08" -> "ago/26". Mês por extenso curto cabe embaixo da barra.
+export function mesCurto(iso) {
+  const [ano, mes] = String(iso).split('-');
+  const nomes = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  return `${nomes[Number(mes) - 1]}/${ano.slice(2)}`;
+}

@@ -77,6 +77,24 @@ async function resumoVendas(req, res) {
          FROM generate_series((SELECT d FROM hoje) - 29, (SELECT d FROM hoje), interval '1 day') g(dia)
          LEFT JOIN base b ON b.data = g.dia::date) AS ultimos_30,
 
+      -- Fechamento mês a mês, para a comparação que não cabe na série diária.
+      -- dias_lancados vai junto porque mês pela metade não se compara com mês
+      -- inteiro, e sem esse número o gráfico mentiria em silêncio.
+      (SELECT COALESCE(json_agg(json_build_object(
+                'mes', to_char(g.mes, 'YYYY-MM'),
+                'total', COALESCE(m.total, 0),
+                'dias_lancados', COALESCE(m.dias, 0),
+                'dias_no_mes', EXTRACT(DAY FROM (g.mes + interval '1 month' - interval '1 day'))::int
+              ) ORDER BY g.mes), '[]'::json)
+         FROM generate_series(
+                date_trunc('month', (SELECT d FROM hoje)) - interval '5 month',
+                date_trunc('month', (SELECT d FROM hoje)),
+                interval '1 month') g(mes)
+         LEFT JOIN (
+           SELECT date_trunc('month', data) AS mes, sum(total) AS total, count(*)::int AS dias
+             FROM base GROUP BY 1
+         ) m ON m.mes = g.mes) AS por_mes,
+
       -- Dias sem lançamento nas duas últimas semanas: é o que o sistema cobra.
       (SELECT COALESCE(json_agg(to_char(g.dia, 'YYYY-MM-DD') ORDER BY g.dia), '[]'::json)
          FROM generate_series((SELECT d FROM hoje) - 14, (SELECT d FROM hoje), interval '1 day') g(dia)
@@ -108,6 +126,7 @@ async function resumoVendas(req, res) {
     variacao_mes: variacao(r.mes_atual, r.mes_anterior),
     ultimo_lancamento: r.ultimo_lancamento,
     ultimos_30: r.ultimos_30,
+    por_mes: r.por_mes,
     faltando: r.faltando,
   });
 }

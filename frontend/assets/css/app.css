@@ -256,24 +256,51 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .variacao.desce { color: var(--vermelho); }
 .variacao.neutra { color: var(--texto-suave); font-weight: 400; }
 
-/* Gráfico de 30 dias em CSS: sem biblioteca, sem requisição extra. */
-.grafico-vendas {
+/* Gráfico de colunas em CSS: sem biblioteca, sem requisição extra. O valor fica
+   escrito em cima da barra — gráfico que só conta o valor no hover não serve
+   para bater o olho, que é justamente para o que ele existe. */
+.grafico-colunas {
   display: flex;
-  align-items: flex-end;
-  gap: 3px;
-  height: 120px;
-  padding: 8px;
+  align-items: stretch;
+  gap: 4px;
+  height: 170px;
+  padding: 10px 8px 6px;
   background: var(--card);
   border: 1px solid var(--borda);
   border-radius: 10px;
 }
-.barra-dia { flex: 1 1 0; height: 100%; display: flex; align-items: flex-end; }
-.barra-dia .barra { width: 100%; background: var(--azul); border-radius: 3px 3px 0 0; }
-.barra-dia.sem-lancamento {
-  background: repeating-linear-gradient(45deg, #F4F6FB, #F4F6FB 3px, #FDECEA 3px, #FDECEA 6px);
-  border-radius: 3px;
+.grafico-colunas .coluna { flex: 1 1 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.grafico-colunas .barra-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 3px;
 }
-.grafico-legenda { display: flex; justify-content: space-between; gap: 8px; color: var(--texto-suave); font-size: 11px; margin-top: 6px; }
+.grafico-colunas .valor {
+  font-size: 10px;
+  color: var(--texto-suave);
+  white-space: nowrap;
+  font-weight: 600;
+}
+.grafico-colunas .barra { width: 100%; background: var(--azul); border-radius: 4px 4px 0 0; min-height: 2px; }
+.grafico-colunas .coluna.vazia .barra {
+  background: repeating-linear-gradient(45deg, #F4F6FB, #F4F6FB 3px, #FDECEA 3px, #FDECEA 6px);
+  /* Faixa baixa, não coluna cheia: dia sem lançamento não pode parecer venda alta. */
+  height: 12% !important;
+  border-radius: 4px;
+  opacity: .8;
+}
+.grafico-colunas .coluna.vazia .valor { color: var(--vermelho); }
+.grafico-colunas .rotulo {
+  text-align: center;
+  font-size: 10px;
+  color: var(--texto-suave);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.grafico-legenda-simples { color: var(--texto-suave); font-size: 11px; margin: 6px 0 0; }
 
 /* Cartões de resumo */
 .cartoes-resumo { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
@@ -414,4 +441,7 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
   .bloco-cabecalho select { margin-left: 0; width: 100%; }
   .resumo-lista { margin-left: 0; width: 100%; }
   .busca { max-width: 100%; flex-basis: 100%; }
+  /* No celular não cabe rótulo em 14 colunas: fica só o dia embaixo. */
+  .grafico-colunas { height: 140px; gap: 2px; }
+  .grafico-colunas .valor { display: none; }
 }
