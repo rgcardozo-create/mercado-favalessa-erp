@@ -1,5 +1,22 @@
 const pool = require('../db/pool');
-const { ROTULOS_TIPO, TIPOS_VALIDOS } = require('../db/contasQuery');
+const { ROTULOS_TIPO, TIPOS_VALIDOS, SEM_ACENTO } = require('../db/contasQuery');
+
+// Cada adquirente escreve a forma do seu jeito ("Débito à vista", "Debito",
+// "débito"), então o agrupamento é por palavra encontrada, sem acento e em
+// minúsculas. Parcelado vem antes de crédito de propósito: "Crédito parcelado
+// loja" tem as duas palavras e é o parcelado que interessa separar, porque é
+// onde a taxa dói.
+const GRUPO_FORMA = `
+  CASE
+    WHEN ${SEM_ACENTO('t.forma')} LIKE '%parcel%' THEN 'Crédito parcelado'
+    WHEN t.categoria = 'ticket' OR ${SEM_ACENTO('t.forma')} LIKE '%voucher%'
+      OR ${SEM_ACENTO('t.forma')} LIKE '%benefic%' THEN 'Voucher / ticket'
+    WHEN ${SEM_ACENTO('t.forma')} LIKE '%debito%' THEN 'Débito'
+    WHEN ${SEM_ACENTO('t.forma')} LIKE '%credito%' THEN 'Crédito'
+    WHEN ${SEM_ACENTO('t.forma')} LIKE '%pix%' THEN 'PIX'
+    ELSE 'Outros'
+  END
+`;
 
 // Relatório consolidado por período. Três regras do SPEC.md moldam este arquivo:
 //
@@ -94,10 +111,62 @@ async function consolidado(req, res) {
     [de, ate]
   );
 
+  // Venda do período pelo fechamento diário — é a resposta para "quanto vendi",
+  // e não se confunde com "quanto entrou de cartão", que chega dias depois.
+  const { rows: vendasRows } = await pool.query(
+    `SELECT count(*)::int AS dias,
+            COALESCE(sum(dinheiro), 0) AS dinheiro,
+            COALESCE(sum(cartao), 0) AS cartao,
+            COALESCE(sum(pix), 0) AS pix,
+            COALESCE(sum(tickets), 0) AS tickets,
+            COALESCE(sum(pos_sistema + pos_maquina), 0) AS maquininha,
+            COALESCE(sum(outras), 0) AS outras,
+            COALESCE(sum(dinheiro + cartao + pix + tickets + pos_sistema + pos_maquina + outras), 0) AS total
+       FROM acumulados WHERE data BETWEEN $1 AND $2`,
+    [de, ate]
+  );
+
+  // Taxa por tipo de cartão: é o custo de vender, e ele só aparece se separado.
+  const { rows: taxasRows } = await pool.query(
+    `SELECT ${GRUPO_FORMA} AS grupo,
+            count(*)::int AS transacoes,
+            COALESCE(sum(t.valor_bruto), 0) AS bruto,
+            COALESCE(sum(t.tarifa), 0) AS tarifa,
+            COALESCE(sum(t.valor_liquido), 0) AS liquido
+       FROM conciliacao_transacoes t
+      WHERE t.data BETWEEN $1 AND $2
+      GROUP BY 1
+      ORDER BY tarifa DESC`,
+    [de, ate]
+  );
+
   const totalDespesas = despesasPorTipo.reduce((a, d) => a + d.pago, 0) + folhaTotal;
+  const vendas = {
+    dias: vendasRows[0].dias,
+    total: Number(vendasRows[0].total),
+    por_forma: ['dinheiro', 'cartao', 'pix', 'tickets', 'maquininha', 'outras'].map((k) => ({
+      forma: k,
+      valor: Number(vendasRows[0][k]),
+    })),
+  };
 
   return res.json({
     periodo: { de, ate },
+    vendas,
+    // Vendas menos despesas pagas. É o confronto do período, não lucro
+    // contábil: não entram estoque, depreciação nem imposto ainda não pago.
+    resultado: vendas.total - totalDespesas,
+    taxas: {
+      por_grupo: taxasRows.map((t) => ({
+        grupo: t.grupo,
+        transacoes: t.transacoes,
+        bruto: Number(t.bruto),
+        tarifa: Number(t.tarifa),
+        liquido: Number(t.liquido),
+        percentual: Number(t.bruto) > 0 ? (Number(t.tarifa) / Number(t.bruto)) * 100 : null,
+      })),
+      total: taxasRows.reduce((a, t) => a + Number(t.tarifa), 0),
+    },
     despesas: {
       por_tipo: despesasPorTipo,
       folha,

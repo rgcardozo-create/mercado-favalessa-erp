@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.13.0';
+const VERSAO = '1.14.0';
 
 const state = {
   sessao: getSessao(),
@@ -1495,16 +1495,19 @@ function folhaHTML() {
 }
 
 function relatoriosHTML() {
-  const cabecalho = cabecalhoHTML('Relatórios');
+  const cabecalho = cabecalhoHTML('Resumo do período');
   const p = periodoOuPadrao();
 
   const filtro = `
-    <section class="cartoes-form">
+    <section class="cartoes-form sem-impressao">
       <form data-action="filtro-periodo" class="form-inline">
         <h2>Período</h2>
         <label>De <input type="date" name="de" value="${p.de}" required /></label>
         <label>Até <input type="date" name="ate" value="${p.ate}" required /></label>
         <button type="submit">Gerar</button>
+        <button type="button" data-action="periodo-atalho" data-mes="atual" class="secundario">Mês atual</button>
+        <button type="button" data-action="periodo-atalho" data-mes="anterior" class="secundario">Mês passado</button>
+        ${state.relatorio ? '<button type="button" id="btn-imprimir" class="secundario">Imprimir</button>' : ''}
       </form>
     </section>
   `;
@@ -1513,61 +1516,192 @@ function relatoriosHTML() {
 
   const r = state.relatorio;
   const folha = r.despesas.folha;
+  const positivo = r.resultado >= 0;
+
+  // Barra proporcional ao maior valor da lista: comparação de olho, sem número
+  // decorado. É o mesmo recurso do gráfico do acumulado, em linha de tabela.
+  const barra = (valor, maior) =>
+    `<div class="barra-linha"><span style="width: ${maior > 0 ? Math.max((valor / maior) * 100, 1) : 0}%"></span></div>`;
+
+  const maiorVenda = Math.max(...r.vendas.por_forma.map((f) => f.valor), 1);
+  const ROTULO_FORMA = {
+    dinheiro: 'Dinheiro',
+    cartao: 'Cartão (TEF)',
+    pix: 'PIX',
+    tickets: 'Tickets',
+    maquininha: 'Maquininha fora',
+    outras: 'Outras',
+  };
+
+  const despesasLinhas = [
+    ...r.despesas.por_tipo.map((t) => ({ rotulo: t.rotulo, valor: t.pago, detalhe: `${t.lancamentos} lançamento(s)` })),
+    ...(folha.destravada
+      ? folha.por_funcionario.map((f) => ({ rotulo: `Folha — ${f.nome}`, valor: f.pago, detalhe: '' }))
+      : folha.total
+        ? [{ rotulo: folha.rotulo, valor: folha.total, detalhe: 'nomes só com a folha destravada' }]
+        : []),
+  ].sort((a, b) => b.valor - a.valor);
+  const maiorDespesa = Math.max(...despesasLinhas.map((d) => d.valor), 1);
 
   return `
     ${cabecalho}
     ${filtro}
 
-    <div class="cartoes-resumo">
-      <div class="cartao-resumo vencidas">
-        <span class="rotulo">Despesas pagas</span><strong>${brl(r.despesas.total)}</strong>
-        <small>${dateBR(r.periodo.de)} a ${dateBR(r.periodo.ate)}</small>
+    <p class="periodo-impresso">
+      <strong>Mercado Favalessa</strong> &middot; resumo de ${dateBR(r.periodo.de)} a ${dateBR(r.periodo.ate)}
+    </p>
+
+    <div class="cartoes-resumo cartoes-venda">
+      <div class="cartao-venda">
+        <span class="rotulo">Vendas no período</span>
+        <strong>${brl(r.vendas.total)}</strong>
+        <span class="comparacao">${r.vendas.dias} dia(s) de fechamento lançados</span>
       </div>
-      <div class="cartao-resumo proximos">
-        <span class="rotulo">Cartões (líquido)</span><strong>${brl(r.entradas.cartoes.liquido)}</strong>
-        <small>${r.entradas.cartoes.transacoes} transações</small>
+      <div class="cartao-venda">
+        <span class="rotulo">Despesas pagas</span>
+        <strong>${brl(r.despesas.total)}</strong>
+        <span class="comparacao">o que saiu do caixa no período</span>
       </div>
-      <div class="cartao-resumo hoje">
-        <span class="rotulo">Dinheiro conferido</span><strong>${brl(r.entradas.dinheiro)}</strong>
+      <div class="cartao-venda ${positivo ? 'positivo' : 'negativo'}">
+        <span class="rotulo">Resultado</span>
+        <strong>${brl(r.resultado)}</strong>
+        <span class="comparacao">vendas menos despesas pagas</span>
+      </div>
+      <div class="cartao-venda">
+        <span class="rotulo">Taxa de cartão</span>
+        <strong>${brl(r.taxas.total)}</strong>
+        <span class="comparacao">custo de receber por maquininha</span>
       </div>
     </div>
 
     <section class="grupo-painel">
-      <div class="grupo-cabecalho"><h2>Despesas por tela</h2><span class="grupo-total">${brl(r.despesas.total)}</span></div>
-      <table class="tabela-contas">
-        <thead><tr><th>Tela</th><th>Lançamentos</th><th>Pago</th></tr></thead>
-        <tbody>
-          ${r.despesas.por_tipo
-            .map((t) => `<tr><td>${t.rotulo}</td><td>${t.lancamentos}</td><td>${brl(t.pago)}</td></tr>`)
-            .join('')}
-          ${
-            folha.destravada
-              ? folha.por_funcionario
-                  .map((f) => `<tr><td>Folha — ${f.nome}</td><td>—</td><td>${brl(f.pago)}</td></tr>`)
-                  .join('')
-              : `<tr><td>${folha.rotulo}</td><td>—</td><td>${brl(folha.total)}</td></tr>`
-          }
-        </tbody>
-      </table>
+      <div class="grupo-cabecalho">
+        <h2>De onde veio a venda</h2>
+        <span class="grupo-total">${brl(r.vendas.total)}</span>
+      </div>
       ${
-        folha.destravada
-          ? ''
-          : '<p class="vazio">A folha entra no total, mas os nomes só aparecem com a folha destravada.</p>'
+        r.vendas.total
+          ? `<table class="tabela-contas">
+              <thead><tr><th>Forma</th><th>Valor</th><th>%</th><th class="col-barra"></th></tr></thead>
+              <tbody>
+                ${r.vendas.por_forma
+                  .filter((f) => f.valor)
+                  .sort((a, b) => b.valor - a.valor)
+                  .map(
+                    (f) => `<tr>
+                      <td>${ROTULO_FORMA[f.forma]}</td>
+                      <td>${brl(f.valor)}</td>
+                      <td>${((f.valor / r.vendas.total) * 100).toFixed(1).replace('.', ',')}%</td>
+                      <td class="col-barra">${barra(f.valor, maiorVenda)}</td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>`
+          : `<p class="vazio">Nenhum fechamento lançado neste período — sem isso não há como dizer quanto foi vendido.
+             O que os extratos mostram fica no bloco de recebimentos, mais abaixo.</p>`
       }
     </section>
 
     <section class="grupo-painel">
-      <div class="grupo-cabecalho"><h2>Venda a prazo no período</h2></div>
-      <table class="tabela-contas">
-        <thead><tr><th>Compras lançadas</th><th>Pagamentos recebidos</th></tr></thead>
-        <tbody><tr><td>${brl(r.venda_prazo.compras)}</td><td>${brl(r.venda_prazo.pagamentos)}</td></tr></tbody>
-      </table>
+      <div class="grupo-cabecalho">
+        <h2>Para onde foi o dinheiro</h2>
+        <span class="grupo-total">${brl(r.despesas.total)}</span>
+      </div>
+      ${
+        despesasLinhas.length
+          ? `<table class="tabela-contas">
+              <thead><tr><th>Despesa</th><th>Valor</th><th>%</th><th class="col-barra"></th></tr></thead>
+              <tbody>
+                ${despesasLinhas
+                  .map(
+                    (d) => `<tr>
+                      <td>${escapar(d.rotulo)}${d.detalhe ? ` <small>(${escapar(d.detalhe)})</small>` : ''}</td>
+                      <td>${brl(d.valor)}</td>
+                      <td>${((d.valor / r.despesas.total) * 100).toFixed(1).replace('.', ',')}%</td>
+                      <td class="col-barra">${barra(d.valor, maiorDespesa)}</td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>`
+          : '<p class="vazio">Nenhuma despesa paga neste período.</p>'
+      }
     </section>
 
     <section class="grupo-painel">
-      <div class="grupo-cabecalho"><h2>Extras (informativo)</h2><span class="grupo-total">${brl(r.extras_informativo.total)}</span></div>
-      <p class="vazio">${r.extras_informativo.nota}</p>
+      <div class="grupo-cabecalho">
+        <h2>Custo do cartão</h2>
+        <span class="grupo-total">${brl(r.taxas.total)} <small>de taxa</small></span>
+      </div>
+      ${
+        r.taxas.por_grupo.length
+          ? `<table class="tabela-contas">
+              <thead><tr><th>Tipo</th><th>Transações</th><th>Bruto</th><th>Taxa</th><th>%</th><th>Líquido</th></tr></thead>
+              <tbody>
+                ${r.taxas.por_grupo
+                  .map(
+                    (t) => `<tr>
+                      <td>${escapar(t.grupo)}</td>
+                      <td>${t.transacoes}</td>
+                      <td>${brl(t.bruto)}</td>
+                      <td>${brl(t.tarifa)}</td>
+                      <td>${t.percentual === null ? '—' : `${t.percentual.toFixed(2).replace('.', ',')}%`}</td>
+                      <td>${brl(t.liquido)}</td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>
+            ${
+              r.taxas.por_grupo.some((t) => t.liquido > t.bruto)
+                ? `<p class="vazio"><strong>Confira:</strong> algum grupo está com líquido maior que o bruto.
+                   Isso vem do próprio arquivo do adquirente, que às vezes traz a venda numa linha e o
+                   repasse noutra. O sistema mostra o que o extrato diz, sem corrigir por conta própria.</p>`
+                : ''
+            }`
+          : '<p class="vazio">Nenhum extrato importado neste período.</p>'
+      }
     </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Recebimentos e caderno</h2></div>
+      <table class="tabela-contas">
+        <thead><tr><th>Origem</th><th>Valor</th><th>Observação</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Cartões (bruto)</td><td>${brl(r.entradas.cartoes.bruto)}</td>
+            <td>${r.entradas.cartoes.transacoes} transações nos extratos</td>
+          </tr>
+          <tr>
+            <td>Cartões (líquido)</td><td>${brl(r.entradas.cartoes.liquido)}</td>
+            <td>já sem a taxa de ${brl(r.entradas.cartoes.tarifa)}</td>
+          </tr>
+          <tr>
+            <td>Dinheiro conferido</td><td>${brl(r.entradas.dinheiro)}</td>
+            <td>fechamento de caixa por PDV</td>
+          </tr>
+          <tr>
+            <td>Venda a prazo — compras</td><td>${brl(r.venda_prazo.compras)}</td>
+            <td>fiado lançado no período</td>
+          </tr>
+          <tr>
+            <td>Venda a prazo — pagamentos</td><td>${brl(r.venda_prazo.pagamentos)}</td>
+            <td>fiado recebido no período</td>
+          </tr>
+          <tr>
+            <td>Extras / adiantamentos</td><td>${brl(r.extras_informativo.total)}</td>
+            <td>${r.extras_informativo.nota}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <p class="vazio nota-relatorio">
+      Resultado é vendas menos despesas pagas no período — não é lucro contábil:
+      não entram estoque, depreciação nem imposto ainda não pago.
+      ${folha.destravada ? '' : 'A folha entra nos totais; os nomes só aparecem com a folha destravada.'}
+    </p>
   `;
 }
 
@@ -2147,6 +2281,22 @@ function bind() {
 
   const formPeriodo = root.querySelector('[data-action="filtro-periodo"]');
   if (formPeriodo) formPeriodo.addEventListener('submit', onFiltroPeriodo);
+
+  root.querySelectorAll('[data-action="periodo-atalho"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const hoje = new Date(`${todayISO()}T12:00:00`);
+      const mes = btn.dataset.mes === 'anterior' ? hoje.getMonth() - 1 : hoje.getMonth();
+      const iso = (d) => d.toLocaleDateString('en-CA');
+      state.periodo = {
+        de: iso(new Date(hoje.getFullYear(), mes, 1)),
+        ate: iso(new Date(hoje.getFullYear(), mes + 1, 0)),
+      };
+      carregarDados();
+    });
+  });
+
+  const btnImprimir = root.querySelector('#btn-imprimir');
+  if (btnImprimir) btnImprimir.addEventListener('click', () => window.print());
 
   const SELETORES_PAINEL = {
     'filtro-boletos': 'filtroBoletos',

@@ -302,6 +302,15 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 }
 .grafico-legenda-simples { color: var(--texto-suave); font-size: 11px; margin: 6px 0 0; }
 
+/* Barra proporcional dentro da linha da tabela */
+.col-barra { width: 26%; min-width: 90px; }
+.barra-linha { background: var(--azul-suave); border-radius: 4px; height: 10px; overflow: hidden; }
+.barra-linha span { display: block; height: 100%; background: var(--azul); border-radius: 4px; }
+.cartao-venda.positivo strong { color: var(--verde); }
+.cartao-venda.negativo strong { color: var(--vermelho); }
+.periodo-impresso { display: none; }
+.nota-relatorio { margin-top: 16px; }
+
 /* Cartões de resumo */
 .cartoes-resumo { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
 .cartao-resumo {
@@ -429,6 +438,22 @@ small.parcela { color: var(--azul); background: var(--azul-suave); border-radius
 .tabela-contas .filtros select, #filtro-mes { font-size: 13px; }
 
 code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+/* Impressão: o resumo do período vira documento — sem menu, sem botão, sem
+   formulário, com o nome da loja e o período no topo. É o que vai para a
+   contabilidade ou para o arquivo. */
+@media print {
+  .abas, .sub-abas, .filtros, .sem-impressao, button, .faixa-vendas, #btn-logout { display: none !important; }
+  #app { padding: 0; max-width: none; }
+  body { background: #fff; }
+  .topo { margin-bottom: 4px; }
+  .periodo-impresso { display: block; font-size: 13px; margin: 0 0 14px; }
+  .grupo-painel, .cartao-venda, .tabela-contas { break-inside: avoid; }
+  .cartoes-resumo { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .cartao-venda strong { font-size: 16px; }
+  .tabela-contas th, .tabela-contas td { padding: 4px 6px; font-size: 11px; }
+  .col-barra { display: none; }
+}
 
 /* No celular a página nunca deve rolar para o lado: tabelas largas rolam
    dentro do próprio bloco. */
