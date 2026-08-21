@@ -1,5 +1,5 @@
 import { apiFetch, getSessao, salvarSessao, limparSessao, setFolhaToken, getFolhaToken } from './api.js';
-import { brl, dateBR, todayISO, escapar } from './helpers.js';
+import { brl, brlCurto, mesCurto, dateBR, todayISO, escapar } from './helpers.js';
 
 // As quatro telas de Contas a pagar. Rótulos iguais aos do sistema atual.
 const TIPOS = [
@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.12.0';
+const VERSAO = '1.13.0';
 
 const state = {
   sessao: getSessao(),
@@ -32,6 +32,7 @@ const state = {
   // Resumo de vendas: responde "estou vendendo bem?" e cobra os dias em branco.
   resumoVendas: null,
   diaAcumulado: null,
+  historicoCompleto: false,
   // O que a conciliação já tem para o dia escolhido, para sugerir o fechamento.
   sugestaoDia: null,
   sugestaoCarregando: false,
@@ -931,29 +932,62 @@ function faixaVendasHTML() {
   `;
 }
 
-// Gráfico de barras dos 30 dias, em CSS puro: dia sem lançamento fica riscado,
-// para a falha saltar aos olhos em vez de parecer um dia de venda zero.
-function graficoVendasHTML(serie) {
-  const maior = Math.max(...serie.map((d) => Number(d.total)), 1);
+// Gráfico de colunas em CSS puro. O valor fica escrito em cima da barra: ter que
+// caçar com o mouse para saber quanto foi um dia derrota o propósito do gráfico.
+// Por isso são 14 dias e não 30 — com 30 barras não cabe rótulo nenhum.
+function graficoColunasHTML(itens, { legenda }) {
+  const maior = Math.max(...itens.map((i) => Number(i.valor)), 1);
 
   return `
-    <div class="grafico-vendas">
-      ${serie
-        .map((d) => {
-          const altura = Math.max((Number(d.total) / maior) * 100, d.lancado ? 2 : 0);
-          const rotulo = `${dateBR(d.data)}: ${d.lancado ? brl(d.total) : 'sem lançamento'}`;
-          return `<div class="barra-dia ${d.lancado ? '' : 'sem-lancamento'}" title="${rotulo}">
-            <div class="barra" style="height: ${altura}%"></div>
-          </div>`;
+    <div class="grafico-colunas">
+      ${itens
+        .map((i) => {
+          const altura = Math.max((Number(i.valor) / maior) * 100, i.vazio ? 0 : 3);
+          return `
+            <div class="coluna ${i.vazio ? 'vazia' : ''}" title="${escapar(i.titulo)}">
+              <div class="barra-area">
+                <span class="valor">${i.vazio ? '—' : brlCurto(i.valor)}</span>
+                <div class="barra" style="height: ${altura}%"></div>
+              </div>
+              <span class="rotulo">${escapar(i.rotulo)}</span>
+            </div>`;
         })
         .join('')}
     </div>
-    <div class="grafico-legenda">
-      <span>${dateBR(serie[0].data)}</span>
-      <span>últimos 30 dias &middot; barra vazia = dia sem lançamento</span>
-      <span>${dateBR(serie[serie.length - 1].data)}</span>
-    </div>
+    ${legenda ? `<p class="grafico-legenda-simples">${legenda}</p>` : ''}
   `;
+}
+
+function graficoVendasHTML(serie) {
+  const dias = serie.slice(-14).map((d) => ({
+    valor: d.total,
+    vazio: !d.lancado,
+    rotulo: String(d.data).slice(8, 10),
+    titulo: `${dateBR(d.data)}: ${d.lancado ? brl(d.total) : 'sem lançamento'}`,
+  }));
+
+  return graficoColunasHTML(dias, {
+    legenda: 'Últimos 14 dias &middot; coluna vazia (—) é dia sem lançamento',
+  });
+}
+
+function graficoMesesHTML(meses) {
+  const itens = meses.map((m) => {
+    const parcial = m.dias_lancados > 0 && m.dias_lancados < m.dias_no_mes;
+    return {
+      valor: m.total,
+      vazio: !m.dias_lancados,
+      rotulo: mesCurto(m.mes) + (parcial ? '*' : ''),
+      titulo: `${mesCurto(m.mes)}: ${brl(m.total)} em ${m.dias_lancados} de ${m.dias_no_mes} dia(s) lançados`,
+    };
+  });
+
+  const temParcial = meses.some((m) => m.dias_lancados > 0 && m.dias_lancados < m.dias_no_mes);
+  return graficoColunasHTML(itens, {
+    legenda: temParcial
+      ? 'Mês com <strong>*</strong> tem dias sem lançamento — o total dele está incompleto'
+      : 'Últimos 6 meses',
+  });
 }
 
 function resumoVendasHTML() {
@@ -985,10 +1019,18 @@ function resumoVendasHTML() {
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
-        <h2>Vendas dos últimos 30 dias</h2>
+        <h2>Venda por dia</h2>
         <span class="grupo-total">${brl(r.mes_atual)} <small>no mês</small></span>
       </div>
       ${graficoVendasHTML(r.ultimos_30)}
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Mês a mês</h2>
+        <span class="grupo-total">${brl(r.mes_anterior)} <small>no mês passado</small></span>
+      </div>
+      ${graficoMesesHTML(r.por_mes || [])}
     </section>
   `;
 }
@@ -1104,15 +1146,22 @@ function acumuladoHTML() {
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
-        <h2>Histórico</h2>
+        <h2>Últimos fechamentos</h2>
         <span class="grupo-total">${brl(totais.total)} <small>em ${acumulados.length} dia(s)</small></span>
+        ${
+          acumulados.length > 7
+            ? `<button type="button" id="btn-historico" class="secundario">${
+                state.historicoCompleto ? 'Mostrar só os últimos 7' : `Ver todos os ${acumulados.length}`
+              }</button>`
+            : ''
+        }
       </div>
       ${
         acumulados.length
           ? `<table class="tabela-contas">
               <thead><tr><th>Data</th><th>Dinheiro</th><th>Cartão</th><th>PIX</th><th>Tickets</th><th>Maq. fora</th><th>Outras</th><th>Total</th><th>Ações</th></tr></thead>
               <tbody>
-                ${acumulados
+                ${(state.historicoCompleto ? acumulados : acumulados.slice(0, 7))
                   .map(
                     (a) => `<tr>
                       <td>${dateBR(a.data)}</td>
@@ -2023,6 +2072,14 @@ function bind() {
   root.querySelectorAll('[data-action="form-baixa"]').forEach((form) => {
     form.addEventListener('submit', onFormBaixa);
   });
+
+  const btnHistorico = root.querySelector('#btn-historico');
+  if (btnHistorico) {
+    btnHistorico.addEventListener('click', () => {
+      state.historicoCompleto = !state.historicoCompleto;
+      render();
+    });
+  }
 
   const btnConsultar = root.querySelector('[data-action="consultar-sugestao"]');
   if (btnConsultar) btnConsultar.addEventListener('click', onConsultarSugestao);
