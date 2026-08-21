@@ -25,6 +25,9 @@ router.post('/extras', asyncHandler(extras.criar));
 router.post('/extras/:id/baixas', asyncHandler(extras.registrarBaixa));
 router.delete('/extras/:id', asyncHandler(extras.deletar));
 
+// Antes das rotas com `:id` para o caminho literal não virar id.
+router.get('/compras-prazo/:id', asyncHandler(folha.comprasDoFuncionario));
+
 router.get('/', asyncHandler(folha.listar));
 router.post('/', asyncHandler(folha.criar));
 router.post('/:id/pagamentos', asyncHandler(folha.registrarPagamento));
