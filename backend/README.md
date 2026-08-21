@@ -19,6 +19,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - **Baixa com forma de pagamento e banco**: ao dar baixa, o valor vem preenchido com o saldo mas é editável (pagamento parcial), a forma sai do cadastro de formas de pagamento e o banco do cadastro de bancos. O banco é opcional — dinheiro do caixa não sai de banco nenhum.
 - **Folha** com recorte por mês (mês atual como padrão), lançamento pela tela e coluna de adiantamento. Registrar um vale deixa ele em aberto; lançar a folha do funcionário desconta o vale e dá baixa nele na mesma transação — o mesmo dinheiro não fica cobrado duas vezes.
 - **Compras do funcionário ligadas ao caderno de fiado** pelo código: cliente e funcionário com o mesmo código são a mesma pessoa. Ao lançar a folha, o campo Compras vem com o que ele deve no caderno, e salvar registra o pagamento lá — a dívida não fica de pé depois de já ter saído do salário.
+- **Painel gerencial**: o ano inteiro em uma tela — indicadores (vendas, despesas, resultado com margem, a pagar hoje, fiado a receber, taxa de cartão), vendas × despesas por mês, resultado mês a mês, composição das despesas em rosca e tabela mensal. Gráficos em SVG escrito à mão: nenhuma biblioteca, nada para baixar, funciona com a conexão da loja caindo.
 - **Resumo do período** (antigo Relatórios): vendas pelo fechamento diário, despesas pagas, resultado do confronto, custo do cartão por tipo (débito, crédito, parcelado, PIX, voucher) com o percentual efetivo de taxa, recebimentos e caderno de fiado. Sai para impressão sem menu nem formulário, com nome da loja e período no topo.
 - **Folha de pagamento e Extras**, só para Master e ainda atrás de uma senha adicional.
 - **Administração** (Master): trilha de auditoria e exportação de backup em JSON.
@@ -124,6 +125,7 @@ Detalhes de como o backup é interpretado:
 - `POST /api/venda-prazo/movimentos` — lança compra ou pagamento do cliente
 - `GET|POST /api/cadastros/{clientes,funcionarios,bancos,formas-pagamento}` (+ `PUT`/`DELETE` por id)
   - nome repetido em formas de pagamento responde `409` (índice único ignorando caixa e espaços)
+- `GET /api/relatorios/gerencial?ano=AAAA` — os doze meses do ano (vendas, despesas por tipo, resultado, margem, taxa de cartão), mais os saldos de hoje (a pagar e fiado a receber) e os anos com movimento
 - `GET /api/relatorios?de=&ate=` — inclui `vendas` (fechamento diário do período), `resultado` (vendas − despesas pagas) e `taxas.por_grupo` (débito, crédito, parcelado, PIX, voucher, com percentual) — consolidado do período (Master e Gerente)
 - `GET /api/folha/compras-prazo/:id` — quanto o funcionário deve no caderno de fiado (vínculo pelo código)
 - `GET /api/folha/pendencias` — quantas folhas estão em aberto e desde quando. **Não exige a senha adicional** (só o perfil Master) porque é o aviso do painel: nome e valor continuam atrás da senha.

@@ -311,6 +311,52 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .periodo-impresso { display: none; }
 .nota-relatorio { margin-top: 16px; }
 
+/* Painel gerencial */
+.barra-ano { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.barra-ano label { max-width: 140px; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 18px; }
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--borda);
+  border-left: 4px solid var(--azul);
+  border-radius: 12px;
+  padding: 13px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kpi .rotulo { font-size: 11px; text-transform: uppercase; letter-spacing: .3px; color: var(--texto-suave); }
+.kpi strong { font-size: 21px; color: var(--azul-escuro); line-height: 1.15; }
+.kpi .nota { font-size: 11px; color: var(--texto-suave); }
+.kpi.azul { border-left-color: var(--azul); }
+.kpi.azul-claro { border-left-color: var(--azul-claro); }
+.kpi.amarelo { border-left-color: var(--amarelo); }
+.kpi.verde { border-left-color: var(--verde); }
+.kpi.verde strong { color: var(--verde); }
+.kpi.vermelho { border-left-color: var(--vermelho); }
+.kpi.roxo { border-left-color: #7C3AED; }
+
+/* Gráficos em SVG: escalam com a largura sem virar imagem borrada. */
+.grafico-svg { width: 100%; height: auto; display: block; }
+.grafico-svg .eixo { font-size: 10px; fill: var(--texto-suave); }
+.legenda-grafico { display: flex; gap: 16px; flex-wrap: wrap; margin: 8px 0 0; font-size: 12px; color: var(--texto-suave); }
+.legenda-grafico .chave { display: inline-flex; align-items: center; gap: 6px; }
+.legenda-grafico i, .legenda-rosca i { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+
+.rosca-linha { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.grafico-rosca { width: 170px; height: 170px; flex: 0 0 auto; }
+.rosca-valor { font-size: 20px; font-weight: 700; fill: var(--azul-escuro); }
+.rosca-rotulo { font-size: 10px; fill: var(--texto-suave); }
+.legenda-rosca { list-style: none; padding: 0; margin: 0; flex: 1 1 240px; display: flex; flex-direction: column; gap: 6px; }
+.legenda-rosca li { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.legenda-rosca .nome { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legenda-rosca .valor { font-weight: 600; color: var(--azul-escuro); }
+.legenda-rosca .pct { color: var(--texto-suave); font-size: 12px; width: 48px; text-align: right; }
+
+td.positivo { color: var(--verde); font-weight: 600; }
+td.negativo { color: var(--vermelho); font-weight: 600; }
+
 /* Cartões de resumo */
 .cartoes-resumo { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
 .cartao-resumo {
@@ -450,6 +496,8 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
   .periodo-impresso { display: block; font-size: 13px; margin: 0 0 14px; }
   .grupo-painel, .cartao-venda, .tabela-contas { break-inside: avoid; }
   .cartoes-resumo { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .kpis { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .barra-ano { display: none; }
   .cartao-venda strong { font-size: 16px; }
   .tabela-contas th, .tabela-contas td { padding: 4px 6px; font-size: 11px; }
   .col-barra { display: none; }
