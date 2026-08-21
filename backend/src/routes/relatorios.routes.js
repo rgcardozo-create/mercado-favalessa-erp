@@ -2,7 +2,7 @@ const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
 const { authenticate, authorize } = require('../middleware/auth');
 const { detectarFolhaDestravada } = require('../middleware/folha');
-const { consolidado } = require('../controllers/relatoriosController');
+const { consolidado, gerencial } = require('../controllers/relatoriosController');
 
 const router = express.Router();
 
@@ -11,6 +11,7 @@ const router = express.Router();
 // sem nome de funcionário (SPEC.md, regra 2).
 router.use(authenticate, authorize('master', 'gerente'), detectarFolhaDestravada);
 
+router.get('/gerencial', asyncHandler(gerencial));
 router.get('/', asyncHandler(consolidado));
 
 module.exports = router;

@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.14.0';
+const VERSAO = '1.15.0';
 
 const state = {
   sessao: getSessao(),
@@ -47,6 +47,8 @@ const state = {
   extras: null,
   folhaErro: null,
   relatorio: null,
+  gerencial: null,
+  anoGerencial: null,
   auditoria: null,
   importacao: null,
   importando: false,
@@ -191,6 +193,10 @@ async function carregarDados() {
         state.folha = null;
         state.extras = null;
       }
+    } else if (state.tab === 'gerencial') {
+      const ano = state.anoGerencial || todayISO().slice(0, 4);
+      state.gerencial = await apiFetch(`/relatorios/gerencial?ano=${ano}`);
+      state.anoGerencial = String(state.gerencial.ano);
     } else if (state.tab === 'relatorios') {
       const p = periodoOuPadrao();
       state.relatorio = await apiFetch(`/relatorios?de=${p.de}&ate=${p.ate}`);
@@ -406,6 +412,7 @@ function cabecalhoHTML(titulo) {
       <button data-tab="conciliacao" class="${state.tab === 'conciliacao' ? 'ativo' : ''}">Conciliação</button>
       ${podeVerAcumulado() ? `<button data-tab="acumulado" class="${state.tab === 'acumulado' ? 'ativo' : ''}">Acumulado</button>` : ''}
       <button data-tab="cadastros" class="${state.tab === 'cadastros' ? 'ativo' : ''}">Cadastros</button>
+      ${podeVerRelatorios() ? `<button data-tab="gerencial" class="${state.tab === 'gerencial' ? 'ativo' : ''}">Gerencial</button>` : ''}
       ${podeVerRelatorios() ? `<button data-tab="relatorios" class="${state.tab === 'relatorios' ? 'ativo' : ''}">Relatórios</button>` : ''}
       ${podeVerFolha() ? `<button data-tab="folha" class="${state.tab === 'folha' ? 'ativo' : ''}">Folha</button>` : ''}
       ${podeVerFolha() ? `<button data-tab="admin" class="${state.tab === 'admin' ? 'ativo' : ''}">Administração</button>` : ''}
@@ -1494,6 +1501,305 @@ function folhaHTML() {
   `;
 }
 
+// ── Painel gerencial ─────────────────────────────────────────────────────────
+// O ano inteiro numa tela: indicadores em cima, série no meio, composição
+// embaixo. Os gráficos são SVG escrito à mão — nenhuma biblioteca, nada que
+// precise baixar, e o desenho continua funcionando com a conexão da loja caindo.
+
+const CORES_GRAFICO = ['#123C8B', '#FFD400', '#059669', '#D92D20', '#7C3AED', '#0EA5E9'];
+const MESES_CURTOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+
+// Barras de receita e despesa lado a lado, 12 meses. A régua horizontal existe
+// para o olho comparar altura sem precisar do número em cada barra.
+function graficoReceitaDespesaSVG(meses) {
+  const L = 46;
+  const larguraTotal = 720;
+  const altura = 220;
+  const base = altura - 26;
+  const maior = Math.max(...meses.flatMap((m) => [m.vendas, m.despesas]), 1);
+  const passo = (larguraTotal - L - 8) / meses.length;
+  const largBarra = Math.min(passo / 2 - 3, 18);
+
+  const escala = (v) => (v / maior) * (base - 14);
+  const linhas = [0, 0.25, 0.5, 0.75, 1]
+    .map((f) => {
+      const y = base - f * (base - 14);
+      return `<line x1="${L}" y1="${y}" x2="${larguraTotal}" y2="${y}" stroke="#E3E8F2" stroke-width="1" />
+              <text x="${L - 6}" y="${y + 3}" text-anchor="end" class="eixo">${f ? brlCurto(maior * f) : '0'}</text>`;
+    })
+    .join('');
+
+  const barras = meses
+    .map((m, i) => {
+      const x = L + i * passo + 4;
+      const hv = escala(m.vendas);
+      const hd = escala(m.despesas);
+      return `
+        <g>
+          <rect x="${x}" y="${base - hv}" width="${largBarra}" height="${hv}" rx="2" fill="${CORES_GRAFICO[0]}">
+            <title>${MESES_CURTOS[i]}: vendas ${brl(m.vendas)}</title>
+          </rect>
+          <rect x="${x + largBarra + 2}" y="${base - hd}" width="${largBarra}" height="${hd}" rx="2" fill="${CORES_GRAFICO[3]}">
+            <title>${MESES_CURTOS[i]}: despesas ${brl(m.despesas)}</title>
+          </rect>
+          <text x="${x + largBarra + 1}" y="${base + 14}" text-anchor="middle" class="eixo">${MESES_CURTOS[i]}</text>
+        </g>`;
+    })
+    .join('');
+
+  return `
+    <svg viewBox="0 0 ${larguraTotal} ${altura}" class="grafico-svg" role="img" aria-label="Vendas e despesas por mês">
+      ${linhas}${barras}
+    </svg>
+    <p class="legenda-grafico">
+      <span class="chave"><i style="background:${CORES_GRAFICO[0]}"></i>Vendas</span>
+      <span class="chave"><i style="background:${CORES_GRAFICO[3]}"></i>Despesas pagas</span>
+    </p>
+  `;
+}
+
+// Resultado mês a mês. A linha do zero é desenhada mais forte porque é ela que
+// separa mês que sobrou de mês que faltou.
+function graficoResultadoSVG(meses) {
+  // Caixa mais estreita que a do gráfico de barras: este vive em meia largura,
+  // e um viewBox largo demais encolhe os rótulos até ninguém conseguir ler.
+  const L = 44;
+  const larguraTotal = 420;
+  const altura = 210;
+  const valores = meses.map((m) => m.resultado);
+  const maior = Math.max(...valores, 0);
+  const menor = Math.min(...valores, 0);
+  const faixa = maior - menor || 1;
+  const topo = 14;
+  const base = altura - 26;
+  const y = (v) => base - ((v - menor) / faixa) * (base - topo);
+  const passo = (larguraTotal - L - 8) / (meses.length - 1);
+  const x = (i) => L + i * passo;
+
+  const pontos = meses.map((m, i) => `${x(i)},${y(m.resultado)}`).join(' ');
+  const area = `M${x(0)},${y(0)} L${pontos.split(' ').join(' L')} L${x(meses.length - 1)},${y(0)} Z`;
+
+  return `
+    <svg viewBox="0 0 ${larguraTotal} ${altura}" class="grafico-svg" role="img" aria-label="Resultado por mês">
+      <line x1="${L}" y1="${y(0)}" x2="${larguraTotal}" y2="${y(0)}" stroke="#98A2B3" stroke-width="1" />
+      <text x="${L - 6}" y="${y(0) + 3}" text-anchor="end" class="eixo">0</text>
+      <path d="${area}" fill="rgba(18,60,139,.10)" />
+      <polyline points="${pontos}" fill="none" stroke="${CORES_GRAFICO[0]}" stroke-width="2.5"
+        stroke-linejoin="round" stroke-linecap="round" />
+      ${meses
+        .map(
+          (m, i) => `
+          <circle cx="${x(i)}" cy="${y(m.resultado)}" r="4"
+            fill="${m.resultado >= 0 ? CORES_GRAFICO[2] : CORES_GRAFICO[3]}">
+            <title>${MESES_CURTOS[i]}: ${brl(m.resultado)}${
+              m.margem === null ? '' : ` (margem ${m.margem.toFixed(1).replace('.', ',')}%)`
+            }</title>
+          </circle>
+          <text x="${x(i)}" y="${base + 18}" text-anchor="middle" class="eixo">${MESES_CURTOS[i]}</text>`
+        )
+        .join('')}
+    </svg>
+    <p class="legenda-grafico">
+      <span class="chave"><i style="background:${CORES_GRAFICO[2]}"></i>mês que sobrou</span>
+      <span class="chave"><i style="background:${CORES_GRAFICO[3]}"></i>mês que faltou</span>
+    </p>
+  `;
+}
+
+function fatiaRosca(cx, cy, raio, raioInterno, inicio, fim) {
+  const ponto = (ang, r) => [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
+  const grande = fim - inicio > Math.PI ? 1 : 0;
+  const [x1, y1] = ponto(inicio, raio);
+  const [x2, y2] = ponto(fim, raio);
+  const [x3, y3] = ponto(fim, raioInterno);
+  const [x4, y4] = ponto(inicio, raioInterno);
+  return `M${x1},${y1} A${raio},${raio} 0 ${grande} 1 ${x2},${y2}
+          L${x3},${y3} A${raioInterno},${raioInterno} 0 ${grande} 0 ${x4},${y4} Z`;
+}
+
+function graficoRoscaSVG(itens, centroRotulo, centroValor) {
+  const total = itens.reduce((a, i) => a + i.valor, 0);
+  if (!total) return '<p class="vazio">Sem dados no período.</p>';
+
+  let angulo = -Math.PI / 2;
+  const fatias = itens
+    .map((item, i) => {
+      const parte = (item.valor / total) * Math.PI * 2;
+      const d = fatiaRosca(90, 90, 84, 52, angulo, angulo + parte - 0.012);
+      angulo += parte;
+      return `<path d="${d}" fill="${CORES_GRAFICO[i % CORES_GRAFICO.length]}">
+        <title>${escapar(item.rotulo)}: ${brl(item.valor)} (${((item.valor / total) * 100).toFixed(1)}%)</title>
+      </path>`;
+    })
+    .join('');
+
+  return `
+    <div class="rosca-linha">
+      <svg viewBox="0 0 180 180" class="grafico-rosca" role="img" aria-label="${escapar(centroRotulo)}">
+        ${fatias}
+        <text x="90" y="86" text-anchor="middle" class="rosca-valor">${brlCurto(total)}</text>
+        <text x="90" y="102" text-anchor="middle" class="rosca-rotulo">${escapar(centroValor)}</text>
+      </svg>
+      <ul class="legenda-rosca">
+        ${itens
+          .map(
+            (item, i) => `<li>
+              <i style="background:${CORES_GRAFICO[i % CORES_GRAFICO.length]}"></i>
+              <span class="nome">${escapar(item.rotulo)}</span>
+              <span class="valor">${brl(item.valor)}</span>
+              <span class="pct">${((item.valor / total) * 100).toFixed(1).replace('.', ',')}%</span>
+            </li>`
+          )
+          .join('')}
+      </ul>
+    </div>
+  `;
+}
+
+function gerencialHTML() {
+  const cabecalho = cabecalhoHTML('Painel gerencial');
+
+  if (!state.gerencial) {
+    return `${cabecalho}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+  }
+
+  const g = state.gerencial;
+  const t = g.totais;
+  const positivo = t.resultado >= 0;
+  const anos = g.anos_disponiveis.length ? g.anos_disponiveis : [g.ano];
+
+  const ROTULO_DESPESA = {
+    fornecedor: 'Fornecedores',
+    fixa: 'Despesas fixas',
+    imposto: 'Impostos',
+    despesa: 'Outras despesas',
+    folha: 'Folha de pagamento',
+  };
+  const composicao = Object.entries(t.despesas_por_tipo)
+    .filter(([, v]) => v > 0)
+    .map(([tipo, valor]) => ({ rotulo: ROTULO_DESPESA[tipo] || tipo, valor }))
+    .sort((a, b) => b.valor - a.valor);
+
+  const mesesComDado = g.meses.filter((m) => m.vendas || m.despesas);
+  // Mês com despesa e sem fechamento lançado puxa o resultado do ano para baixo
+  // sem que tenha havido prejuízo: falta o lado da venda, não sobrou dívida.
+  const mesesSemVenda = g.meses.filter((m) => m.despesas > 0 && m.dias_lancados === 0);
+
+  return `
+    ${cabecalho}
+
+    <div class="barra-ano sem-impressao">
+      <label>Ano
+        <select id="ano-gerencial">
+          ${anos.map((a) => `<option value="${a}" ${String(a) === String(g.ano) ? 'selected' : ''}>${a}</option>`).join('')}
+        </select>
+      </label>
+      <button type="button" id="btn-imprimir" class="secundario">Imprimir</button>
+    </div>
+
+    <p class="periodo-impresso"><strong>Mercado Favalessa</strong> &middot; painel gerencial de ${g.ano}</p>
+
+    ${
+      mesesSemVenda.length
+        ? `<div class="alerta aviso">
+            <p><strong>${mesesSemVenda.length} mês(es) com despesa e sem fechamento lançado</strong>
+            (${mesesSemVenda.map((m) => MESES_CURTOS[Number(m.mes.slice(5)) - 1]).join(', ')}).
+            Enquanto faltar o fechamento desses meses, o resultado do ano fica mais baixo do que
+            foi de verdade — falta o lado da venda, não sobrou dívida.</p>
+          </div>`
+        : ''
+    }
+
+    <div class="kpis">
+      <div class="kpi azul">
+        <span class="rotulo">Vendas no ano</span>
+        <strong>${brl(t.vendas)}</strong>
+        <span class="nota">${g.meses.reduce((a, m) => a + m.dias_lancados, 0)} dia(s) de fechamento lançados</span>
+      </div>
+      <div class="kpi vermelho">
+        <span class="rotulo">Despesas pagas</span>
+        <strong>${brl(t.despesas)}</strong>
+        <span class="nota">saídas de caixa no ano</span>
+      </div>
+      <div class="kpi ${positivo ? 'verde' : 'vermelho'}">
+        <span class="rotulo">Resultado</span>
+        <strong>${brl(t.resultado)}</strong>
+        <span class="nota">${t.margem === null ? 'sem venda lançada' : `margem de ${t.margem.toFixed(1).replace('.', ',')}%`}</span>
+      </div>
+      <div class="kpi amarelo">
+        <span class="rotulo">A pagar hoje</span>
+        <strong>${brl(g.agora.a_pagar.total)}</strong>
+        <span class="nota">${g.agora.a_pagar.lancamentos} conta(s) em aberto</span>
+      </div>
+      <div class="kpi azul-claro">
+        <span class="rotulo">A receber (fiado)</span>
+        <strong>${brl(g.agora.a_receber)}</strong>
+        <span class="nota">saldo do caderno</span>
+      </div>
+      <div class="kpi roxo">
+        <span class="rotulo">Taxa de cartão</span>
+        <strong>${brl(t.taxas)}</strong>
+        <span class="nota">custo de receber por maquininha</span>
+      </div>
+    </div>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Vendas e despesas por mês</h2>
+        <span class="grupo-total">${brl(t.vendas)} <small>vendido</small></span>
+      </div>
+      ${graficoReceitaDespesaSVG(g.meses)}
+    </section>
+
+    <div class="colunas-painel">
+      <section class="grupo-painel">
+        <div class="grupo-cabecalho"><h2>Resultado mês a mês</h2></div>
+        ${graficoResultadoSVG(g.meses)}
+      </section>
+
+      <section class="grupo-painel">
+        <div class="grupo-cabecalho"><h2>Composição das despesas</h2></div>
+        ${graficoRoscaSVG(composicao, 'Composição das despesas', 'no ano')}
+      </section>
+    </div>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Mês a mês</h2>
+        <span class="grupo-total">${mesesComDado.length} mês(es) com movimento</span>
+      </div>
+      <table class="tabela-contas">
+        <thead>
+          <tr><th>Mês</th><th>Vendas</th><th>Despesas</th><th>Resultado</th><th>Margem</th><th>Taxa cartão</th><th>Dias lançados</th></tr>
+        </thead>
+        <tbody>
+          ${
+            mesesComDado.length
+              ? mesesComDado
+                  .map(
+                    (m) => `<tr>
+                      <td>${MESES_CURTOS[Number(m.mes.slice(5)) - 1]}/${m.mes.slice(2, 4)}</td>
+                      <td>${brl(m.vendas)}</td>
+                      <td>${brl(m.despesas)}</td>
+                      <td class="${m.resultado >= 0 ? 'positivo' : 'negativo'}">${brl(m.resultado)}</td>
+                      <td>${m.margem === null ? '—' : `${m.margem.toFixed(1).replace('.', ',')}%`}</td>
+                      <td>${brl(m.taxas)}</td>
+                      <td>${m.dias_lancados || '—'}</td>
+                    </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="7">Nenhum movimento neste ano.</td></tr>'
+          }
+        </tbody>
+      </table>
+      <p class="vazio">
+        Mês sem dia lançado aparece com margem "—": ali falta o fechamento, não é venda zero.
+        Resultado é venda menos despesa paga; não é lucro contábil.
+      </p>
+    </section>
+  `;
+}
+
 function relatoriosHTML() {
   const cabecalho = cabecalhoHTML('Resumo do período');
   const p = periodoOuPadrao();
@@ -2027,6 +2333,7 @@ function telaHTML() {
   if (state.tab === 'venda-prazo') return vendaPrazoHTML();
   if (state.tab === 'cadastros') return cadastrosHTML();
   if (state.tab === 'folha' && podeVerFolha()) return folhaHTML();
+  if (state.tab === 'gerencial' && podeVerRelatorios()) return gerencialHTML();
   if (state.tab === 'relatorios' && podeVerRelatorios()) return relatoriosHTML();
   if (state.tab === 'admin' && podeVerFolha()) return adminHTML();
   return contasHTML();
@@ -2294,6 +2601,14 @@ function bind() {
       carregarDados();
     });
   });
+
+  const seletorAno = root.querySelector('#ano-gerencial');
+  if (seletorAno) {
+    seletorAno.addEventListener('change', (ev) => {
+      state.anoGerencial = ev.target.value;
+      carregarDados();
+    });
+  }
 
   const btnImprimir = root.querySelector('#btn-imprimir');
   if (btnImprimir) btnImprimir.addEventListener('click', () => window.print());

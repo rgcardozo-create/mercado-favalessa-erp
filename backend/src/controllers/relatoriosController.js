@@ -193,4 +193,122 @@ async function consolidado(req, res) {
   });
 }
 
-module.exports = { consolidado };
+// Painel gerencial: o ano inteiro em doze colunas. Enquanto o consolidado
+// responde "como foi este período", este responde "como o ano está indo" — e
+// para isso o que importa é a série, não o instante.
+async function gerencial(req, res) {
+  const ano = /^\d{4}$/.test(req.query.ano || '') ? Number(req.query.ano) : new Date().getFullYear();
+  const de = `${ano}-01-01`;
+  const ate = `${ano}-12-31`;
+
+  // Uma consulta por origem, todas agrupadas por mês, para o front só somar.
+  const { rows: vendas } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM') AS mes,
+            COALESCE(sum(dinheiro + cartao + pix + tickets + pos_sistema + pos_maquina + outras), 0) AS total,
+            count(*)::int AS dias
+       FROM acumulados WHERE data BETWEEN $1 AND $2 GROUP BY 1`,
+    [de, ate]
+  );
+
+  const { rows: despesas } = await pool.query(
+    `SELECT to_char(p.data_pagamento, 'YYYY-MM') AS mes, c.tipo::text AS tipo,
+            COALESCE(sum(p.valor), 0) AS total
+       FROM contas_pagamentos p
+       JOIN contas c ON c.id = p.conta_id
+      WHERE p.data_pagamento BETWEEN $1 AND $2
+      GROUP BY 1, 2`,
+    [de, ate]
+  );
+
+  const { rows: folha } = await pool.query(
+    `SELECT to_char(data_pagamento, 'YYYY-MM') AS mes, COALESCE(sum(valor), 0) AS total
+       FROM folha_pagamentos WHERE data_pagamento BETWEEN $1 AND $2 GROUP BY 1`,
+    [de, ate]
+  );
+
+  const { rows: taxas } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM') AS mes, COALESCE(sum(tarifa), 0) AS total
+       FROM conciliacao_transacoes WHERE data BETWEEN $1 AND $2 GROUP BY 1`,
+    [de, ate]
+  );
+
+  // Saldos de hoje, que não pertencem a mês nenhum: são o retrato do momento.
+  const { rows: aPagar } = await pool.query(
+    `SELECT count(*)::int AS lancamentos, COALESCE(sum(saldo), 0) AS total
+       FROM (SELECT c.valor - COALESCE(p.total, 0) AS saldo
+               FROM contas c
+               LEFT JOIN (SELECT conta_id, sum(valor) AS total FROM contas_pagamentos GROUP BY conta_id) p
+                 ON p.conta_id = c.id) t
+      WHERE saldo > 0`
+  );
+
+  const { rows: aReceber } = await pool.query(
+    `SELECT COALESCE(sum(valor) FILTER (WHERE tipo = 'compra'), 0)
+            - COALESCE(sum(valor) FILTER (WHERE tipo = 'pagamento'), 0) AS total
+       FROM mov_prazo`
+  );
+
+  const { rows: anos } = await pool.query(
+    `SELECT DISTINCT extract(year FROM data)::int AS ano FROM acumulados
+     UNION SELECT DISTINCT extract(year FROM data_pagamento)::int FROM contas_pagamentos
+     ORDER BY ano DESC`
+  );
+
+  const acha = (lista, mes) => lista.find((r) => r.mes === mes);
+  const meses = Array.from({ length: 12 }, (_, i) => {
+    const mes = `${ano}-${String(i + 1).padStart(2, '0')}`;
+    const venda = acha(vendas, mes);
+    const doMes = despesas.filter((d) => d.mes === mes);
+    const folhaMes = acha(folha, mes);
+
+    const porTipo = TIPOS_VALIDOS.reduce((acc, tipo) => {
+      const achado = doMes.find((d) => d.tipo === tipo);
+      acc[tipo] = achado ? Number(achado.total) : 0;
+      return acc;
+    }, {});
+    porTipo.folha = folhaMes ? Number(folhaMes.total) : 0;
+
+    const totalDespesas = Object.values(porTipo).reduce((a, v) => a + v, 0);
+    const totalVendas = venda ? Number(venda.total) : 0;
+
+    return {
+      mes,
+      vendas: totalVendas,
+      dias_lancados: venda ? venda.dias : 0,
+      despesas: totalDespesas,
+      despesas_por_tipo: porTipo,
+      resultado: totalVendas - totalDespesas,
+      // Margem só existe se houve venda; sem isso, mês sem fechamento lançado
+      // apareceria com -100% e pareceria catástrofe em vez de dado faltando.
+      margem: totalVendas > 0 ? ((totalVendas - totalDespesas) / totalVendas) * 100 : null,
+      taxas: Number((acha(taxas, mes) || {}).total || 0),
+    };
+  });
+
+  const soma = (campo) => meses.reduce((a, m) => a + m[campo], 0);
+
+  return res.json({
+    ano,
+    anos_disponiveis: anos.map((a) => a.ano),
+    meses,
+    totais: {
+      vendas: soma('vendas'),
+      despesas: soma('despesas'),
+      resultado: soma('resultado'),
+      taxas: soma('taxas'),
+      margem: soma('vendas') > 0 ? (soma('resultado') / soma('vendas')) * 100 : null,
+      despesas_por_tipo: meses.reduce((acc, m) => {
+        for (const [tipo, valor] of Object.entries(m.despesas_por_tipo)) {
+          acc[tipo] = (acc[tipo] || 0) + valor;
+        }
+        return acc;
+      }, {}),
+    },
+    agora: {
+      a_pagar: { lancamentos: aPagar[0].lancamentos, total: Number(aPagar[0].total) },
+      a_receber: Number(aReceber[0].total),
+    },
+  });
+}
+
+module.exports = { consolidado, gerencial };
