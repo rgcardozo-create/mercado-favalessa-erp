@@ -49,6 +49,22 @@ async function desbloquear(req, res) {
   return res.json({ folhaToken: assinarTokenFolha(req.user.id) });
 }
 
+// Aviso do painel. Roda ANTES da senha adicional de propósito: sem isso, saber
+// que existe folha em aberto exigiria destravar a folha, e o aviso deixaria de
+// servir para o que serve — lembrar de olhar.
+//
+// Por isso devolve só a contagem e o mês mais antigo. Nome e valor continuam
+// atrás da senha (SPEC.md, seção 3).
+async function pendencias(req, res) {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS pendentes,
+            to_char(min(data_ref), 'YYYY-MM') AS desde
+       FROM (${SELECT_FOLHA}) t
+      WHERE t.saldo > 0`
+  );
+  return res.json({ pendentes: rows[0].pendentes, desde: rows[0].desde });
+}
+
 async function listar(req, res) {
   const { de, ate } = req.query;
   const params = [];
@@ -96,30 +112,75 @@ async function criar(req, res) {
     return res.status(400).json({ error: 'Todos os valores precisam ser numéricos.' });
   }
 
-  const { rows } = await pool.query(
-    `INSERT INTO folha (funcionario_id, nome, tipo, data_ref, salario, bonificacao,
-                        compras, adiantamento, outras, descontos, observacoes, criado_por)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
-    [
-      funcionario_id || null,
-      nome,
-      tipo || null,
-      data_ref || null,
-      ...numeros,
-      req.body.observacoes || null,
-      req.user.id,
-    ]
-  );
+  const adiantamento = Number(req.body.adiantamento || 0);
+  const abaterExtras = req.body.abater_extras !== false && funcionario_id && adiantamento > 0;
+
+  const cliente = await pool.connect();
+  let criado;
+  let extrasBaixados = 0;
+  try {
+    await cliente.query('BEGIN');
+
+    const { rows } = await cliente.query(
+      `INSERT INTO folha (funcionario_id, nome, tipo, data_ref, salario, bonificacao,
+                          compras, adiantamento, outras, descontos, observacoes, criado_por)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
+      [
+        funcionario_id || null,
+        nome,
+        tipo || null,
+        data_ref || null,
+        ...numeros,
+        req.body.observacoes || null,
+        req.user.id,
+      ]
+    );
+    criado = rows[0];
+
+    // O adiantamento descontado aqui quita o vale lá — senão o mesmo dinheiro
+    // ficaria cobrado duas vezes: uma no saldo do extra, outra na folha.
+    if (abaterExtras) {
+      const { rows: abertos } = await cliente.query(
+        `SELECT e.id, e.valor - COALESCE(b.total, 0) AS saldo
+           FROM extras e
+           LEFT JOIN (SELECT extra_id, SUM(valor) AS total FROM extras_baixas GROUP BY extra_id) b
+             ON b.extra_id = e.id
+          WHERE e.funcionario_id = $1 AND e.valor - COALESCE(b.total, 0) > 0
+          ORDER BY e.data, e.id`,
+        [funcionario_id]
+      );
+
+      let restante = adiantamento;
+      for (const extra of abertos) {
+        if (restante <= 0) break;
+        const baixa = Math.min(restante, Number(extra.saldo));
+        await cliente.query(
+          `INSERT INTO extras_baixas (extra_id, valor, data, observacoes)
+           VALUES ($1, $2, $3, $4)`,
+          [extra.id, baixa, data_ref || new Date().toISOString().slice(0, 10), `Descontado na folha #${criado.id}`]
+        );
+        restante -= baixa;
+        extrasBaixados += 1;
+      }
+    }
+
+    await cliente.query('COMMIT');
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
 
   await registrarAuditoria({
     usuarioId: req.user.id,
     acao: 'create',
     entidade: 'folha',
-    entidadeId: rows[0].id,
-    dados: rows[0],
+    entidadeId: criado.id,
+    dados: criado,
   });
 
-  return res.status(201).json(rows[0]);
+  return res.status(201).json({ ...criado, extras_baixados: extrasBaixados });
 }
 
 async function registrarPagamento(req, res) {
@@ -170,4 +231,4 @@ async function deletar(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { desbloquear, listar, criar, registrarPagamento, deletar, SELECT_FOLHA };
+module.exports = { desbloquear, pendencias, listar, criar, registrarPagamento, deletar, SELECT_FOLHA };

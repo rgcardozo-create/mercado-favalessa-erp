@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.10.0';
+const VERSAO = '1.11.0';
 
 const state = {
   sessao: getSessao(),
@@ -39,6 +39,10 @@ const state = {
   cadastros: null,
   cadastroTipo: 'clientes',
   folha: null,
+  // Recorte da folha: 'atual' (padrão), 'anterior' ou '' para tudo.
+  folhaMes: 'atual',
+  folhaPendencias: null,
+  funcionarios: [],
   extras: null,
   folhaErro: null,
   relatorio: null,
@@ -152,6 +156,9 @@ async function carregarDados() {
       ]);
       state.painel = painel;
       state.resumoVendas = await apiFetch('/acumulados/resumo');
+      // A contagem de pendências da folha não exige a senha adicional: é só um
+      // aviso, sem nome nem valor. Só o Master enxerga.
+      state.folhaPendencias = podeVerFolha() ? await apiFetch('/folha/pendencias') : null;
       state.formasPagamento = formasPainel;
       state.bancos = bancosPainel;
     } else if (state.tab === 'conciliacao') {
@@ -170,9 +177,15 @@ async function carregarDados() {
     } else if (state.tab === 'folha') {
       // Sem token da folha a API responde 423 — a tela então pede a senha.
       if (getFolhaToken()) {
-        const [folha, extras] = await Promise.all([apiFetch('/folha'), apiFetch('/folha/extras')]);
+        const p = periodoDaFolha();
+        const [folha, extras, funcionarios] = await Promise.all([
+          apiFetch(`/folha${p ? `?de=${p.de}&ate=${p.ate}` : ''}`),
+          apiFetch('/folha/extras'),
+          apiFetch('/cadastros/funcionarios'),
+        ]);
         state.folha = folha;
         state.extras = extras;
+        state.funcionarios = funcionarios;
       } else {
         state.folha = null;
         state.extras = null;
@@ -608,6 +621,7 @@ function painelHTML() {
     <p class="usuario-atual">Referência: ${dateBR(p.hoje)}</p>
 
     ${faixaVendasHTML()}
+    ${avisoFolhaHTML()}
 
     <div class="colunas-painel">
       ${blocoPainelHTML({
@@ -832,6 +846,24 @@ function conciliacaoHTML() {
             </table>`
           : '<p class="vazio">Nenhum lançamento de dinheiro.</p>'
       }
+    </section>
+  `;
+}
+
+// Aviso de folha em aberto. Mostra só que existe pendência e desde quando —
+// nome e valor continuam atrás da senha da folha.
+function avisoFolhaHTML() {
+  const p = state.folhaPendencias;
+  if (!p || !p.pendentes) return '';
+
+  const [ano, mes] = (p.desde || '').split('-');
+  return `
+    <section class="faixa-vendas pendente faixa-folha">
+      <div>
+        <strong>Folha: ${p.pendentes} pendência(s)</strong>
+        <small>${p.desde ? `A mais antiga é de ${mes}/${ano}.` : ''} Abra a folha para conferir.</small>
+      </div>
+      <button data-tab="folha">Abrir folha</button>
     </section>
   `;
 }
@@ -1252,6 +1284,18 @@ function cadastrosHTML() {
   `;
 }
 
+// Primeiro e último dia do mês escolhido, no fuso da loja. Sem recorte, devolve
+// null e a folha vem inteira.
+function periodoDaFolha() {
+  if (!state.folhaMes) return null;
+  const hoje = new Date(`${todayISO()}T12:00:00`);
+  const mes = state.folhaMes === 'anterior' ? hoje.getMonth() - 1 : hoje.getMonth();
+  const inicio = new Date(hoje.getFullYear(), mes, 1);
+  const fim = new Date(hoje.getFullYear(), mes + 1, 0);
+  const iso = (d) => d.toLocaleDateString('en-CA');
+  return { de: iso(inicio), ate: iso(fim) };
+}
+
 function folhaHTML() {
   const cabecalho = cabecalhoHTML('Folha de pagamento');
 
@@ -1290,29 +1334,86 @@ function folhaHTML() {
       </div>
     </div>
 
+    <section class="cartoes-form">
+      <form data-action="novo-lancamento-folha" class="form-inline">
+        <h2>Lançar folha do mês</h2>
+        <label>Funcionário
+          <select name="funcionario_id" required>
+            <option value="">— escolha —</option>
+            ${state.funcionarios
+              .map((f) => `<option value="${f.id}">${escapar(f.nome)}</option>`)
+              .join('')}
+          </select>
+        </label>
+        <label>Referência <input type="date" name="data_ref" required value="${todayISO()}" /></label>
+        <label>Salário <input type="number" step="0.01" name="salario" required /></label>
+        <label>Bonificação <input type="number" step="0.01" name="bonificacao" /></label>
+        <label>Compras <input type="number" step="0.01" name="compras" /></label>
+        <label>Adiantamento <input type="number" step="0.01" name="adiantamento" /></label>
+        <label>Descontos <input type="number" step="0.01" name="descontos" /></label>
+        <button type="submit">Lançar</button>
+        <p class="vazio campo-largo" id="aviso-adiantamento">
+          Ao escolher o funcionário, o adiantamento vem preenchido com os vales em aberto dele —
+          e lançar a folha dá baixa nesses vales.
+        </p>
+      </form>
+
+      <form data-action="novo-extra" class="form-inline">
+        <h2>Adiantamento / vale</h2>
+        <label>Funcionário
+          <select name="funcionario_id" required>
+            <option value="">— escolha —</option>
+            ${state.funcionarios
+              .map((f) => `<option value="${f.id}">${escapar(f.nome)}</option>`)
+              .join('')}
+          </select>
+        </label>
+        <label>Valor <input type="number" step="0.01" min="0.01" name="valor" required /></label>
+        <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
+        <label>Observação <input type="text" name="observacoes" placeholder="ex.: pediu adiantado" /></label>
+        <button type="submit">Registrar</button>
+        <p class="vazio campo-largo">
+          Fica em aberto até ser descontado numa folha — normalmente a do mês seguinte.
+          Não entra nas despesas da empresa.
+        </p>
+      </form>
+    </section>
+
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
         <h2>Lançamentos</h2>
+        <select id="filtro-folha-mes">
+          <option value="atual" ${state.folhaMes === 'atual' ? 'selected' : ''}>Mês atual</option>
+          <option value="anterior" ${state.folhaMes === 'anterior' ? 'selected' : ''}>Mês passado</option>
+          <option value="" ${state.folhaMes === '' ? 'selected' : ''}>Todos os meses</option>
+        </select>
         <button id="btn-trancar-folha">Trancar folha</button>
       </div>
       <table class="tabela-contas">
-        <thead><tr><th>Funcionário</th><th>Ref.</th><th>Salário</th><th>Bonif.</th><th>Compras</th><th>Líquido</th><th>Pago</th><th>Saldo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Funcionário</th><th>Ref.</th><th>Salário</th><th>Bonif.</th><th>Compras</th><th>Adiant.</th><th>Líquido</th><th>Pago</th><th>Saldo</th><th>Status</th></tr></thead>
         <tbody>
-          ${lancamentos
-            .map(
-              (l) => `<tr>
-                <td>${l.nome}</td>
+          ${
+            lancamentos.length
+              ? lancamentos
+                  .map(
+                    (l) => `<tr>
+                <td>${escapar(l.nome)}</td>
                 <td>${l.data_ref ? dateBR(l.data_ref) : '—'}</td>
                 <td>${brl(l.salario)}</td>
                 <td>${brl(l.bonificacao)}</td>
                 <td>${brl(l.compras)}</td>
+                <td>${brl(l.adiantamento)}</td>
                 <td><strong>${brl(l.liquido)}</strong></td>
                 <td>${brl(l.total_pago)}</td>
                 <td>${brl(l.saldo)}</td>
-                <td>${l.quitado ? '<span class="badge quitado">Quitado</span>' : '<span class="badge pendente">Pendente</span>'}</td>
+                <td>${l.quitado ? '<span class="badge quitado">Quitada</span>' : '<span class="badge vencida">Pendente</span>'}</td>
               </tr>`
-            )
-            .join('')}
+                  )
+                  .join('')
+              : `<tr><td colspan="10">Nenhum lançamento ${
+                  state.folhaMes === 'atual' ? 'neste mês' : state.folhaMes === 'anterior' ? 'no mês passado' : ''
+                }.</td></tr>`
+          }
         </tbody>
       </table>
     </section>
@@ -1963,6 +2064,39 @@ function bind() {
   const formFolhaSenha = root.querySelector('#form-folha-senha');
   if (formFolhaSenha) formFolhaSenha.addEventListener('submit', onDestravarFolha);
 
+  const seletorFolhaMes = root.querySelector('#filtro-folha-mes');
+  if (seletorFolhaMes) {
+    seletorFolhaMes.addEventListener('change', (ev) => {
+      state.folhaMes = ev.target.value;
+      carregarDados();
+    });
+  }
+
+  const formFolha = root.querySelector('[data-action="novo-lancamento-folha"]');
+  if (formFolha) {
+    formFolha.addEventListener('submit', onNovoLancamentoFolha);
+    // Escolher o funcionário já traz o que ele tem de vale em aberto: é esse
+    // valor que a folha do mês desconta.
+    formFolha.querySelector('select[name=funcionario_id]').addEventListener('change', (ev) => {
+      const id = ev.target.value;
+      const abertos = ((state.extras && state.extras.extras) || []).filter(
+        (e) => String(e.funcionario_id) === String(id) && Number(e.saldo) > 0
+      );
+      const total = abertos.reduce((acc, e) => acc + Number(e.saldo), 0);
+      formFolha.querySelector('input[name=adiantamento]').value = total ? total.toFixed(2) : '';
+      const aviso = formFolha.querySelector('#aviso-adiantamento');
+      if (aviso) {
+        aviso.innerHTML = total
+          ? `Este funcionário tem <strong>${brl(total)}</strong> em ${abertos.length} vale(s) em aberto.
+             Lançar a folha com esse adiantamento dá baixa neles.`
+          : 'Nenhum vale em aberto para este funcionário.';
+      }
+    });
+  }
+
+  const formExtra = root.querySelector('[data-action="novo-extra"]');
+  if (formExtra) formExtra.addEventListener('submit', onNovoExtra);
+
   const btnTrancar = root.querySelector('#btn-trancar-folha');
   if (btnTrancar) btnTrancar.addEventListener('click', onTrancarFolha);
 
@@ -2119,6 +2253,58 @@ async function onExcluirCadastro(id) {
   if (!confirm('Excluir este cadastro?')) return;
   try {
     await apiFetch(`/cadastros/${state.cadastroTipo}/${id}`, { method: 'DELETE' });
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onNovoLancamentoFolha(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const id = fd.get('funcionario_id');
+  const funcionario = state.funcionarios.find((f) => String(f.id) === String(id));
+  try {
+    await apiFetch('/folha', {
+      method: 'POST',
+      body: JSON.stringify({
+        funcionario_id: id,
+        nome: funcionario ? funcionario.nome : '',
+        data_ref: fd.get('data_ref'),
+        salario: fd.get('salario') || 0,
+        bonificacao: fd.get('bonificacao') || 0,
+        compras: fd.get('compras') || 0,
+        adiantamento: fd.get('adiantamento') || 0,
+        descontos: fd.get('descontos') || 0,
+      }),
+    });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onNovoExtra(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const id = fd.get('funcionario_id');
+  const funcionario = state.funcionarios.find((f) => String(f.id) === String(id));
+  try {
+    await apiFetch('/folha/extras', {
+      method: 'POST',
+      body: JSON.stringify({
+        funcionario_id: id,
+        nome: funcionario ? funcionario.nome : '',
+        tipo: 'adiantamento',
+        valor: fd.get('valor'),
+        data: fd.get('data'),
+        observacoes: fd.get('observacoes') || null,
+      }),
+    });
+    state.erro = null;
     carregarDados();
   } catch (err) {
     state.erro = err.message;
