@@ -11,8 +11,10 @@ const router = express.Router();
 // (SPEC.md, seção 3). Duas camadas — perfil e senha — como já era no sistema atual.
 router.use(authenticate, authorize('master'), detectarFolhaDestravada);
 
-// Único endpoint que não exige a folha já destravada: é ele que destrava.
+// Os dois endpoints que não exigem a folha já destravada: o que destrava e o
+// aviso do painel, que só conta pendências (sem nome e sem valor).
 router.post('/desbloquear', asyncHandler(folha.desbloquear));
+router.get('/pendencias', asyncHandler(folha.pendencias));
 
 router.use(exigirFolhaDestravada);
 
