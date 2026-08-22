@@ -11,7 +11,7 @@ Backend Node.js/Express + PostgreSQL do sistema multiusuário, conforme `SPEC.md
 - **Aviso de lançamento repetido**: cadastrar (ou editar para) fornecedor, descrição, vencimento e valor iguais aos de outra conta responde `409` com a conta que já existe. Repetir só o fornecedor e a descrição é normal e passa direto; parcelas diferem no vencimento e dois boletos do mesmo dia diferem no valor. Para casos legítimos, o mesmo POST/PUT com `permitir_duplicado: true` grava assim mesmo.
 - **Contas a pagar nas quatro telas** — Fornecedores, Despesas fixas, Impostos e Outras despesas — com pagamentos parciais (baixas) em tabela filha.
 - Painel do dia (despesas fixas, impostos e outras despesas vencidos ou de hoje, mais os boletos de fornecedor do recorte escolhido), só para Master e Gerente.
-- **Conciliação** das maquininhas (Cielo, Stone, Itaú, Tickets) e do dinheiro por PDV.
+- **Conciliação** das maquininhas (Cielo, Stone, Itaú, Tickets) e do dinheiro por PDV, este importado do relatório "Finalizadoras Analítico — Por Caixa" do sistema de frente de caixa. É a única fonte do dinheiro do dia: extrato de adquirente não vê venda em espécie.
 - **Acumulado** (conferência de caixa), só para Master e Gerente. A tela mostra o que os extratos já importados trazem para o dia e preenche o formulário com isso — mas quem confere e salva é a pessoa, porque um dia com só um adquirente importado daria um fechamento pela metade com cara de fechado. Resumo de vendas: hoje contra o mesmo dia da semana passada, últimos 7 dias contra os 7 anteriores, mês até hoje contra o mesmo período do mês passado, série de 30 dias e a lista dos dias sem lançamento.
 - **Venda a prazo** com saldo devedor por cliente e extrato individual.
 - **Cadastros** de clientes, funcionários, bancos e formas de pagamento.
@@ -117,6 +117,7 @@ Detalhes de como o backup é interpretado:
 - `GET /api/conciliacao` — resumo por adquirente e dinheiro por PDV (aceita `?de=&ate=`)
 - `GET /api/conciliacao/transacoes` — listagem paginada (`?adquirente=&de=&ate=&pagina=&limite=`)
 - `POST /api/conciliacao/extratos/analisar` — lê a planilha e devolve o que entendeu, sem gravar (Master/Gerente)
+- `POST /api/conciliacao/vendas-caixa/analisar` e `POST /api/conciliacao/vendas-caixa` — relatório de vendas por caixa (dinheiro). Soma as finalizadoras por dia e caixa; reimportar o mesmo período substitui em vez de somar.
 - `POST /api/conciliacao/extratos` — grava as transações do extrato (Master/Gerente)
 - `GET /api/acumulados` (aceita `?de=&ate=`) / `POST /api/acumulados` / `DELETE /api/acumulados/:id` — Master e Gerente
 - `GET /api/acumulados/sugestao?data=AAAA-MM-DD` — o que a conciliação já tem para o dia, por arquivo e por forma, com o campo do fechamento de destino de cada linha; mais o dinheiro do PDV e até quando cada adquirente foi importado. Sugere o fechamento; não grava.

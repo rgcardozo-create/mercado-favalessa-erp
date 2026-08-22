@@ -1,5 +1,6 @@
 const pool = require('../db/pool');
 const { analisarExtrato, lerArquivo } = require('../utils/lerPlanilha');
+const { lerVendasPorCaixa } = require('../utils/vendasCaixa');
 const { converterLinhas } = require('../utils/extrato');
 const { impressaoDigital } = require('../db/importarBackup');
 const { registrarAuditoria } = require('../utils/auditoria');
@@ -336,7 +337,114 @@ async function importarExtrato(req, res) {
   return res.json({ ...resultado, ignoradas });
 }
 
+// ── Vendas por caixa (dinheiro do PDV) ───────────────────────────────────────
+// O relatório de finalizadoras do sistema de frente de caixa é a única fonte do
+// dinheiro do dia: extrato de adquirente não vê venda em espécie. Importado
+// aqui, ele preenche sozinho a coluna Dinheiro do fechamento em lote.
+
+async function analisarVendasCaixa(req, res) {
+  const arquivo = arquivoDoCorpo(req);
+  if (!arquivo) return res.status(400).json({ error: 'Envie o relatório de vendas por caixa.' });
+
+  let leitura;
+  try {
+    leitura = await lerVendasPorCaixa(arquivo.buffer);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  // Quais dias já têm dinheiro lançado: reimportar substitui, e quem confere
+  // precisa saber disso antes de clicar, não depois.
+  const { rows: existentes } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM-DD') AS data, count(*)::int AS registros,
+            COALESCE(sum(valor), 0) AS total
+       FROM conciliacao_dinheiro
+      WHERE data BETWEEN $1 AND $2
+      GROUP BY 1`,
+    [leitura.periodo.de, leitura.periodo.ate]
+  );
+
+  const porDia = new Map();
+  for (const linha of leitura.linhas) {
+    const dia = porDia.get(linha.data) || { data: linha.data, caixas: [], total: 0 };
+    dia.caixas.push({ pdv: linha.pdv, valor: linha.valor });
+    dia.total = Math.round((dia.total + linha.valor) * 100) / 100;
+    porDia.set(linha.data, dia);
+  }
+
+  return res.json({
+    periodo: leitura.periodo,
+    caixas: leitura.caixas,
+    descricoes: leitura.descricoes,
+    total: leitura.total,
+    dias: [...porDia.values()].map((dia) => {
+      const jaTem = existentes.find((e) => e.data === dia.data);
+      return { ...dia, ja_lancado: jaTem ? Number(jaTem.total) : null };
+    }),
+  });
+}
+
+async function importarVendasCaixa(req, res) {
+  const arquivo = arquivoDoCorpo(req);
+  if (!arquivo) return res.status(400).json({ error: 'Envie o relatório de vendas por caixa.' });
+
+  let leitura;
+  try {
+    leitura = await lerVendasPorCaixa(arquivo.buffer);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+
+  const cliente = await pool.connect();
+  let substituidos = 0;
+  try {
+    await cliente.query('BEGIN');
+
+    for (const linha of leitura.linhas) {
+      // Um fechamento por caixa e por dia. Reimportar o mesmo período substitui
+      // o valor em vez de somar outro — foi o mesmo caixa, no mesmo dia, e o
+      // relatório novo é a versão boa.
+      const { rowCount } = await cliente.query(
+        'DELETE FROM conciliacao_dinheiro WHERE data = $1 AND pdv IS NOT DISTINCT FROM $2',
+        [linha.data, linha.pdv]
+      );
+      substituidos += rowCount;
+
+      await cliente.query(
+        `INSERT INTO conciliacao_dinheiro (data, pdv, valor, impressao_digital)
+         VALUES ($1, $2, $3, $4)`,
+        [linha.data, linha.pdv, linha.valor, `${linha.data}|${linha.pdv}|${linha.valor.toFixed(2)}`]
+      );
+    }
+
+    await cliente.query('COMMIT');
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'importacao',
+    entidade: 'conciliacao_dinheiro',
+    entidadeId: 0,
+    dados: { arquivo: arquivo.nome, periodo: leitura.periodo, linhas: leitura.linhas.length },
+  });
+
+  return res.status(201).json({
+    gravados: leitura.linhas.length,
+    substituidos,
+    periodo: leitura.periodo,
+    total: leitura.total,
+    caixas: leitura.caixas,
+  });
+}
+
 module.exports = {
+  analisarVendasCaixa,
+  importarVendasCaixa,
   resumo,
   listarTransacoes,
   analisarExtratoEnviado,

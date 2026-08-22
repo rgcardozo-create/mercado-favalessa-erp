@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.17.0';
+const VERSAO = '1.18.0';
 
 const state = {
   sessao: getSessao(),
@@ -63,6 +63,10 @@ const state = {
   extratoAdquirente: 'cielo',
   extratoCarregando: false,
   extratoResultado: null,
+  vendasCaixa: null,
+  caixaArquivo: null,
+  caixaCarregando: false,
+  caixaResultado: null,
   periodo: { de: '', ate: '' },
   // Abre já mostrando o que precisa de ação: vencidas e as que vencem hoje.
   statusFiltro: 'vencidas',
@@ -685,6 +689,87 @@ const ADQUIRENTES_UI = [
   { valor: 'tickets', rotulo: 'Tickets / Parceiros' },
 ];
 
+// Importação do relatório de vendas por caixa (dinheiro do PDV). Fica ao lado da
+// importação de extrato porque é a outra metade do mesmo trabalho: o adquirente
+// traz o cartão, o sistema de frente de caixa traz o dinheiro.
+function importarVendasCaixaHTML() {
+  const v = state.vendasCaixa;
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Importar vendas por caixa (dinheiro)</h2></div>
+      <p class="vazio">
+        Relatório <strong>Finalizadoras Analítico — Por Caixa</strong> do sistema de frente de caixa,
+        exportado em Excel. É dele que sai o dinheiro do dia, que extrato de adquirente nunca mostra.
+        O valor de cada caixa é somado por dia e vira a coluna <strong>Dinheiro</strong> do fechamento.
+        Reimportar o mesmo período <strong>substitui</strong> o que já estava lançado.
+      </p>
+
+      <form data-action="caixa-analisar" class="form-inline">
+        <label>Arquivo <input type="file" name="arquivo" accept=".xls,.xlsx" /></label>
+        <button type="submit" ${state.caixaArquivo ? '' : 'disabled'}>Conferir antes de importar</button>
+      </form>
+
+      ${state.caixaArquivo ? `<p class="vazio">Arquivo: <strong>${escapar(state.caixaArquivo.nome)}</strong></p>` : ''}
+      ${state.caixaCarregando ? '<p>Lendo a planilha…</p>' : ''}
+
+      ${
+        v
+          ? `<div class="alerta aviso">
+              <strong>Confira antes de gravar.</strong> Nada foi importado ainda.
+              ${v.dias.length} dia(s) de ${dateBR(v.periodo.de)} a ${dateBR(v.periodo.ate)},
+              caixas ${v.caixas.join(', ')}, total <strong>${brl(v.total)}</strong>.
+              ${
+                v.descricoes.length > 1
+                  ? `Finalizadoras no arquivo: ${v.descricoes.map(escapar).join(', ')} — todas somadas.`
+                  : ''
+              }
+            </div>
+            <div class="rolagem-tabela">
+              <table class="tabela-contas">
+                <thead><tr><th>Dia</th><th>Caixas</th><th>Dinheiro do dia</th><th>Já lançado</th></tr></thead>
+                <tbody>
+                  ${v.dias
+                    .map(
+                      (d) => `<tr>
+                        <td>${dateBR(d.data)}</td>
+                        <td>${d.caixas.map((c) => `${escapar(c.pdv)}: ${brl(c.valor)}`).join(' &middot; ')}</td>
+                        <td><strong>${brl(d.total)}</strong></td>
+                        <td>${
+                          d.ja_lancado === null
+                            ? '—'
+                            : `${brl(d.ja_lancado)}${
+                                Math.abs(d.ja_lancado - d.total) > 0.005 ? ' <small>(será substituído)</small>' : ''
+                              }`
+                        }</td>
+                      </tr>`
+                    )
+                    .join('')}
+                </tbody>
+              </table>
+            </div>
+            <div class="acoes-alerta">
+              <button type="button" id="btn-importar-caixa">Importar de verdade</button>
+              <button type="button" id="btn-cancelar-caixa" class="secundario">Cancelar</button>
+            </div>`
+          : ''
+      }
+
+      ${
+        state.caixaResultado
+          ? `<div class="alerta sucesso">
+              <strong>${state.caixaResultado.gravados}</strong> lançamento(s) de caixa gravados
+              (${dateBR(state.caixaResultado.periodo.de)} a ${dateBR(state.caixaResultado.periodo.ate)}),
+              total ${brl(state.caixaResultado.total)}.
+              ${state.caixaResultado.substituidos ? `${state.caixaResultado.substituidos} substituíram lançamento anterior.` : ''}
+              O dinheiro já aparece no fechamento em lote, na tela de Acumulado.
+            </div>`
+          : ''
+      }
+    </section>
+  `;
+}
+
 function importarExtratoHTML() {
   const e = state.extrato;
 
@@ -795,6 +880,7 @@ function conciliacaoHTML() {
   return `
     ${cabecalho}
     ${podeGerenciar() ? importarExtratoHTML() : ''}
+    ${podeGerenciar() ? importarVendasCaixaHTML() : ''}
 
     <div class="cartoes-resumo">
       <div class="cartao-resumo proximos">
@@ -1163,7 +1249,6 @@ function loteHTML() {
     ['cartao', 'Cartão'],
     ['pix', 'PIX'],
     ['tickets', 'Tickets'],
-    ['pos_maquina', 'Maq. fora'],
     ['outras', 'Outras'],
   ];
 
@@ -1175,7 +1260,15 @@ function loteHTML() {
       <tr data-dia="${dia.data}" class="${dia.lancado ? 'ja-lancado' : ''}">
         <td>
           <strong>${dateBR(dia.data)}</strong>
-          <small>${dia.lancado ? 'já lançado' : dia.transacoes ? `${dia.transacoes} transações` : 'sem extrato'}</small>
+          <small>${
+            dia.lancado
+              ? 'já lançado'
+              : dia.transacoes
+                ? `${dia.transacoes} transações`
+                : dia.sugestao.dinheiro
+                  ? 'só dinheiro'
+                  : 'sem extrato'
+          }</small>
         </td>
         ${CAMPOS.map(
           ([campo]) => `<td>
@@ -1242,7 +1335,6 @@ function acumuladoHTML() {
         <label>Cartão (TEF) <input type="number" step="0.01" name="cartao" /></label>
         <label>PIX <input type="number" step="0.01" name="pix" /></label>
         <label>Tickets <input type="number" step="0.01" name="tickets" /></label>
-        <label>Maquininha fora <input type="number" step="0.01" name="pos_maquina" /></label>
         <label>Outras <input type="number" step="0.01" name="outras" /></label>
         <label class="campo-largo">Observações <input type="text" name="observacoes" placeholder="ex.: PDV 2 fechou 5,00 a menos" /></label>
         <button type="submit">Salvar</button>
@@ -1265,7 +1357,7 @@ function acumuladoHTML() {
       ${
         acumulados.length
           ? `<table class="tabela-contas">
-              <thead><tr><th>Data</th><th>Dinheiro</th><th>Cartão</th><th>PIX</th><th>Tickets</th><th>Maq. fora</th><th>Outras</th><th>Total</th><th>Ações</th></tr></thead>
+              <thead><tr><th>Data</th><th>Dinheiro</th><th>Cartão</th><th>PIX</th><th>Tickets</th><th>Outras</th><th>Total</th><th>Ações</th></tr></thead>
               <tbody>
                 ${(state.historicoCompleto ? acumulados : acumulados.slice(0, 7))
                   .map(
@@ -1275,7 +1367,6 @@ function acumuladoHTML() {
                       <td>${brl(a.cartao)}</td>
                       <td>${brl(a.pix)}</td>
                       <td>${brl(a.tickets)}</td>
-                      <td>${brl(Number(a.pos_maquina) + Number(a.pos_sistema))}</td>
                       <td>${brl(a.outras)}</td>
                       <td><strong>${brl(a.total)}</strong>${a.observacoes ? `<br /><small>${escapar(a.observacoes)}</small>` : ''}</td>
                       <td><button data-action="excluir-acumulado" data-id="${a.id}" class="perigo">Excluir</button></td>
@@ -2746,6 +2837,23 @@ function bind() {
   const btnBackup = root.querySelector('#btn-exportar-backup');
   if (btnBackup) btnBackup.addEventListener('click', onExportarBackup);
 
+  const formCaixa = root.querySelector('[data-action="caixa-analisar"]');
+  if (formCaixa) {
+    formCaixa.querySelector('input[name=arquivo]').addEventListener('change', onEscolherVendasCaixa);
+    formCaixa.addEventListener('submit', onAnalisarVendasCaixa);
+  }
+
+  const btnImportarCaixa = root.querySelector('#btn-importar-caixa');
+  if (btnImportarCaixa) btnImportarCaixa.addEventListener('click', onImportarVendasCaixa);
+
+  const btnCancelarCaixa = root.querySelector('#btn-cancelar-caixa');
+  if (btnCancelarCaixa) {
+    btnCancelarCaixa.addEventListener('click', () => {
+      state.vendasCaixa = null;
+      render();
+    });
+  }
+
   const formExtrato = root.querySelector('[data-action="extrato-analisar"]');
   if (formExtrato) {
     formExtrato.querySelector('input[name=arquivo]').addEventListener('change', onEscolherExtrato);
@@ -2872,7 +2980,6 @@ async function onNovoAcumulado(ev) {
         cartao: fd.get('cartao') || 0,
         pix: fd.get('pix') || 0,
         tickets: fd.get('tickets') || 0,
-        pos_maquina: fd.get('pos_maquina') || 0,
         outras: fd.get('outras') || 0,
         observacoes: fd.get('observacoes') || null,
       }),
@@ -3067,6 +3174,78 @@ function paraBase64(arquivo) {
     leitor.onerror = () => reject(new Error('Não consegui ler o arquivo.'));
     leitor.readAsDataURL(arquivo);
   });
+}
+
+// O arquivo fica no estado porque o input é recriado a cada render: sem isso, a
+// escolha se perderia entre conferir e importar.
+async function onEscolherVendasCaixa(ev) {
+  const arquivo = ev.target.files[0];
+  state.vendasCaixa = null;
+  state.caixaResultado = null;
+  state.erro = null;
+
+  if (!arquivo) {
+    state.caixaArquivo = null;
+    render();
+    return;
+  }
+
+  try {
+    state.caixaArquivo = { nome: arquivo.name, base64: await paraBase64(arquivo) };
+  } catch (err) {
+    state.caixaArquivo = null;
+    state.erro = err.message;
+  }
+  render();
+}
+
+async function onAnalisarVendasCaixa(ev) {
+  ev.preventDefault();
+  if (!state.caixaArquivo) return;
+
+  state.caixaCarregando = true;
+  state.erro = null;
+  render();
+  try {
+    state.vendasCaixa = await apiFetch('/conciliacao/vendas-caixa/analisar', {
+      method: 'POST',
+      body: JSON.stringify({
+        arquivo_base64: state.caixaArquivo.base64,
+        nome_arquivo: state.caixaArquivo.nome,
+      }),
+    });
+  } catch (err) {
+    state.erro = err.message;
+    state.vendasCaixa = null;
+  } finally {
+    state.caixaCarregando = false;
+    render();
+  }
+}
+
+async function onImportarVendasCaixa() {
+  if (!state.caixaArquivo) return;
+  if (!confirm('Importar o dinheiro por caixa deste relatório?')) return;
+
+  state.caixaCarregando = true;
+  render();
+  try {
+    state.caixaResultado = await apiFetch('/conciliacao/vendas-caixa', {
+      method: 'POST',
+      body: JSON.stringify({
+        arquivo_base64: state.caixaArquivo.base64,
+        nome_arquivo: state.caixaArquivo.nome,
+      }),
+    });
+    state.vendasCaixa = null;
+    state.caixaArquivo = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    state.caixaCarregando = false;
+    render();
+  }
 }
 
 async function onEscolherExtrato(ev) {
