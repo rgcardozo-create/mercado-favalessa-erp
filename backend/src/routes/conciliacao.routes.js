@@ -6,6 +6,8 @@ const {
   listarTransacoes,
   analisarExtratoEnviado,
   importarExtrato,
+  analisarVendasCaixa,
+  importarVendasCaixa,
 } = require('../controllers/conciliacaoController');
 
 const router = express.Router();
@@ -24,5 +26,9 @@ router.get('/transacoes', asyncHandler(listarTransacoes));
 // Gerente — não entra no login compartilhado da loja.
 router.post('/extratos/analisar', authorize('master', 'gerente'), corpoGrande, asyncHandler(analisarExtratoEnviado));
 router.post('/extratos', authorize('master', 'gerente'), corpoGrande, asyncHandler(importarExtrato));
+
+// Relatório de vendas por caixa: é ele que traz o dinheiro do dia.
+router.post('/vendas-caixa/analisar', authorize('master', 'gerente'), corpoGrande, asyncHandler(analisarVendasCaixa));
+router.post('/vendas-caixa', authorize('master', 'gerente'), corpoGrande, asyncHandler(importarVendasCaixa));
 
 module.exports = router;
