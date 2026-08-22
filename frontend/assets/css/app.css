@@ -256,51 +256,24 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .variacao.desce { color: var(--vermelho); }
 .variacao.neutra { color: var(--texto-suave); font-weight: 400; }
 
-/* Gráfico de colunas em CSS: sem biblioteca, sem requisição extra. O valor fica
-   escrito em cima da barra — gráfico que só conta o valor no hover não serve
-   para bater o olho, que é justamente para o que ele existe. */
-.grafico-colunas {
-  display: flex;
-  align-items: stretch;
-  gap: 4px;
-  height: 170px;
-  padding: 10px 8px 6px;
-  background: var(--card);
-  border: 1px solid var(--borda);
-  border-radius: 10px;
+/* Gráficos do acumulado: barras finas para o mês inteiro caber, com a média do
+   período tracejada e a média móvel por cima. */
+.grafico-media .col rect { fill: var(--azul); }
+.grafico-media .col.futura rect { fill: #C9D6EE; }
+.grafico-media .col .marca-vazia { fill: #F6C9C4; }
+.grafico-media .col:hover rect { fill: var(--azul-escuro); }
+.linha-media { stroke: var(--texto-suave); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.rotulo-media { font-size: 10px; fill: var(--texto-suave); }
+.linha-tendencia {
+  fill: none;
+  stroke: var(--amarelo);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
 }
-.grafico-colunas .coluna { flex: 1 1 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.grafico-colunas .barra-area {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 3px;
-}
-.grafico-colunas .valor {
-  font-size: 10px;
-  color: var(--texto-suave);
-  white-space: nowrap;
-  font-weight: 600;
-}
-.grafico-colunas .barra { width: 100%; background: var(--azul); border-radius: 4px 4px 0 0; min-height: 2px; }
-.grafico-colunas .coluna.vazia .barra {
-  background: repeating-linear-gradient(45deg, #F4F6FB, #F4F6FB 3px, #FDECEA 3px, #FDECEA 6px);
-  /* Faixa baixa, não coluna cheia: dia sem lançamento não pode parecer venda alta. */
-  height: 12% !important;
-  border-radius: 4px;
-  opacity: .8;
-}
-.grafico-colunas .coluna.vazia .valor { color: var(--vermelho); }
-.grafico-colunas .rotulo {
-  text-align: center;
-  font-size: 10px;
-  color: var(--texto-suave);
-  white-space: nowrap;
-  overflow: hidden;
-}
-.grafico-legenda-simples { color: var(--texto-suave); font-size: 11px; margin: 6px 0 0; }
+.legenda-grafico .amostra-barra { background: var(--azul); }
+.legenda-grafico .amostra-media { background: repeating-linear-gradient(90deg, var(--texto-suave) 0 4px, transparent 4px 7px); }
+.legenda-grafico .amostra-tendencia { background: var(--amarelo); }
 
 /* Barra proporcional dentro da linha da tabela */
 .col-barra { width: 26%; min-width: 90px; }
@@ -525,7 +498,6 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
   .bloco-cabecalho select { margin-left: 0; width: 100%; }
   .resumo-lista { margin-left: 0; width: 100%; }
   .busca { max-width: 100%; flex-basis: 100%; }
-  /* No celular não cabe rótulo em 14 colunas: fica só o dia embaixo. */
-  .grafico-colunas { height: 140px; gap: 2px; }
-  .grafico-colunas .valor { display: none; }
+  /* No celular o gráfico do mês fica mais baixo, mas continua inteiro. */
+  .grafico-svg { min-height: 150px; }
 }

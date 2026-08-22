@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.18.0';
+const VERSAO = '1.19.0';
 
 const state = {
   sessao: getSessao(),
@@ -1028,42 +1028,122 @@ function faixaVendasHTML() {
   `;
 }
 
-// Gráfico de colunas em CSS puro. O valor fica escrito em cima da barra: ter que
-// caçar com o mouse para saber quanto foi um dia derrota o propósito do gráfico.
-// Por isso são 14 dias e não 30 — com 30 barras não cabe rótulo nenhum.
-function graficoColunasHTML(itens, { legenda }) {
-  const maior = Math.max(...itens.map((i) => Number(i.valor)), 1);
+// Gráfico de colunas com linha de tendência, em SVG. Duas linhas por cima das
+// barras, porque barra sozinha responde "quanto foi nesse dia" mas não "está
+// subindo ou caindo":
+//
+//   - a tracejada é a média do período, para saber num relance se o dia ficou
+//     acima ou abaixo do normal;
+//   - a cheia é a média móvel, que alisa o sobe-e-desce de fim de semana e
+//     mostra a direção.
+//
+// O mês inteiro cabe porque a barra é fina e o rótulo do dia sai de dois em
+// dois: com trinta e um rótulos colados não se lê nenhum.
+function graficoBarrasComMediaSVG(itens, { janelaMedia = 7, legenda = '', rotuloSalteado = 1 } = {}) {
+  const L = 48;
+  const largura = 760;
+  const altura = 220;
+  const topo = 16;
+  const base = altura - 30;
+
+  const valores = itens.map((i) => Number(i.valor) || 0);
+  const maior = Math.max(...valores, 1);
+  const escala = (v) => (v / maior) * (base - topo);
+  const passo = (largura - L - 8) / itens.length;
+  const largBarra = Math.max(Math.min(passo - 3, 26), 3);
+  const centro = (i) => L + i * passo + passo / 2;
+
+  // A média ignora dia sem lançamento: fosse zero, cada dia em branco puxaria a
+  // referência para baixo e o mês pareceria pior do que foi.
+  const contados = itens.filter((i) => i.contaNaMedia !== false && Number(i.valor) > 0);
+  const media = contados.length ? contados.reduce((a, i) => a + Number(i.valor), 0) / contados.length : 0;
+
+  const linhasGuia = [0.25, 0.5, 0.75, 1]
+    .map((f) => {
+      const y = base - f * (base - topo);
+      return `<line x1="${L}" y1="${y}" x2="${largura}" y2="${y}" stroke="#EDF1F8" stroke-width="1" />
+              <text x="${L - 6}" y="${y + 3}" text-anchor="end" class="eixo">${brlCurto(maior * f)}</text>`;
+    })
+    .join('');
+
+  const barras = itens
+    .map((item, i) => {
+      const valor = Number(item.valor) || 0;
+      const h = valor ? Math.max(escala(valor), 2) : 0;
+      const x = centro(i) - largBarra / 2;
+      // Futuro antes de vazio: dia que ainda não chegou também está sem
+      // lançamento, mas não é falha — não pode aparecer marcado como pendência.
+      const classe = item.futuro ? 'futura' : item.vazio ? 'vazia' : '';
+      return `
+        <g class="col ${classe}">
+          ${
+            valor
+              ? `<rect x="${x}" y="${base - h}" width="${largBarra}" height="${h}" rx="2" />`
+              : item.futuro
+                ? ''
+                : `<rect x="${x}" y="${base - 6}" width="${largBarra}" height="6" rx="2" class="marca-vazia" />`
+          }
+          <title>${escapar(item.titulo)}</title>
+        </g>`;
+    })
+    .join('');
+
+  // Média móvel: só desenha onde já existe janela cheia de dias lançados, senão
+  // o começo da linha viraria invenção.
+  const pontos = [];
+  for (let i = 0; i < itens.length; i += 1) {
+    if (itens[i].futuro) break;
+    const janela = itens.slice(Math.max(0, i - janelaMedia + 1), i + 1).filter((x) => Number(x.valor) > 0);
+    if (janela.length < Math.min(janelaMedia, 3)) continue;
+    const m = janela.reduce((a, x) => a + Number(x.valor), 0) / janela.length;
+    pontos.push(`${centro(i)},${base - escala(m)}`);
+  }
+
+  const yMedia = base - escala(media);
 
   return `
-    <div class="grafico-colunas">
+    <svg viewBox="0 0 ${largura} ${altura}" class="grafico-svg grafico-media" role="img" aria-label="${escapar(legenda)}">
+      ${linhasGuia}
+      ${barras}
+      ${
+        media
+          ? `<line x1="${L}" y1="${yMedia}" x2="${largura}" y2="${yMedia}" class="linha-media" />
+             <text x="${largura - 2}" y="${yMedia - 5}" text-anchor="end" class="rotulo-media">média ${brlCurto(media)}</text>`
+          : ''
+      }
+      ${pontos.length > 1 ? `<polyline points="${pontos.join(' ')}" class="linha-tendencia" />` : ''}
       ${itens
-        .map((i) => {
-          const altura = Math.max((Number(i.valor) / maior) * 100, i.vazio ? 0 : 3);
-          return `
-            <div class="coluna ${i.vazio ? 'vazia' : ''}" title="${escapar(i.titulo)}">
-              <div class="barra-area">
-                <span class="valor">${i.vazio ? '—' : brlCurto(i.valor)}</span>
-                <div class="barra" style="height: ${altura}%"></div>
-              </div>
-              <span class="rotulo">${escapar(i.rotulo)}</span>
-            </div>`;
-        })
+        .map((item, i) =>
+          i % rotuloSalteado === 0
+            ? `<text x="${centro(i)}" y="${base + 15}" text-anchor="middle" class="eixo">${escapar(item.rotulo)}</text>`
+            : ''
+        )
         .join('')}
-    </div>
-    ${legenda ? `<p class="grafico-legenda-simples">${legenda}</p>` : ''}
+    </svg>
+    <p class="legenda-grafico">
+      <span class="chave"><i class="amostra-barra"></i>venda do dia</span>
+      <span class="chave"><i class="amostra-media"></i>média do período</span>
+      <span class="chave"><i class="amostra-tendencia"></i>média móvel de ${janelaMedia} ${janelaMedia > 7 ? 'meses' : 'dias'}</span>
+      ${legenda ? `<span>${legenda}</span>` : ''}
+    </p>
   `;
 }
 
 function graficoVendasHTML(serie) {
-  const dias = serie.slice(-14).map((d) => ({
+  const itens = serie.map((d) => ({
     valor: d.total,
     vazio: !d.lancado,
+    futuro: d.futuro,
     rotulo: String(d.data).slice(8, 10),
-    titulo: `${dateBR(d.data)}: ${d.lancado ? brl(d.total) : 'sem lançamento'}`,
+    titulo: `${dateBR(d.data)}: ${
+      d.futuro ? 'ainda não chegou' : d.lancado ? brl(d.total) : 'sem lançamento'
+    }`,
   }));
 
-  return graficoColunasHTML(dias, {
-    legenda: 'Últimos 14 dias &middot; coluna vazia (—) é dia sem lançamento',
+  return graficoBarrasComMediaSVG(itens, {
+    janelaMedia: 7,
+    rotuloSalteado: itens.length > 20 ? 2 : 1,
+    legenda: 'coluna baixa e riscada é dia sem lançamento',
   });
 }
 
@@ -1079,10 +1159,9 @@ function graficoMesesHTML(meses) {
   });
 
   const temParcial = meses.some((m) => m.dias_lancados > 0 && m.dias_lancados < m.dias_no_mes);
-  return graficoColunasHTML(itens, {
-    legenda: temParcial
-      ? 'Mês com <strong>*</strong> tem dias sem lançamento — o total dele está incompleto'
-      : 'Últimos 6 meses',
+  return graficoBarrasComMediaSVG(itens, {
+    janelaMedia: 3,
+    legenda: temParcial ? 'mês com * tem dias sem lançamento — o total dele está incompleto' : '',
   });
 }
 
@@ -1115,10 +1194,10 @@ function resumoVendasHTML() {
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
-        <h2>Venda por dia</h2>
+        <h2>Venda por dia &mdash; mês corrente</h2>
         <span class="grupo-total">${brl(r.mes_atual)} <small>no mês</small></span>
       </div>
-      ${graficoVendasHTML(r.ultimos_30)}
+      ${graficoVendasHTML(r.dias_do_mes || r.ultimos_30)}
     </section>
 
     <section class="grupo-painel">

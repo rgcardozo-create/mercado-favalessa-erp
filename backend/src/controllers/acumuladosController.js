@@ -78,6 +78,21 @@ async function resumoVendas(req, res) {
          FROM generate_series((SELECT d FROM hoje) - 29, (SELECT d FROM hoje), interval '1 day') g(dia)
          LEFT JOIN base b ON b.data = g.dia::date) AS ultimos_30,
 
+      -- O mês corrente inteiro, do dia 1 ao último — inclusive os dias que ainda
+      -- não chegaram. O gráfico do mês só faz sentido com o mês todo à vista:
+      -- recorte de duas semanas esconde justamente a comparação com o começo do mês.
+      (SELECT COALESCE(json_agg(json_build_object(
+                'data', to_char(g.dia, 'YYYY-MM-DD'),
+                'total', COALESCE(b.total, 0),
+                'lancado', b.data IS NOT NULL,
+                'futuro', g.dia > (SELECT d FROM hoje)
+              ) ORDER BY g.dia), '[]'::json)
+         FROM generate_series(
+                date_trunc('month', (SELECT d FROM hoje))::date,
+                (date_trunc('month', (SELECT d FROM hoje)) + interval '1 month - 1 day')::date,
+                interval '1 day') g(dia)
+         LEFT JOIN base b ON b.data = g.dia::date) AS dias_do_mes,
+
       -- Fechamento mês a mês, para a comparação que não cabe na série diária.
       -- dias_lancados vai junto porque mês pela metade não se compara com mês
       -- inteiro, e sem esse número o gráfico mentiria em silêncio.
@@ -127,6 +142,7 @@ async function resumoVendas(req, res) {
     variacao_mes: variacao(r.mes_atual, r.mes_anterior),
     ultimo_lancamento: r.ultimo_lancamento,
     ultimos_30: r.ultimos_30,
+    dias_do_mes: r.dias_do_mes,
     por_mes: r.por_mes,
     faltando: r.faltando,
   });
