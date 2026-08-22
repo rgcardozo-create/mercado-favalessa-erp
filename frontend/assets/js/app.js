@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.15.0';
+const VERSAO = '1.16.0';
 
 const state = {
   sessao: getSessao(),
@@ -1043,6 +1043,7 @@ function resumoVendasHTML() {
 }
 
 const ROTULO_ADQUIRENTE = { cielo: 'Cielo', stone: 'Stone', itau: 'Rede / Itaú', tickets: 'Tickets / Vouchers' };
+const CAMPO_FECHAMENTO = { cartao: 'Cartão (TEF)', pix: 'PIX', tickets: 'Tickets', dinheiro: 'Dinheiro' };
 
 // A conciliação sabe o cartão e o ticket do dia; o PDV sabe o dinheiro. Em vez de
 // gravar sozinho, mostra o que existe e diz o que falta — um dia com só um
@@ -1075,24 +1076,29 @@ function sugestaoHTML() {
              ${importadoAte ? `Importado até: ${importadoAte}.` : 'Nenhum extrato importado ainda.'}
              Extrato de adquirente costuma sair só no dia seguinte.</p>`
           : `<table class="tabela-contas tabela-pagamentos">
-              <thead><tr><th>Origem</th><th>Transações</th><th>Bruto</th></tr></thead>
+              <thead><tr><th>Origem</th><th>Forma</th><th>Transações</th><th>Bruto</th><th>Vai para</th></tr></thead>
               <tbody>
-                ${s.por_adquirente
+                ${(s.por_forma || [])
                   .map(
-                    (a) => `<tr>
-                      <td>${ROTULO_ADQUIRENTE[a.adquirente] || a.adquirente}</td>
-                      <td>${a.transacoes}</td>
-                      <td>${brl(a.bruto)}</td>
+                    (f) => `<tr>
+                      <td>${ROTULO_ADQUIRENTE[f.adquirente] || f.adquirente}</td>
+                      <td>${escapar(f.grupo)}</td>
+                      <td>${f.transacoes}</td>
+                      <td>${brl(f.bruto)}</td>
+                      <td>${CAMPO_FECHAMENTO[f.campo] || f.campo}</td>
                     </tr>`
                   )
                   .join('')}
                 ${
                   s.sugestao.dinheiro
-                    ? `<tr><td>Dinheiro (PDV)</td><td>${s.dinheiro_lancamentos}</td><td>${brl(s.sugestao.dinheiro)}</td></tr>`
+                    ? `<tr><td>PDV</td><td>Dinheiro</td><td>${s.dinheiro_lancamentos}</td><td>${brl(s.sugestao.dinheiro)}</td><td>Dinheiro</td></tr>`
                     : ''
                 }
               </tbody>
             </table>
+            <p class="vazio">Por adquirente: ${s.por_adquirente
+              .map((a) => `${ROTULO_ADQUIRENTE[a.adquirente] || a.adquirente} ${brl(a.bruto)}`)
+              .join(' &middot; ')}</p>
             ${
               faltando.length
                 ? `<p class="vazio"><strong>Atenção:</strong>
@@ -2530,13 +2536,15 @@ function bind() {
     btnUsar.addEventListener('click', () => {
       const form = root.querySelector('[data-action="novo-acumulado"]');
       if (!form || !state.sugestaoDia) return;
-      const { cartao, tickets, dinheiro } = state.sugestaoDia.sugestao;
+      const { cartao, pix, tickets, dinheiro } = state.sugestaoDia.sugestao;
       // Só preenche: quem confere e salva é a pessoa, que sabe o que ainda falta.
       form.querySelector('input[name=cartao]').value = cartao ? cartao.toFixed(2) : '';
+      form.querySelector('input[name=pix]').value = pix ? pix.toFixed(2) : '';
       form.querySelector('input[name=tickets]').value = tickets ? tickets.toFixed(2) : '';
       form.querySelector('input[name=dinheiro]').value = dinheiro ? dinheiro.toFixed(2) : '';
       form.querySelector('input[name=data]').value = state.sugestaoDia.data;
-      form.querySelector('input[name=pix]').focus();
+      // O dinheiro é o único que o extrato não conhece: é nele que o cursor para.
+      form.querySelector('input[name=dinheiro]').focus();
     });
   }
 

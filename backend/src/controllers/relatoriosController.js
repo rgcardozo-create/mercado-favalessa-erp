@@ -1,22 +1,6 @@
 const pool = require('../db/pool');
-const { ROTULOS_TIPO, TIPOS_VALIDOS, SEM_ACENTO } = require('../db/contasQuery');
-
-// Cada adquirente escreve a forma do seu jeito ("Débito à vista", "Debito",
-// "débito"), então o agrupamento é por palavra encontrada, sem acento e em
-// minúsculas. Parcelado vem antes de crédito de propósito: "Crédito parcelado
-// loja" tem as duas palavras e é o parcelado que interessa separar, porque é
-// onde a taxa dói.
-const GRUPO_FORMA = `
-  CASE
-    WHEN ${SEM_ACENTO('t.forma')} LIKE '%parcel%' THEN 'Crédito parcelado'
-    WHEN t.categoria = 'ticket' OR ${SEM_ACENTO('t.forma')} LIKE '%voucher%'
-      OR ${SEM_ACENTO('t.forma')} LIKE '%benefic%' THEN 'Voucher / ticket'
-    WHEN ${SEM_ACENTO('t.forma')} LIKE '%debito%' THEN 'Débito'
-    WHEN ${SEM_ACENTO('t.forma')} LIKE '%credito%' THEN 'Crédito'
-    WHEN ${SEM_ACENTO('t.forma')} LIKE '%pix%' THEN 'PIX'
-    ELSE 'Outros'
-  END
-`;
+const { ROTULOS_TIPO, TIPOS_VALIDOS } = require('../db/contasQuery');
+const { GRUPO_FORMA } = require('../db/conciliacaoQuery');
 
 // Relatório consolidado por período. Três regras do SPEC.md moldam este arquivo:
 //
