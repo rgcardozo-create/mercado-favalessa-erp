@@ -11,6 +11,8 @@ router.use(authenticate, authorize('master', 'gerente'));
 
 router.get('/resumo', asyncHandler(acumuladosController.resumoVendas));
 router.get('/sugestao', asyncHandler(acumuladosController.sugestaoDoDia));
+router.get('/sugestao-periodo', asyncHandler(acumuladosController.sugestaoDoPeriodo));
+router.post('/lote', asyncHandler(acumuladosController.salvarLote));
 router.get('/', asyncHandler(acumuladosController.listar));
 router.post('/', asyncHandler(acumuladosController.criar));
 router.delete('/:id', asyncHandler(acumuladosController.deletar));
