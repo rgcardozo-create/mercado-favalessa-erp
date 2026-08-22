@@ -461,6 +461,22 @@ small.parcela { color: var(--azul); background: var(--azul-suave); border-radius
 .tabela-contas .acoes-linha button { padding: 4px 9px; font-size: 12px; font-weight: 500; }
 .linha-baixa td { background: var(--azul-suave); }
 
+/* Rolagem só na horizontal, sem teto de altura: a lista de fechamentos pode ser
+   o mês inteiro, mas no celular a tabela não cabe na largura. */
+.rolagem-x { overflow-x: auto; }
+.rolagem-x .tabela-contas { min-width: 620px; }
+
+/* Últimos fechamentos: coluna de marcação para excluir vários dias de uma vez. */
+.tabela-fechamentos .col-marca { width: 1%; text-align: center; padding-right: 0; }
+.tabela-fechamentos .col-marca input { width: 16px; height: 16px; margin: 0; accent-color: var(--azul); }
+.tabela-fechamentos tbody tr.marcada td { background: #FDECEC; }
+.tabela-fechamentos tbody tr.marcada:hover td { background: #FBE0E0; }
+#btn-excluir-marcados:disabled { opacity: 0.45; cursor: default; }
+
+/* Formulário em correção: precisa ficar claro que ali não se lança um dia novo. */
+.form-inline.em-edicao { border-color: #E0A100; box-shadow: 0 0 0 2px rgba(224, 161, 0, 0.18); }
+.form-inline.em-edicao h2 { color: #A76F00; }
+
 /* Pagamentos já feitos, dentro da conta expandida. */
 .tabela-pagamentos { margin-bottom: 12px; }
 .tabela-pagamentos th { background: #DDE6F7; }

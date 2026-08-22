@@ -12,6 +12,37 @@ function comTotal(linha) {
   return { ...linha, total };
 }
 
+// Grava um dia mexendo só nas colunas que vieram no corpo; as ausentes ficam
+// como estão. A tela de hoje não mostra POS sistema/máquina, e um dia importado
+// do v3 que tem esses valores não pode perdê-los em silêncio só porque alguém
+// corrigiu o dinheiro daquele dia.
+function comandoUpsert(corpo, usuarioId) {
+  const presente = (campo) => Object.prototype.hasOwnProperty.call(corpo, campo);
+  const campos = CAMPOS_VALOR.filter(presente);
+  const temObservacoes = presente('observacoes');
+
+  const colunas = ['data', ...campos, ...(temObservacoes ? ['observacoes'] : []), 'criado_por'];
+  const valores = [
+    corpo.data,
+    ...campos.map((campo) => Number(corpo[campo] || 0)),
+    ...(temObservacoes ? [corpo.observacoes || null] : []),
+    usuarioId,
+  ];
+  const atualizacoes = [
+    ...campos.map((campo) => `${campo} = EXCLUDED.${campo}`),
+    ...(temObservacoes ? ['observacoes = EXCLUDED.observacoes'] : []),
+    'atualizado_em = now()',
+  ];
+
+  return {
+    sql: `INSERT INTO acumulados (${colunas.join(', ')})
+          VALUES (${colunas.map((_, i) => `$${i + 1}`).join(', ')})
+          ON CONFLICT (data) DO UPDATE SET ${atualizacoes.join(', ')}
+          RETURNING *`,
+    valores,
+  };
+}
+
 async function listar(req, res) {
   const { de, ate } = req.query;
   const params = [];
@@ -27,7 +58,15 @@ async function listar(req, res) {
   }
 
   const where = condicoes.length ? `WHERE ${condicoes.join(' AND ')}` : '';
-  const { rows } = await pool.query(`SELECT * FROM acumulados ${where} ORDER BY data DESC`, params);
+  // A data volta como texto: a tela usa esse valor tanto para exibir quanto para
+  // reabrir o dia em edição, e conversão para Date no meio do caminho já trocou
+  // o dia de lugar em outros pontos do sistema.
+  const { rows } = await pool.query(
+    `SELECT id, to_char(data, 'YYYY-MM-DD') AS data, ${CAMPOS_VALOR.join(', ')},
+            observacoes, criado_por, criado_em, atualizado_em
+       FROM acumulados ${where} ORDER BY data DESC`,
+    params
+  );
 
   const acumulados = rows.map(comTotal);
   const totais = CAMPOS_VALOR.reduce((acc, campo) => {
@@ -321,17 +360,8 @@ async function salvarLote(req, res) {
   try {
     await cliente.query('BEGIN');
     for (const dia of dias) {
-      const valores = CAMPOS_VALOR.map((campo) => Number(dia[campo] || 0));
-      const { rows } = await cliente.query(
-        `INSERT INTO acumulados (data, ${CAMPOS_VALOR.join(', ')}, observacoes, criado_por)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         ON CONFLICT (data) DO UPDATE
-           SET ${CAMPOS_VALOR.map((c) => `${c} = EXCLUDED.${c}`).join(', ')},
-               observacoes = EXCLUDED.observacoes,
-               atualizado_em = now()
-         RETURNING *`,
-        [dia.data, ...valores, dia.observacoes || null, req.user.id]
-      );
+      const { sql, valores } = comandoUpsert(dia, req.user.id);
+      const { rows } = await cliente.query(sql, valores);
       salvos.push(rows[0]);
     }
     await cliente.query('COMMIT');
@@ -354,27 +384,20 @@ async function salvarLote(req, res) {
 }
 
 async function criar(req, res) {
-  const { data, observacoes } = req.body;
+  const { data } = req.body;
   if (!data) {
     return res.status(400).json({ error: 'data é obrigatória.' });
   }
 
-  const valores = CAMPOS_VALOR.map((campo) => Number(req.body[campo] || 0));
-  if (valores.some((v) => !Number.isFinite(v))) {
+  if (CAMPOS_VALOR.some((campo) => !Number.isFinite(Number(req.body[campo] || 0)))) {
     return res.status(400).json({ error: 'Todos os valores precisam ser numéricos.' });
   }
 
   // Um acumulado por dia: relançar a mesma data corrige a conferência daquele dia.
-  const { rows } = await pool.query(
-    `INSERT INTO acumulados (data, ${CAMPOS_VALOR.join(', ')}, observacoes, criado_por)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     ON CONFLICT (data) DO UPDATE
-       SET ${CAMPOS_VALOR.map((c) => `${c} = EXCLUDED.${c}`).join(', ')},
-           observacoes = EXCLUDED.observacoes,
-           atualizado_em = now()
-     RETURNING *`,
-    [data, ...valores, observacoes || null, req.user.id]
-  );
+  // É por aqui que passa também a edição de um fechamento já salvo — o dinheiro
+  // que o cliente da venda a prazo paga em mãos dias depois não vem de PDV nenhum.
+  const { sql, valores } = comandoUpsert(req.body, req.user.id);
+  const { rows } = await pool.query(sql, valores);
   const acumulado = rows[0];
 
   await registrarAuditoria({
@@ -386,6 +409,37 @@ async function criar(req, res) {
   });
 
   return res.status(201).json(comTotal(acumulado));
+}
+
+// Excluir dia a dia é aceitável para um engano; para um mês inteiro lançado
+// errado, não. Uma instrução só, portanto atômica por construção.
+async function excluirLote(req, res) {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number) : null;
+  if (!ids || !ids.length) {
+    return res.status(400).json({ error: 'Selecione ao menos um fechamento.' });
+  }
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+    return res.status(400).json({ error: 'Lista de fechamentos inválida.' });
+  }
+  if (ids.length > 200) {
+    return res.status(400).json({ error: 'Máximo de 200 fechamentos por vez.' });
+  }
+
+  const { rows } = await pool.query(
+    `DELETE FROM acumulados WHERE id = ANY($1::int[])
+     RETURNING id, to_char(data, 'YYYY-MM-DD') AS data`,
+    [ids]
+  );
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'delete-lote',
+    entidade: 'acumulados',
+    entidadeId: 0,
+    dados: { dias: rows.map((r) => r.data) },
+  });
+
+  return res.json({ excluidos: rows.length, dias: rows.map((r) => r.data) });
 }
 
 async function deletar(req, res) {
@@ -410,6 +464,7 @@ module.exports = {
   listar,
   criar,
   deletar,
+  excluirLote,
   resumoVendas,
   sugestaoDoDia,
   sugestaoDoPeriodo,

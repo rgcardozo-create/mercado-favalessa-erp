@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.19.0';
+const VERSAO = '1.20.0';
 
 const state = {
   sessao: getSessao(),
@@ -33,6 +33,13 @@ const state = {
   resumoVendas: null,
   diaAcumulado: null,
   historicoCompleto: false,
+  // Fechamento aberto para correção. O dinheiro que o cliente da venda a prazo
+  // paga em mãos só aparece dias depois e nunca passa pelo PDV — sem edição,
+  // esse dia ficaria errado para sempre.
+  editandoAcumulado: null,
+  // Fechamentos marcados para exclusão em lote (ids). Vive fora do render para
+  // sobreviver a ele.
+  acumuladosMarcados: new Set(),
   // O que a conciliação já tem para o dia escolhido, para sugerir o fechamento.
   sugestaoDia: null,
   lote: null,
@@ -180,6 +187,9 @@ async function carregarDados() {
       ]);
       state.acumulados = acumulados;
       state.resumoVendas = resumo;
+      // A marcação vale para a lista que estava na tela; recarregou, some — senão
+      // o botão passaria a falar de dias que já não existem.
+      state.acumuladosMarcados = new Set();
     } else if (state.tab === 'venda-prazo') {
       state.vendaPrazo = await apiFetch('/venda-prazo');
     } else if (state.tab === 'cadastros') {
@@ -1390,6 +1400,44 @@ function loteHTML() {
   `;
 }
 
+// O mesmo formulário serve para lançar o dia e para corrigir um já lançado: são a
+// mesma operação (POST /acumulados grava por data), e duplicar a tela só criaria
+// dois lugares para os campos divergirem.
+function formConferenciaHTML() {
+  const edicao = state.editandoAcumulado;
+  const valor = (campo) => {
+    if (!edicao) return '';
+    const n = Number(edicao[campo] || 0);
+    return n ? n.toFixed(2) : '';
+  };
+
+  return `
+    <section class="cartoes-form">
+      <form data-action="novo-acumulado" class="form-inline${edicao ? ' em-edicao' : ''}">
+        <h2>${edicao ? `Corrigindo o fechamento de ${dateBR(edicao.data)}` : 'Conferência do dia'}</h2>
+        <label>Data <input type="date" name="data" required value="${
+          edicao ? edicao.data.slice(0, 10) : state.diaAcumulado || todayISO()
+        }" /></label>
+        <label>Dinheiro <input type="number" step="0.01" name="dinheiro" value="${valor('dinheiro')}" /></label>
+        <label>Cartão (TEF) <input type="number" step="0.01" name="cartao" value="${valor('cartao')}" /></label>
+        <label>PIX <input type="number" step="0.01" name="pix" value="${valor('pix')}" /></label>
+        <label>Tickets <input type="number" step="0.01" name="tickets" value="${valor('tickets')}" /></label>
+        <label>Outras <input type="number" step="0.01" name="outras" value="${valor('outras')}" /></label>
+        <label class="campo-largo">Observações <input type="text" name="observacoes" placeholder="ex.: PDV 2 fechou 5,00 a menos" value="${
+          edicao ? escapar(edicao.observacoes || '') : ''
+        }" /></label>
+        <button type="submit">${edicao ? 'Salvar correção' : 'Salvar'}</button>
+        ${edicao ? '<button type="button" id="btn-cancelar-edicao" class="secundario">Cancelar</button>' : ''}
+      </form>
+    </section>
+    <p class="usuario-atual">${
+      edicao
+        ? 'Os valores abaixo são os que estão gravados. Ajuste o que mudou — por exemplo o dinheiro recebido em mãos depois — e salve.'
+        : 'Uma conferência por dia — salvar a mesma data atualiza o registro existente.'
+    }</p>
+  `;
+}
+
 function acumuladoHTML() {
   const cabecalho = cabecalhoHTML('Acumulado');
   if (!state.acumulados) {
@@ -1397,6 +1445,11 @@ function acumuladoHTML() {
   }
 
   const { acumulados, totais } = state.acumulados;
+  const visiveis = state.historicoCompleto ? acumulados : acumulados.slice(0, 7);
+  // Só conta o que está na tela: marcar um dia e depois recolher a lista não pode
+  // fazer o botão prometer excluir algo que a pessoa não está vendo.
+  const marcados = visiveis.filter((a) => state.acumuladosMarcados.has(a.id)).length;
+
   return `
     ${cabecalho}
 
@@ -1406,20 +1459,7 @@ function acumuladoHTML() {
 
     ${loteHTML()}
 
-    <section class="cartoes-form">
-      <form data-action="novo-acumulado" class="form-inline">
-        <h2>Conferência do dia</h2>
-        <label>Data <input type="date" name="data" required value="${state.diaAcumulado || todayISO()}" /></label>
-        <label>Dinheiro <input type="number" step="0.01" name="dinheiro" /></label>
-        <label>Cartão (TEF) <input type="number" step="0.01" name="cartao" /></label>
-        <label>PIX <input type="number" step="0.01" name="pix" /></label>
-        <label>Tickets <input type="number" step="0.01" name="tickets" /></label>
-        <label>Outras <input type="number" step="0.01" name="outras" /></label>
-        <label class="campo-largo">Observações <input type="text" name="observacoes" placeholder="ex.: PDV 2 fechou 5,00 a menos" /></label>
-        <button type="submit">Salvar</button>
-      </form>
-    </section>
-    <p class="usuario-atual">Uma conferência por dia — salvar a mesma data atualiza o registro existente.</p>
+    ${formConferenciaHTML()}
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
@@ -1432,15 +1472,30 @@ function acumuladoHTML() {
               }</button>`
             : ''
         }
+        ${
+          visiveis.length
+            ? `<button type="button" id="btn-excluir-marcados" class="perigo" ${
+                marcados ? '' : 'disabled'
+              }>Excluir marcados${marcados ? ` (${marcados})` : ''}</button>`
+            : ''
+        }
       </div>
       ${
         acumulados.length
-          ? `<table class="tabela-contas">
-              <thead><tr><th>Data</th><th>Dinheiro</th><th>Cartão</th><th>PIX</th><th>Tickets</th><th>Outras</th><th>Total</th><th>Ações</th></tr></thead>
+          ? `<div class="rolagem-x"><table class="tabela-contas tabela-fechamentos">
+              <thead><tr>
+                <th class="col-marca"><input type="checkbox" id="marcar-todos-acumulados" title="Marcar os dias mostrados" ${
+                  marcados && marcados === visiveis.length ? 'checked' : ''
+                } /></th>
+                <th>Data</th><th>Dinheiro</th><th>Cartão</th><th>PIX</th><th>Tickets</th><th>Outras</th><th>Total</th><th>Ações</th>
+              </tr></thead>
               <tbody>
-                ${(state.historicoCompleto ? acumulados : acumulados.slice(0, 7))
+                ${visiveis
                   .map(
-                    (a) => `<tr>
+                    (a) => `<tr class="${state.acumuladosMarcados.has(a.id) ? 'marcada' : ''}">
+                      <td class="col-marca"><input type="checkbox" data-marca-acumulado="${a.id}" ${
+                        state.acumuladosMarcados.has(a.id) ? 'checked' : ''
+                      } /></td>
                       <td>${dateBR(a.data)}</td>
                       <td>${brl(a.dinheiro)}</td>
                       <td>${brl(a.cartao)}</td>
@@ -1448,12 +1503,15 @@ function acumuladoHTML() {
                       <td>${brl(a.tickets)}</td>
                       <td>${brl(a.outras)}</td>
                       <td><strong>${brl(a.total)}</strong>${a.observacoes ? `<br /><small>${escapar(a.observacoes)}</small>` : ''}</td>
-                      <td><button data-action="excluir-acumulado" data-id="${a.id}" class="perigo">Excluir</button></td>
+                      <td class="acoes"><div class="acoes-linha">
+                        <button data-action="editar-acumulado" data-id="${a.id}" class="secundario">Editar</button>
+                        <button data-action="excluir-acumulado" data-id="${a.id}" class="perigo">Excluir</button>
+                      </div></td>
                     </tr>`
                   )
                   .join('')}
               </tbody>
-            </table>`
+            </table></div>`
           : '<p class="vazio">Nenhuma conferência registrada.</p>'
       }
     </section>
@@ -2829,6 +2887,7 @@ function bind() {
     btn.addEventListener('click', () => {
       state.diaAcumulado = btn.dataset.dia;
       state.sugestaoDia = null;
+      state.editandoAcumulado = null;
       render();
       const campo = root.querySelector('[data-action="novo-acumulado"] input[name=dinheiro]');
       if (campo) campo.focus();
@@ -2974,6 +3033,78 @@ function bind() {
   root.querySelectorAll('[data-action="excluir-acumulado"]').forEach((btn) => {
     btn.addEventListener('click', () => onExcluirAcumulado(Number(btn.dataset.id)));
   });
+
+  root.querySelectorAll('[data-action="editar-acumulado"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.id);
+      const dia = (state.acumulados.acumulados || []).find((a) => a.id === id);
+      if (!dia) return;
+      state.editandoAcumulado = dia;
+      state.diaAcumulado = null;
+      state.sugestaoDia = null;
+      render();
+      const campo = root.querySelector('[data-action="novo-acumulado"] input[name=dinheiro]');
+      if (campo) {
+        campo.scrollIntoView({ block: 'center' });
+        campo.focus();
+      }
+    });
+  });
+
+  const btnCancelarEdicao = root.querySelector('#btn-cancelar-edicao');
+  if (btnCancelarEdicao) {
+    btnCancelarEdicao.addEventListener('click', () => {
+      state.editandoAcumulado = null;
+      render();
+    });
+  }
+
+  root.querySelectorAll('[data-marca-acumulado]').forEach((caixa) => {
+    caixa.addEventListener('change', () => {
+      const id = Number(caixa.dataset.marcaAcumulado);
+      if (caixa.checked) state.acumuladosMarcados.add(id);
+      else state.acumuladosMarcados.delete(id);
+      caixa.closest('tr').classList.toggle('marcada', caixa.checked);
+      atualizarMarcacaoAcumulados();
+    });
+  });
+
+  const marcarTodos = root.querySelector('#marcar-todos-acumulados');
+  if (marcarTodos) {
+    marcarTodos.addEventListener('change', () => {
+      root.querySelectorAll('[data-marca-acumulado]').forEach((caixa) => {
+        caixa.checked = marcarTodos.checked;
+        const id = Number(caixa.dataset.marcaAcumulado);
+        if (marcarTodos.checked) state.acumuladosMarcados.add(id);
+        else state.acumuladosMarcados.delete(id);
+        caixa.closest('tr').classList.toggle('marcada', marcarTodos.checked);
+      });
+      atualizarMarcacaoAcumulados();
+    });
+  }
+
+  const btnExcluirMarcados = root.querySelector('#btn-excluir-marcados');
+  if (btnExcluirMarcados) btnExcluirMarcados.addEventListener('click', onExcluirAcumuladosMarcados);
+}
+
+// Marcar uma caixa não redesenha a tela — redesenhar perderia a rolagem no meio
+// da lista, justamente onde a pessoa está marcando. Só o que depende da contagem
+// é atualizado na mão.
+function atualizarMarcacaoAcumulados() {
+  const caixas = [...root.querySelectorAll('[data-marca-acumulado]')];
+  const marcados = caixas.filter((c) => c.checked).length;
+
+  const btn = root.querySelector('#btn-excluir-marcados');
+  if (btn) {
+    btn.disabled = marcados === 0;
+    btn.textContent = marcados ? `Excluir marcados (${marcados})` : 'Excluir marcados';
+  }
+
+  const todos = root.querySelector('#marcar-todos-acumulados');
+  if (todos) {
+    todos.checked = marcados > 0 && marcados === caixas.length;
+    todos.indeterminate = marcados > 0 && marcados < caixas.length;
+  }
 }
 
 async function onConsultarLote(ev) {
@@ -3067,6 +3198,7 @@ async function onNovoAcumulado(ev) {
     // pendentes e deixar a data velha no formulário só causaria lançamento errado.
     state.diaAcumulado = null;
     state.sugestaoDia = null;
+    state.editandoAcumulado = null;
     carregarDados();
   } catch (err) {
     state.erro = err.message;
@@ -3485,10 +3617,37 @@ async function onFiltroPeriodo(ev) {
   carregarDados();
 }
 
+async function onExcluirAcumuladosMarcados() {
+  const ids = [...root.querySelectorAll('[data-marca-acumulado]')]
+    .filter((c) => c.checked)
+    .map((c) => Number(c.dataset.marcaAcumulado));
+  if (!ids.length) return;
+  if (!confirm(`Excluir ${ids.length} fechamento(s)? Essa ação não pode ser desfeita.`)) return;
+
+  try {
+    const r = await apiFetch('/acumulados/excluir-lote', {
+      method: 'POST',
+      body: JSON.stringify({ ids }),
+    });
+    state.erro = null;
+    // Se o dia aberto para correção foi um dos excluídos, o formulário não pode
+    // continuar de pé prometendo salvar algo que já não existe.
+    if (state.editandoAcumulado && ids.includes(state.editandoAcumulado.id)) {
+      state.editandoAcumulado = null;
+    }
+    alert(`${r.excluidos} fechamento(s) excluído(s).`);
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
 async function onExcluirAcumulado(id) {
   if (!confirm('Excluir esta conferência? Essa ação não pode ser desfeita.')) return;
   try {
     await apiFetch(`/acumulados/${id}`, { method: 'DELETE' });
+    if (state.editandoAcumulado && state.editandoAcumulado.id === id) state.editandoAcumulado = null;
     carregarDados();
   } catch (err) {
     state.erro = err.message;
