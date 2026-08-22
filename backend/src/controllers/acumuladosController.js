@@ -203,6 +203,140 @@ async function sugestaoDoDia(req, res) {
   });
 }
 
+// Mesma sugestão, mas para um período inteiro: um extrato importado de uma vez
+// vira dezenas de dias para fechar, e fechar um por um é o mesmo clique repetido
+// vinte vezes. Aqui cada dia já vem com o que o extrato sabe; só falta o
+// dinheiro, que o extrato nunca sabe.
+async function sugestaoDoPeriodo(req, res) {
+  const { de, ate } = req.query;
+  const dataValida = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+  if (!dataValida(de) || !dataValida(ate)) {
+    return res.status(400).json({ error: 'Informe de e ate no formato AAAA-MM-DD.' });
+  }
+  if (de > ate) {
+    return res.status(400).json({ error: 'A data inicial precisa ser anterior à final.' });
+  }
+
+  // Limite de dois meses: acima disso a tela vira uma parede de campos, e
+  // conferência que ninguém consegue ler não é conferência.
+  const { rows: tamanho } = await pool.query(`SELECT ($2::date - $1::date) + 1 AS dias`, [de, ate]);
+  if (Number(tamanho[0].dias) > 62) {
+    return res.status(400).json({ error: 'Período muito longo: escolha no máximo 62 dias.' });
+  }
+
+  const { rows: transacoes } = await pool.query(
+    `SELECT to_char(t.data, 'YYYY-MM-DD') AS data,
+            t.adquirente::text AS adquirente,
+            ${GRUPO_FORMA} AS grupo,
+            count(*)::int AS transacoes,
+            COALESCE(sum(t.valor_bruto), 0) AS bruto
+       FROM conciliacao_transacoes t
+      WHERE t.data BETWEEN $1 AND $2
+      GROUP BY 1, 2, 3`,
+    [de, ate]
+  );
+
+  const { rows: dinheiro } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM-DD') AS data, COALESCE(sum(valor), 0) AS total
+       FROM conciliacao_dinheiro WHERE data BETWEEN $1 AND $2 GROUP BY 1`,
+    [de, ate]
+  );
+
+  // O que já foi fechado: quem repete um período precisa saber o que vai ser
+  // substituído antes de salvar, não depois.
+  const { rows: existentes } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM-DD') AS data, ${CAMPOS_VALOR.join(', ')}
+       FROM acumulados WHERE data BETWEEN $1 AND $2`,
+    [de, ate]
+  );
+
+  const { rows: dias } = await pool.query(
+    `SELECT to_char(g.dia, 'YYYY-MM-DD') AS data
+       FROM generate_series($1::date, $2::date, interval '1 day') g(dia) ORDER BY g.dia`,
+    [de, ate]
+  );
+
+  const lista = dias.map(({ data }) => {
+    const doDia = transacoes.filter((t) => t.data === data);
+    const sugestao = { cartao: 0, pix: 0, tickets: 0, dinheiro: 0 };
+    for (const linha of doDia) {
+      sugestao[campoDoFechamento(linha.adquirente, linha.grupo)] += Number(linha.bruto);
+    }
+    const emDinheiro = dinheiro.find((d) => d.data === data);
+    sugestao.dinheiro = emDinheiro ? Number(emDinheiro.total) : 0;
+
+    const jaLancado = existentes.find((e) => e.data === data);
+
+    return {
+      data,
+      transacoes: doDia.reduce((a, t) => a + t.transacoes, 0),
+      sugestao,
+      lancado: jaLancado
+        ? CAMPOS_VALOR.reduce((acc, campo) => ({ ...acc, [campo]: Number(jaLancado[campo]) }), {})
+        : null,
+    };
+  });
+
+  return res.json({ de, ate, dias: lista });
+}
+
+// Salva o período inteiro de uma vez. Tudo numa transação: um lote gravado pela
+// metade deixaria dias fechados e dias não, sem ninguém saber quais.
+async function salvarLote(req, res) {
+  const dias = Array.isArray(req.body.dias) ? req.body.dias : null;
+  if (!dias || !dias.length) {
+    return res.status(400).json({ error: 'Envie a lista de dias a salvar.' });
+  }
+  if (dias.length > 62) {
+    return res.status(400).json({ error: 'Máximo de 62 dias por vez.' });
+  }
+
+  for (const dia of dias) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dia.data || '')) {
+      return res.status(400).json({ error: `Data inválida no lote: ${dia.data}` });
+    }
+    if (CAMPOS_VALOR.some((c) => !Number.isFinite(Number(dia[c] || 0)))) {
+      return res.status(400).json({ error: `Valor não numérico no dia ${dia.data}.` });
+    }
+  }
+
+  const cliente = await pool.connect();
+  const salvos = [];
+  try {
+    await cliente.query('BEGIN');
+    for (const dia of dias) {
+      const valores = CAMPOS_VALOR.map((campo) => Number(dia[campo] || 0));
+      const { rows } = await cliente.query(
+        `INSERT INTO acumulados (data, ${CAMPOS_VALOR.join(', ')}, observacoes, criado_por)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (data) DO UPDATE
+           SET ${CAMPOS_VALOR.map((c) => `${c} = EXCLUDED.${c}`).join(', ')},
+               observacoes = EXCLUDED.observacoes,
+               atualizado_em = now()
+         RETURNING *`,
+        [dia.data, ...valores, dia.observacoes || null, req.user.id]
+      );
+      salvos.push(rows[0]);
+    }
+    await cliente.query('COMMIT');
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'lote',
+    entidade: 'acumulados',
+    entidadeId: 0,
+    dados: { dias: salvos.map((a) => String(a.data).slice(0, 10)) },
+  });
+
+  return res.status(201).json({ salvos: salvos.length, dias: salvos.map(comTotal) });
+}
+
 async function criar(req, res) {
   const { data, observacoes } = req.body;
   if (!data) {
@@ -256,4 +390,12 @@ async function deletar(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { listar, criar, deletar, resumoVendas, sugestaoDoDia };
+module.exports = {
+  listar,
+  criar,
+  deletar,
+  resumoVendas,
+  sugestaoDoDia,
+  sugestaoDoPeriodo,
+  salvarLote,
+};

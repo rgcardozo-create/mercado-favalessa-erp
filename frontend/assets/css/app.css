@@ -311,6 +311,17 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .periodo-impresso { display: none; }
 .nota-relatorio { margin-top: 16px; }
 
+/* Fechamento em lote: uma linha por dia, campos estreitos, cabeçalho fixo para
+   não perder a referência ao rolar trinta dias. */
+.rolagem-tabela { max-height: 420px; overflow: auto; border: 1px solid var(--borda); border-radius: 10px; }
+.tabela-lote { border: none; border-radius: 0; }
+.tabela-lote thead th { position: sticky; top: 0; z-index: 1; }
+.tabela-lote td { padding: 4px 6px; }
+.tabela-lote td:first-child { white-space: nowrap; }
+.tabela-lote td:first-child small { display: block; color: var(--texto-suave); font-size: 10px; }
+.tabela-lote input.campo-lote { padding: 5px 7px; font-size: 12px; width: 100%; min-width: 82px; margin: 0; }
+.tabela-lote tr.ja-lancado td:first-child strong { color: var(--verde); }
+
 /* Painel gerencial */
 .barra-ano { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
 .barra-ano label { max-width: 140px; }

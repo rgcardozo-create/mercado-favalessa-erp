@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.16.0';
+const VERSAO = '1.17.0';
 
 const state = {
   sessao: getSessao(),
@@ -35,6 +35,9 @@ const state = {
   historicoCompleto: false,
   // O que a conciliação já tem para o dia escolhido, para sugerir o fechamento.
   sugestaoDia: null,
+  lote: null,
+  lotePeriodo: { de: '', ate: '' },
+  loteCarregando: false,
   sugestaoCarregando: false,
   vendaPrazo: null,
   cadastros: null,
@@ -1127,6 +1130,94 @@ function sugestaoHTML() {
   `;
 }
 
+// Fechamento em lote. Um extrato do mês importado de uma vez vira trinta dias
+// para fechar; fazer um por um é o mesmo clique repetido trinta vezes. Aqui cada
+// dia já vem com o que o extrato sabe e só falta digitar o dinheiro, que é o
+// único valor que nenhum extrato conhece.
+function loteHTML() {
+  const l = state.lote;
+
+  const cabecalhoPeriodo = `
+    <form data-action="lote-consultar" class="form-inline">
+      <label>De <input type="date" name="de" required value="${escapar((l && l.de) || state.lotePeriodo.de)}" /></label>
+      <label>Até <input type="date" name="ate" required value="${escapar((l && l.ate) || state.lotePeriodo.ate)}" /></label>
+      <button type="submit">${l ? 'Atualizar lista' : 'Montar lista'}</button>
+    </form>
+  `;
+
+  if (!l) {
+    return `
+      <section class="grupo-painel">
+        <div class="grupo-cabecalho"><h2>Fechar vários dias de uma vez</h2></div>
+        ${cabecalhoPeriodo}
+        <p class="vazio">
+          Escolha o período que você acabou de importar. Cada dia vem com cartão, PIX e tickets
+          já preenchidos pelo extrato — você só digita o dinheiro e salva tudo de uma vez.
+        </p>
+      </section>
+    `;
+  }
+
+  const CAMPOS = [
+    ['dinheiro', 'Dinheiro'],
+    ['cartao', 'Cartão'],
+    ['pix', 'PIX'],
+    ['tickets', 'Tickets'],
+    ['pos_maquina', 'Maq. fora'],
+    ['outras', 'Outras'],
+  ];
+
+  const linha = (dia) => {
+    // Dia já fechado abre com o que está gravado; dia novo, com o que o extrato
+    // sugere. Assim salvar de novo nunca apaga uma conferência feita à mão.
+    const base = dia.lancado || dia.sugestao;
+    return `
+      <tr data-dia="${dia.data}" class="${dia.lancado ? 'ja-lancado' : ''}">
+        <td>
+          <strong>${dateBR(dia.data)}</strong>
+          <small>${dia.lancado ? 'já lançado' : dia.transacoes ? `${dia.transacoes} transações` : 'sem extrato'}</small>
+        </td>
+        ${CAMPOS.map(
+          ([campo]) => `<td>
+            <input type="number" step="0.01" name="${campo}" class="campo-lote"
+              value="${Number(base[campo] || 0) ? Number(base[campo]).toFixed(2) : ''}" />
+          </td>`
+        ).join('')}
+      </tr>
+    `;
+  };
+
+  const comMovimento = l.dias.filter((d) => d.transacoes || d.lancado);
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Fechar vários dias de uma vez</h2>
+        <span class="grupo-total">${l.dias.length} dia(s) &middot; ${comMovimento.length} com movimento</span>
+      </div>
+      ${cabecalhoPeriodo}
+
+      <div class="rolagem-tabela">
+        <table class="tabela-contas tabela-lote">
+          <thead>
+            <tr><th>Dia</th>${CAMPOS.map(([, rotulo]) => `<th>${rotulo}</th>`).join('')}</tr>
+          </thead>
+          <tbody>${l.dias.map(linha).join('')}</tbody>
+        </table>
+      </div>
+
+      <div class="acoes-alerta">
+        <button type="button" id="btn-salvar-lote">Salvar os dias preenchidos</button>
+        <button type="button" id="btn-cancelar-lote" class="secundario">Fechar</button>
+      </div>
+      <p class="vazio">
+        Dia com todos os campos zerados é ignorado ao salvar. Dia já lançado abre com o que está
+        gravado, não com o extrato — salvar de novo não apaga conferência feita à mão.
+      </p>
+    </section>
+  `;
+}
+
 function acumuladoHTML() {
   const cabecalho = cabecalhoHTML('Acumulado');
   if (!state.acumulados) {
@@ -1140,6 +1231,8 @@ function acumuladoHTML() {
     ${resumoVendasHTML()}
 
     ${sugestaoHTML()}
+
+    ${loteHTML()}
 
     <section class="cartoes-form">
       <form data-action="novo-acumulado" class="form-inline">
@@ -2528,6 +2621,20 @@ function bind() {
     });
   }
 
+  const formLote = root.querySelector('[data-action="lote-consultar"]');
+  if (formLote) formLote.addEventListener('submit', onConsultarLote);
+
+  const btnSalvarLote = root.querySelector('#btn-salvar-lote');
+  if (btnSalvarLote) btnSalvarLote.addEventListener('click', onSalvarLote);
+
+  const btnCancelarLote = root.querySelector('#btn-cancelar-lote');
+  if (btnCancelarLote) {
+    btnCancelarLote.addEventListener('click', () => {
+      state.lote = null;
+      render();
+    });
+  }
+
   const btnConsultar = root.querySelector('[data-action="consultar-sugestao"]');
   if (btnConsultar) btnConsultar.addEventListener('click', onConsultarSugestao);
 
@@ -2680,6 +2787,58 @@ function bind() {
   root.querySelectorAll('[data-action="excluir-acumulado"]').forEach((btn) => {
     btn.addEventListener('click', () => onExcluirAcumulado(Number(btn.dataset.id)));
   });
+}
+
+async function onConsultarLote(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  state.lotePeriodo = { de: fd.get('de'), ate: fd.get('ate') };
+  state.erro = null;
+  try {
+    state.lote = await apiFetch(`/acumulados/sugestao-periodo?de=${fd.get('de')}&ate=${fd.get('ate')}`);
+  } catch (err) {
+    state.erro = err.message;
+    state.lote = null;
+  }
+  render();
+}
+
+async function onSalvarLote() {
+  // Os valores são lidos da tela, não do estado: eles foram digitados agora e
+  // nunca passaram por render nenhum.
+  const linhas = [...root.querySelectorAll('.tabela-lote tbody tr')];
+  const dias = linhas
+    .map((tr) => {
+      const dia = { data: tr.dataset.dia };
+      let algum = false;
+      for (const campo of tr.querySelectorAll('input.campo-lote')) {
+        const valor = Number(campo.value || 0);
+        dia[campo.name] = valor;
+        if (valor) algum = true;
+      }
+      return algum ? dia : null;
+    })
+    .filter(Boolean);
+
+  if (!dias.length) {
+    state.erro = 'Nenhum dia preenchido: informe ao menos um valor antes de salvar.';
+    render();
+    return;
+  }
+
+  if (!confirm(`Salvar o fechamento de ${dias.length} dia(s)?`)) return;
+
+  try {
+    const r = await apiFetch('/acumulados/lote', { method: 'POST', body: JSON.stringify({ dias }) });
+    state.erro = null;
+    state.lote = null;
+    state.sugestaoDia = null;
+    alert(`${r.salvos} dia(s) salvos.`);
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 async function onConsultarSugestao() {
