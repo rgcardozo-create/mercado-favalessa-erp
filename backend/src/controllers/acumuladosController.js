@@ -109,28 +109,8 @@ async function resumoVendas(req, res) {
 
       to_char((SELECT max(data) FROM base), 'YYYY-MM-DD') AS ultimo_lancamento,
 
-      -- Série do mês para o gráfico, com os dias vazios explícitos.
-      (SELECT COALESCE(json_agg(json_build_object(
-                'data', to_char(g.dia, 'YYYY-MM-DD'),
-                'total', COALESCE(b.total, 0),
-                'lancado', b.data IS NOT NULL) ORDER BY g.dia), '[]'::json)
-         FROM generate_series((SELECT d FROM hoje) - 29, (SELECT d FROM hoje), interval '1 day') g(dia)
-         LEFT JOIN base b ON b.data = g.dia::date) AS ultimos_30,
-
-      -- O mês corrente inteiro, do dia 1 ao último — inclusive os dias que ainda
-      -- não chegaram. O gráfico do mês só faz sentido com o mês todo à vista:
-      -- recorte de duas semanas esconde justamente a comparação com o começo do mês.
-      (SELECT COALESCE(json_agg(json_build_object(
-                'data', to_char(g.dia, 'YYYY-MM-DD'),
-                'total', COALESCE(b.total, 0),
-                'lancado', b.data IS NOT NULL,
-                'futuro', g.dia > (SELECT d FROM hoje)
-              ) ORDER BY g.dia), '[]'::json)
-         FROM generate_series(
-                date_trunc('month', (SELECT d FROM hoje))::date,
-                (date_trunc('month', (SELECT d FROM hoje)) + interval '1 month - 1 day')::date,
-                interval '1 day') g(dia)
-         LEFT JOIN base b ON b.data = g.dia::date) AS dias_do_mes,
+      -- A série diária de um mês sai de /acumulados/dias, que aceita o mês
+      -- escolhido e um segundo mês para comparar — aqui ela só se repetiria.
 
       -- Fechamento mês a mês, para a comparação que não cabe na série diária.
       -- dias_lancados vai junto porque mês pela metade não se compara com mês
@@ -180,8 +160,6 @@ async function resumoVendas(req, res) {
     mes_anterior: num(r.mes_anterior),
     variacao_mes: variacao(r.mes_atual, r.mes_anterior),
     ultimo_lancamento: r.ultimo_lancamento,
-    ultimos_30: r.ultimos_30,
-    dias_do_mes: r.dias_do_mes,
     por_mes: r.por_mes,
     faltando: r.faltando,
   });
@@ -193,6 +171,81 @@ async function resumoVendas(req, res) {
 // Sugestão, não gravação automática: o dia só está completo quando os três
 // adquirentes foram importados, e quase nunca estão no mesmo momento. Preencher
 // sozinho geraria um acumulado com metade da venda e cara de número fechado.
+// Venda dia a dia de um mês escolhido, opcionalmente com um segundo mês ao lado
+// para comparar. O gráfico do resumo mostra sempre o mês corrente; para saber se
+// este mês está melhor que o passado é preciso poder escolher os dois meses e
+// olhar dia contra dia — é isso que este endpoint serve.
+const MES_VALIDO = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+async function serieDoMes(mes) {
+  const TOTAL = CAMPOS_VALOR.map((c) => `COALESCE(a.${c}, 0)`).join(' + ');
+  const { rows } = await pool.query(
+    `WITH hoje AS (SELECT ${HOJE_SP} AS d),
+     base AS (SELECT a.data, (${TOTAL}) AS total FROM acumulados a)
+     SELECT to_char(g.dia, 'YYYY-MM-DD') AS data,
+            EXTRACT(DAY FROM g.dia)::int AS dia,
+            -- 0 = domingo. O nome do dia sai em JS: to_char depende do lc_time
+            -- do servidor e no Railway ele não é português.
+            EXTRACT(DOW FROM g.dia)::int AS semana,
+            COALESCE(b.total, 0) AS total,
+            (b.data IS NOT NULL) AS lancado,
+            (g.dia > (SELECT d FROM hoje)) AS futuro
+       FROM generate_series($1::date, ($1::date + interval '1 month - 1 day')::date, interval '1 day') g(dia)
+       LEFT JOIN base b ON b.data = g.dia::date
+      ORDER BY g.dia`,
+    [`${mes}-01`]
+  );
+
+  const dias = rows.map((r) => ({
+    data: r.data,
+    dia: r.dia,
+    semana: r.semana,
+    total: Number(r.total),
+    lancado: r.lancado,
+    futuro: r.futuro,
+  }));
+
+  const lancados = dias.filter((d) => d.lancado);
+  return {
+    mes,
+    dias,
+    total: lancados.reduce((a, d) => a + d.total, 0),
+    dias_lancados: lancados.length,
+    dias_no_mes: dias.length,
+  };
+}
+
+async function diaADia(req, res) {
+  const { rows: mesesRows } = await pool.query(
+    `WITH hoje AS (SELECT ${HOJE_SP} AS d)
+     SELECT to_char(m, 'YYYY-MM') AS mes FROM (
+       SELECT DISTINCT date_trunc('month', data) AS m FROM acumulados
+       UNION SELECT date_trunc('month', (SELECT d FROM hoje))
+     ) t ORDER BY m DESC`
+  );
+  const meses = mesesRows.map((r) => r.mes);
+
+  const mes = req.query.mes || meses[0];
+  if (!MES_VALIDO.test(mes)) {
+    return res.status(400).json({ error: 'Mês inválido: use AAAA-MM.' });
+  }
+
+  const comparar = req.query.comparar || null;
+  if (comparar && !MES_VALIDO.test(comparar)) {
+    return res.status(400).json({ error: 'Mês de comparação inválido: use AAAA-MM.' });
+  }
+  if (comparar === mes) {
+    return res.status(400).json({ error: 'Escolha dois meses diferentes para comparar.' });
+  }
+
+  const [principal, comparacao] = await Promise.all([
+    serieDoMes(mes),
+    comparar ? serieDoMes(comparar) : Promise.resolve(null),
+  ]);
+
+  return res.json({ meses, principal, comparacao });
+}
+
 async function sugestaoDoDia(req, res) {
   const data = /^\d{4}-\d{2}-\d{2}$/.test(req.query.data || '') ? req.query.data : null;
   if (!data) return res.status(400).json({ error: 'Informe a data no formato AAAA-MM-DD.' });
@@ -466,6 +519,7 @@ module.exports = {
   deletar,
   excluirLote,
   resumoVendas,
+  diaADia,
   sugestaoDoDia,
   sugestaoDoPeriodo,
   salvarLote,

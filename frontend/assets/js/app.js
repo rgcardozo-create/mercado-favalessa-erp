@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.20.0';
+const VERSAO = '1.21.0';
 
 const state = {
   sessao: getSessao(),
@@ -31,6 +31,10 @@ const state = {
   acumulados: null,
   // Resumo de vendas: responde "estou vendendo bem?" e cobra os dias em branco.
   resumoVendas: null,
+  // Venda dia a dia do mês escolhido, e o mês posto ao lado para comparar.
+  diaADia: null,
+  mesDiaADia: null,
+  mesComparar: '',
   diaAcumulado: null,
   historicoCompleto: false,
   // Fechamento aberto para correção. O dinheiro que o cliente da venda a prazo
@@ -155,6 +159,15 @@ function periodoOuPadrao() {
   return { de: `${ano}-${mes}-01`, ate: `${ano}-${mes}-${String(ultimoDia).padStart(2, '0')}` };
 }
 
+// Sem mês escolhido a API decide (mês corrente); com mês escolhido é ele que
+// manda. Assim a primeira abertura da tela não precisa saber que meses existem.
+function consultaDiaADia() {
+  const partes = [];
+  if (state.mesDiaADia) partes.push(`mes=${state.mesDiaADia}`);
+  if (state.mesComparar) partes.push(`comparar=${state.mesComparar}`);
+  return partes.length ? `?${partes.join('&')}` : '';
+}
+
 async function carregarDados() {
   state.carregando = true;
   state.erro = null;
@@ -181,12 +194,16 @@ async function carregarDados() {
     } else if (state.tab === 'conciliacao') {
       state.conciliacao = await apiFetch('/conciliacao');
     } else if (state.tab === 'acumulado') {
-      const [acumulados, resumo] = await Promise.all([
+      const [acumulados, resumo, diaADia] = await Promise.all([
         apiFetch('/acumulados'),
         apiFetch('/acumulados/resumo'),
+        apiFetch(`/acumulados/dias${consultaDiaADia()}`),
       ]);
       state.acumulados = acumulados;
       state.resumoVendas = resumo;
+      state.diaADia = diaADia;
+      state.mesDiaADia = diaADia.principal.mes;
+      state.mesComparar = diaADia.comparacao ? diaADia.comparacao.mes : '';
       // A marcação vale para a lista que estava na tela; recarregou, some — senão
       // o botão passaria a falar de dias que já não existem.
       state.acumuladosMarcados = new Set();
@@ -1049,7 +1066,10 @@ function faixaVendasHTML() {
 //
 // O mês inteiro cabe porque a barra é fina e o rótulo do dia sai de dois em
 // dois: com trinta e um rótulos colados não se lê nenhum.
-function graficoBarrasComMediaSVG(itens, { janelaMedia = 7, legenda = '', rotuloSalteado = 1 } = {}) {
+function graficoBarrasComMediaSVG(
+  itens,
+  { janelaMedia = 7, legenda = '', rotuloSalteado = 1, unidade = 'dia' } = {}
+) {
   const L = 48;
   const largura = 760;
   const altura = 220;
@@ -1131,30 +1151,240 @@ function graficoBarrasComMediaSVG(itens, { janelaMedia = 7, legenda = '', rotulo
         .join('')}
     </svg>
     <p class="legenda-grafico">
-      <span class="chave"><i class="amostra-barra"></i>venda do dia</span>
+      <span class="chave"><i class="amostra-barra"></i>venda do ${unidade}</span>
       <span class="chave"><i class="amostra-media"></i>média do período</span>
-      <span class="chave"><i class="amostra-tendencia"></i>média móvel de ${janelaMedia} ${janelaMedia > 7 ? 'meses' : 'dias'}</span>
+      <span class="chave"><i class="amostra-tendencia"></i>média móvel de ${janelaMedia} ${unidade === 'mês' ? 'meses' : `${unidade}s`}</span>
       ${legenda ? `<span>${legenda}</span>` : ''}
     </p>
   `;
 }
 
-function graficoVendasHTML(serie) {
-  const itens = serie.map((d) => ({
-    valor: d.total,
-    vazio: !d.lancado,
-    futuro: d.futuro,
-    rotulo: String(d.data).slice(8, 10),
-    titulo: `${dateBR(d.data)}: ${
-      d.futuro ? 'ainda não chegou' : d.lancado ? brl(d.total) : 'sem lançamento'
-    }`,
-  }));
+const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
 
-  return graficoBarrasComMediaSVG(itens, {
-    janelaMedia: 7,
-    rotuloSalteado: itens.length > 20 ? 2 : 1,
-    legenda: 'coluna baixa e riscada é dia sem lançamento',
-  });
+// Nome do mês por extenso, para o seletor: no gráfico "ago/26" basta, mas numa
+// lista de escolher é o nome inteiro que se lê sem pensar.
+const MESES_EXTENSO = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro',
+];
+function mesExtenso(iso) {
+  const [ano, mes] = String(iso).split('-');
+  return `${MESES_EXTENSO[Number(mes) - 1]}/${ano}`;
+}
+
+// Venda dia a dia de um mês, com um segundo mês opcional ao lado. Diferente do
+// gráfico de meses, aqui cada barra é um dia e o eixo diz que dia da semana foi:
+// vender 3 mil num sábado e 3 mil numa terça não são o mesmo resultado, e sem o
+// dia da semana as barras baixas de segunda parecem queda.
+//
+// O valor vai escrito na própria barra, de pé — deitado não caberia em trinta e
+// um dias. Se a barra é baixa demais para o texto, ele sobe para fora dela.
+function graficoDiaADiaSVG(principal, comparacao) {
+  const L = 48;
+  const largura = 760;
+  const altura = 280;
+  const topo = 16;
+  const base = altura - 46;
+
+  const dias = principal.dias;
+  const outros = comparacao ? comparacao.dias : null;
+  // Alinhamento pelo número do dia: é assim que a comparação é lida ("dia 9
+  // contra dia 9"). Mês mais curto simplesmente não tem a última barra.
+  const parDe = (i) => (outros && outros[i] ? outros[i] : null);
+
+  const valores = dias.map((d) => d.total).concat(outros ? outros.map((d) => d.total) : []);
+  const maior = Math.max(...valores, 1);
+  const escala = (v) => (v / maior) * (base - topo);
+  const passo = (largura - L - 8) / dias.length;
+  const centro = (i) => L + i * passo + passo / 2;
+
+  const largBarra = comparacao
+    ? Math.max(Math.min((passo - 5) / 2, 12), 2)
+    : Math.max(Math.min(passo - 4, 24), 3);
+
+  // Média ignora dia sem lançamento: fosse zero, cada dia em branco puxaria a
+  // referência para baixo e o mês pareceria pior do que foi.
+  const mediaDe = (serie) => {
+    const l = serie.filter((d) => d.lancado && d.total > 0);
+    return l.length ? l.reduce((a, d) => a + d.total, 0) / l.length : 0;
+  };
+  const media = mediaDe(dias);
+  const mediaOutros = outros ? mediaDe(outros) : 0;
+
+  const linhasGuia = [0.25, 0.5, 0.75, 1]
+    .map((f) => {
+      const y = base - f * (base - topo);
+      return `<line x1="${L}" y1="${y}" x2="${largura}" y2="${y}" stroke="#EDF1F8" stroke-width="1" />
+              <text x="${L - 6}" y="${y + 3}" text-anchor="end" class="eixo">${brlCurto(maior * f)}</text>`;
+    })
+    .join('');
+
+  const tituloDoDia = (d, mes) =>
+    `${dateBR(d.data)} (${DIAS_SEMANA[d.semana]}) — ${mesCurto(mes)}: ${
+      d.futuro ? 'ainda não chegou' : d.lancado ? brl(d.total) : 'sem lançamento'
+    }`;
+
+  const barra = (d, x, mes, classe) => {
+    const h = d.total ? Math.max(escala(d.total), 2) : 0;
+    if (!h) {
+      // Futuro antes de vazio: dia que ainda não chegou também está sem
+      // lançamento, mas não é falha — não pode aparecer marcado como pendência.
+      return d.futuro
+        ? ''
+        : `<g class="col ${classe} vazia"><rect x="${x}" y="${base - 6}" width="${largBarra}" height="6" rx="2" class="marca-vazia" /><title>${escapar(
+            tituloDoDia(d, mes)
+          )}</title></g>`;
+    }
+    return `<g class="col ${classe}"><rect x="${x}" y="${base - h}" width="${largBarra}" height="${h}" rx="2" /><title>${escapar(
+      tituloDoDia(d, mes)
+    )}</title></g>`;
+  };
+
+  const barras = dias
+    .map((d, i) => {
+      if (!comparacao) return barra(d, centro(i) - largBarra / 2, principal.mes, 'principal');
+      const par = parDe(i);
+      return (
+        barra(d, centro(i) - largBarra - 1, principal.mes, 'principal') +
+        (par ? barra(par, centro(i) + 1, comparacao.mes, 'comparada') : '')
+      );
+    })
+    .join('');
+
+  // Valor escrito na barra só no modo de um mês só: com dois meses são sessenta
+  // e dois números na mesma tela e não se lê nenhum.
+  const rotulosValor = comparacao
+    ? ''
+    : dias
+        .map((d, i) => {
+          if (!d.total) return '';
+          const texto = brlCurto(d.total);
+          const h = Math.max(escala(d.total), 2);
+          const precisa = texto.length * 5.4 + 8;
+          const dentro = h >= precisa;
+          const y = dentro ? base - 5 : base - h - 5;
+          const x = centro(i) + 3;
+          return `<text x="${x}" y="${y}" transform="rotate(-90 ${x} ${y})" class="valor-barra ${
+            dentro ? 'dentro' : 'fora'
+          }">${texto}</text>`;
+        })
+        .join('');
+
+  const linhaMedia = (valor, classe, rotulo) => {
+    if (!valor) return '';
+    const y = base - escala(valor);
+    return `<line x1="${L}" y1="${y}" x2="${largura}" y2="${y}" class="${classe}" />
+            <text x="${largura - 2}" y="${y - 5}" text-anchor="end" class="rotulo-media">${rotulo} ${brlCurto(valor)}</text>`;
+  };
+
+  // Média móvel só quando há um mês só: com dois meses, duas linhas de média já
+  // são o suficiente para responder "qual está melhor".
+  let tendencia = '';
+  if (!comparacao) {
+    const pontos = [];
+    for (let i = 0; i < dias.length; i += 1) {
+      if (dias[i].futuro) break;
+      const janela = dias.slice(Math.max(0, i - 6), i + 1).filter((d) => d.total > 0);
+      if (janela.length < 3) continue;
+      const m = janela.reduce((a, d) => a + d.total, 0) / janela.length;
+      pontos.push(`${centro(i)},${base - escala(m)}`);
+    }
+    if (pontos.length > 1) tendencia = `<polyline points="${pontos.join(' ')}" class="linha-tendencia" />`;
+  }
+
+  const eixo = dias
+    .map((d, i) => {
+      const x = centro(i);
+      return `<text x="${x}" y="${base + 15}" text-anchor="middle" class="eixo">${String(d.dia).padStart(2, '0')}</text>
+              <text x="${x}" y="${base + 27}" text-anchor="middle" class="eixo-semana ${
+                d.semana === 0 ? 'domingo' : ''
+              }">${DIAS_SEMANA[d.semana]}</text>`;
+    })
+    .join('');
+
+  return `
+    <div class="rolagem-grafico">
+    <svg viewBox="0 0 ${largura} ${altura}" class="grafico-svg grafico-media grafico-dias" role="img"
+         aria-label="Venda por dia de ${mesExtenso(principal.mes)}">
+      ${linhasGuia}
+      ${barras}
+      ${rotulosValor}
+      ${linhaMedia(media, 'linha-media', `média ${mesCurto(principal.mes)}`)}
+      ${comparacao ? linhaMedia(mediaOutros, 'linha-media comparada', `média ${mesCurto(comparacao.mes)}`) : ''}
+      ${tendencia}
+      ${eixo}
+    </svg>
+    </div>
+    <p class="legenda-grafico">
+      <span class="chave"><i class="amostra-barra"></i>${mesExtenso(principal.mes)}</span>
+      ${
+        comparacao
+          ? `<span class="chave"><i class="amostra-comparada"></i>${mesExtenso(comparacao.mes)}</span>`
+          : '<span class="chave"><i class="amostra-tendencia"></i>média móvel de 7 dias</span>'
+      }
+      <span class="chave"><i class="amostra-media"></i>média do mês (dias sem lançamento não contam)</span>
+      <span>coluna baixa e riscada é dia sem lançamento</span>
+    </p>
+  `;
+}
+
+function blocoDiaADiaHTML() {
+  const d = state.diaADia;
+  if (!d) return '<section class="grupo-painel"><p class="vazio">Carregando venda por dia…</p></section>';
+
+  const { meses, principal, comparacao } = d;
+  const opcoes = (selecionado, comVazio) =>
+    `${comVazio ? '<option value="">— não comparar —</option>' : ''}${meses
+      .filter((m) => !comVazio || m !== principal.mes)
+      .map((m) => `<option value="${m}" ${m === selecionado ? 'selected' : ''}>${mesExtenso(m)}</option>`)
+      .join('')}`;
+
+  // A diferença só é honesta entre meses igualmente lançados. Mês pela metade
+  // comparado com mês inteiro dá queda que não existe, então isso vai dito.
+  const desigual =
+    comparacao && principal.dias_lancados && comparacao.dias_lancados &&
+    Math.abs(principal.dias_lancados - comparacao.dias_lancados) > 2;
+  const variacao =
+    comparacao && comparacao.total > 0
+      ? ((principal.total - comparacao.total) / comparacao.total) * 100
+      : null;
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Venda por dia</h2>
+        <span class="grupo-total">${brl(principal.total)}
+          <small>em ${principal.dias_lancados} de ${principal.dias_no_mes} dia(s)</small></span>
+        <label class="filtro-mes">Mês
+          <select id="mes-dia-a-dia">${opcoes(principal.mes, false)}</select>
+        </label>
+        <label class="filtro-mes">Comparar com
+          <select id="mes-comparar">${opcoes(comparacao ? comparacao.mes : '', true)}</select>
+        </label>
+      </div>
+      ${
+        comparacao
+          ? `<p class="comparativo-meses">
+              ${mesExtenso(principal.mes)} <strong>${brl(principal.total)}</strong>
+              &nbsp;·&nbsp; ${mesExtenso(comparacao.mes)} <strong>${brl(comparacao.total)}</strong>
+              ${
+                variacao === null
+                  ? ''
+                  : `&nbsp;·&nbsp; <span class="${variacao >= 0 ? 'subiu' : 'caiu'}">${
+                      variacao >= 0 ? '+' : ''
+                    }${variacao.toFixed(1).replace('.', ',')}%</span>`
+              }
+              ${
+                desigual
+                  ? `<br /><small>Atenção: ${principal.dias_lancados} dia(s) lançados contra ${comparacao.dias_lancados} — a diferença acima não compara períodos iguais.</small>`
+                  : ''
+              }
+            </p>`
+          : ''
+      }
+      ${graficoDiaADiaSVG(principal, comparacao)}
+    </section>
+  `;
 }
 
 function graficoMesesHTML(meses) {
@@ -1171,6 +1401,7 @@ function graficoMesesHTML(meses) {
   const temParcial = meses.some((m) => m.dias_lancados > 0 && m.dias_lancados < m.dias_no_mes);
   return graficoBarrasComMediaSVG(itens, {
     janelaMedia: 3,
+    unidade: 'mês',
     legenda: temParcial ? 'mês com * tem dias sem lançamento — o total dele está incompleto' : '',
   });
 }
@@ -1202,13 +1433,7 @@ function resumoVendasHTML() {
         : ''
     }
 
-    <section class="grupo-painel">
-      <div class="grupo-cabecalho">
-        <h2>Venda por dia &mdash; mês corrente</h2>
-        <span class="grupo-total">${brl(r.mes_atual)} <small>no mês</small></span>
-      </div>
-      ${graficoVendasHTML(r.dias_do_mes || r.ultimos_30)}
-    </section>
+    ${blocoDiaADiaHTML()}
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
@@ -2841,6 +3066,25 @@ function bind() {
     form.addEventListener('submit', onFormBaixa);
   });
 
+  const seletorMesGrafico = root.querySelector('#mes-dia-a-dia');
+  if (seletorMesGrafico) {
+    seletorMesGrafico.addEventListener('change', (ev) => {
+      state.mesDiaADia = ev.target.value;
+      // Comparar um mês com ele mesmo não diz nada: ao escolher como principal o
+      // mês que estava na comparação, a comparação sai.
+      if (state.mesComparar === state.mesDiaADia) state.mesComparar = '';
+      carregarDiaADia();
+    });
+  }
+
+  const seletorComparar = root.querySelector('#mes-comparar');
+  if (seletorComparar) {
+    seletorComparar.addEventListener('change', (ev) => {
+      state.mesComparar = ev.target.value;
+      carregarDiaADia();
+    });
+  }
+
   const btnHistorico = root.querySelector('#btn-historico');
   if (btnHistorico) {
     btnHistorico.addEventListener('click', () => {
@@ -3105,6 +3349,18 @@ function atualizarMarcacaoAcumulados() {
     todos.checked = marcados > 0 && marcados === caixas.length;
     todos.indeterminate = marcados > 0 && marcados < caixas.length;
   }
+}
+
+// Trocar o mês do gráfico recarrega só o gráfico: recarregar a tela inteira
+// apagaria a marcação dos fechamentos e a rolagem, sem nada em troca.
+async function carregarDiaADia() {
+  state.erro = null;
+  try {
+    state.diaADia = await apiFetch(`/acumulados/dias${consultaDiaADia()}`);
+  } catch (err) {
+    state.erro = err.message;
+  }
+  render();
 }
 
 async function onConsultarLote(ev) {

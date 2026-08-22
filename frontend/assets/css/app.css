@@ -271,7 +271,37 @@ input[type="file"] { padding: 6px; font-size: 13px; }
   stroke-linejoin: round;
   stroke-linecap: round;
 }
+/* No celular o gráfico do mês inteiro encolheria a ponto de o eixo não se ler.
+   Em vez disso ele mantém o tamanho e desliza na horizontal. */
+.rolagem-grafico { overflow-x: auto; }
+.rolagem-grafico .grafico-svg { min-width: 700px; }
+
+/* Venda dia a dia: o mês escolhido em azul, o mês comparado em amarelo ao lado.
+   Amarelo e azul são as cores da marca e se distinguem bem impressos em cinza. */
+.grafico-dias .col.comparada rect { fill: var(--amarelo-escuro); }
+.grafico-dias .col.comparada:hover rect { fill: #B99800; }
+.grafico-dias .col.comparada .marca-vazia { fill: #F0E3A8; }
+.linha-media.comparada { stroke: var(--amarelo-escuro); }
+/* Valor escrito de pé na própria barra: deitado não caberia em 31 dias. Dentro
+   da barra ele sai branco; quando a barra é baixa demais o texto sobe para fora
+   dela e vira escuro, senão ficaria branco sobre fundo branco. */
+.valor-barra { font-size: 9px; font-weight: 600; }
+.valor-barra.dentro { fill: #fff; }
+.valor-barra.fora { fill: var(--texto-suave); }
+.grafico-svg .eixo-semana { font-size: 8px; fill: #98A2B3; }
+.grafico-svg .eixo-semana.domingo { fill: var(--vermelho); }
+
+/* Seletores de mês dentro do cabeçalho do bloco. */
+.filtro-mes { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; }
+.filtro-mes select { font-size: 13px; padding: 5px 8px; }
+.comparativo-meses { margin: 0 0 10px; font-size: 13px; color: var(--texto-suave); }
+.comparativo-meses strong { color: var(--texto); }
+.comparativo-meses .subiu { color: var(--verde); font-weight: 600; }
+.comparativo-meses .caiu { color: var(--vermelho); font-weight: 600; }
+.comparativo-meses small { color: #A76F00; }
+
 .legenda-grafico .amostra-barra { background: var(--azul); }
+.legenda-grafico .amostra-comparada { background: var(--amarelo-escuro); }
 .legenda-grafico .amostra-media { background: repeating-linear-gradient(90deg, var(--texto-suave) 0 4px, transparent 4px 7px); }
 .legenda-grafico .amostra-tendencia { background: var(--amarelo); }
 
