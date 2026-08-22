@@ -119,7 +119,9 @@ Detalhes de como o backup é interpretado:
 - `POST /api/conciliacao/extratos/analisar` — lê a planilha e devolve o que entendeu, sem gravar (Master/Gerente)
 - `POST /api/conciliacao/extratos` — grava as transações do extrato (Master/Gerente)
 - `GET /api/acumulados` (aceita `?de=&ate=`) / `POST /api/acumulados` / `DELETE /api/acumulados/:id` — Master e Gerente
-- `GET /api/acumulados/sugestao?data=AAAA-MM-DD` — o que a conciliação já tem para o dia (bruto por adquirente, dinheiro do PDV e até quando cada adquirente foi importado). Sugere o fechamento; não grava.
+- `GET /api/acumulados/sugestao?data=AAAA-MM-DD` — o que a conciliação já tem para o dia, por arquivo e por forma, com o campo do fechamento de destino de cada linha; mais o dinheiro do PDV e até quando cada adquirente foi importado. Sugere o fechamento; não grava.
+  - o PIX da maquininha chega dentro do arquivo da Cielo e vai para o campo PIX, não para Cartão
+  - o arquivo de Tickets vai inteiro para Tickets, inclusive as linhas escritas como "Débito à vista" (cartões de benefício)
 - `GET /api/acumulados/resumo` — comparativos (hoje × mesmo dia da semana passada, 7 dias × 7 anteriores, mês até hoje × mesmo período do mês passado), série de 30 dias e os dias sem lançamento das duas últimas semanas
 - `GET /api/venda-prazo` — saldo devedor por cliente; `GET /api/venda-prazo/clientes/:id` — extrato
 - `POST /api/venda-prazo/movimentos` — lança compra ou pagamento do cliente

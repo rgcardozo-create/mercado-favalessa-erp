@@ -1,6 +1,7 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 const { HOJE_SP } = require('../db/contasQuery');
+const { GRUPO_FORMA, campoDoFechamento } = require('../db/conciliacaoQuery');
 
 const CAMPOS_VALOR = ['dinheiro', 'cartao', 'pix', 'tickets', 'pos_sistema', 'pos_maquina', 'outras'];
 
@@ -153,6 +154,21 @@ async function sugestaoDoDia(req, res) {
     [data]
   );
 
+  // Por forma, que é o que decide em qual campo do fechamento o valor entra.
+  // Sem isso o PIX da maquininha — que vem dentro do arquivo da Cielo — cairia
+  // no campo Cartão, e o fechamento nasceria errado todo dia.
+  const { rows: porForma } = await pool.query(
+    `SELECT t.adquirente::text AS adquirente,
+            ${GRUPO_FORMA} AS grupo,
+            count(*)::int AS transacoes,
+            COALESCE(sum(t.valor_bruto), 0) AS bruto
+       FROM conciliacao_transacoes t
+      WHERE t.data = $1
+      GROUP BY 1, 2
+      ORDER BY bruto DESC`,
+    [data]
+  );
+
   const { rows: dinheiro } = await pool.query(
     `SELECT COALESCE(sum(valor), 0) AS total, count(*)::int AS lancamentos
        FROM conciliacao_dinheiro WHERE data = $1`,
@@ -166,18 +182,23 @@ async function sugestaoDoDia(req, res) {
        FROM conciliacao_transacoes GROUP BY adquirente ORDER BY adquirente`
   );
 
-  const soma = (filtro) =>
-    porAdquirente.filter(filtro).reduce((acc, a) => acc + Number(a.bruto), 0);
+  const sugestao = { cartao: 0, pix: 0, tickets: 0, dinheiro: Number(dinheiro[0].total) };
+  for (const linha of porForma) {
+    sugestao[campoDoFechamento(linha.adquirente, linha.grupo)] += Number(linha.bruto);
+  }
 
   return res.json({
     data,
     por_adquirente: porAdquirente.map((a) => ({ ...a, bruto: Number(a.bruto), liquido: Number(a.liquido) })),
+    por_forma: porForma.map((f) => ({
+      adquirente: f.adquirente,
+      grupo: f.grupo,
+      transacoes: f.transacoes,
+      bruto: Number(f.bruto),
+      campo: campoDoFechamento(f.adquirente, f.grupo),
+    })),
     importado_ate: ultimos.reduce((acc, u) => ({ ...acc, [u.adquirente]: u.ate }), {}),
-    sugestao: {
-      cartao: soma((a) => a.adquirente !== 'tickets'),
-      tickets: soma((a) => a.adquirente === 'tickets'),
-      dinheiro: Number(dinheiro[0].total),
-    },
+    sugestao,
     dinheiro_lancamentos: dinheiro[0].lancamentos,
   });
 }
