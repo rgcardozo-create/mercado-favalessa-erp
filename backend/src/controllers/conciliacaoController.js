@@ -7,6 +7,15 @@ const { registrarAuditoria } = require('../utils/auditoria');
 
 const ADQUIRENTES = ['cielo', 'stone', 'itau', 'tickets'];
 
+const ERRO_TROCOU_QUADRO = {
+  caixa:
+    'Este arquivo é o relatório de vendas por caixa do seu sistema, não um extrato de adquirente. ' +
+    'Carregue-o no quadro "Importar vendas por caixa (dinheiro)".',
+  extrato:
+    'Este arquivo é um extrato de adquirente, não o relatório de vendas por caixa. ' +
+    'Carregue-o no quadro "Importar extrato" e escolha o adquirente.',
+};
+
 // Grava as transações lidas de um extrato. Usa a mesma impressão digital da
 // importação de backup, então reimportar o mesmo período (ou um extrato que se
 // sobrepõe a outro já carregado) atualiza em vez de duplicar.
@@ -229,6 +238,27 @@ async function listarTransacoes(req, res) {
 
 // Erros de leitura de planilha vêm em inglês e falando de zip — sem sentido para
 // quem só quer carregar o extrato do banco.
+// Os dois quadros de importação se parecem e o arquivo errado cai num deles com
+// facilidade. Em vez de devolver "não consegui ler", cada um reconhece o arquivo
+// do outro e diz onde ele deve ser carregado.
+async function pareceRelatorioDeCaixa(buffer) {
+  try {
+    const leitura = await lerVendasPorCaixa(buffer);
+    return leitura.linhas.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function pareceExtratoDeAdquirente(buffer, nome) {
+  try {
+    const analise = await analisarExtrato(buffer, nome);
+    return Boolean(analise.reconhecido && analise.mapa.data !== undefined && analise.mapa.valorBruto !== undefined);
+  } catch {
+    return false;
+  }
+}
+
 function mensagemDeLeitura(err) {
   const m = String(err && err.message);
   if (/zip|central directory|corrupt/i.test(m)) {
@@ -248,6 +278,14 @@ async function analisarExtratoEnviado(req, res) {
   const arquivo = arquivoDoCorpo(req);
   if (!arquivo) {
     return res.status(400).json({ error: 'Envie o arquivo do extrato.' });
+  }
+
+  // O relatório de caixa é conferido primeiro porque ele é inconfundível — tem
+  // blocos "Caixa:/Data:" que extrato nenhum tem. Confiar no detector de
+  // cabeçalho não bastaria: ele acha "Data" e "Valor" nesse relatório também e
+  // deixaria passar uma importação de lixo.
+  if (await pareceRelatorioDeCaixa(arquivo.buffer)) {
+    return res.status(400).json({ error: ERRO_TROCOU_QUADRO.caixa });
   }
 
   let analise;
@@ -302,6 +340,10 @@ async function importarExtrato(req, res) {
     return res.status(400).json({ error: `Escolha o adquirente. Use um de: ${ADQUIRENTES.join(', ')}.` });
   }
 
+  if (await pareceRelatorioDeCaixa(arquivo.buffer)) {
+    return res.status(400).json({ error: ERRO_TROCOU_QUADRO.caixa });
+  }
+
   let analise;
   try {
     analise = await analisarExtrato(arquivo.buffer, arquivo.nome);
@@ -350,6 +392,9 @@ async function analisarVendasCaixa(req, res) {
   try {
     leitura = await lerVendasPorCaixa(arquivo.buffer);
   } catch (err) {
+    if (await pareceExtratoDeAdquirente(arquivo.buffer, arquivo.nome)) {
+      return res.status(400).json({ error: ERRO_TROCOU_QUADRO.extrato });
+    }
     return res.status(400).json({ error: err.message });
   }
 
@@ -392,6 +437,9 @@ async function importarVendasCaixa(req, res) {
   try {
     leitura = await lerVendasPorCaixa(arquivo.buffer);
   } catch (err) {
+    if (await pareceExtratoDeAdquirente(arquivo.buffer, arquivo.nome)) {
+      return res.status(400).json({ error: ERRO_TROCOU_QUADRO.extrato });
+    }
     return res.status(400).json({ error: err.message });
   }
 
