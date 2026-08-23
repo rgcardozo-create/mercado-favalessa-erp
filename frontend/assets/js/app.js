@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.22.0';
+const VERSAO = '1.22.1';
 
 const state = {
   sessao: getSessao(),
@@ -804,7 +804,7 @@ function importarExtratoHTML() {
     <section class="grupo-painel">
       <div class="grupo-cabecalho"><h2>Importar extrato</h2></div>
       <p class="vazio">
-        Baixe o relatório de vendas no site do adquirente e carregue aqui (.xlsx ou .csv).
+        Baixe o relatório de vendas no site do adquirente e carregue aqui (.xlsx, .xls ou .csv).
         Vendas de voucher vão para <strong>Tickets</strong> automaticamente, mesmo vindo
         do arquivo da Stone ou da Rede. Recarregar um período já importado
         <strong>atualiza</strong>, não duplica.
