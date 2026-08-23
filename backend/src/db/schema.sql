@@ -357,6 +357,13 @@ UPDATE conciliacao_dinheiro d SET impressao_digital = s.fp
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_impressao ON conciliacao_transacoes(impressao_digital);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_dinheiro_impressao ON conciliacao_dinheiro(impressao_digital);
 
+-- O relatório de finalizadoras do PDV traz duas coisas que extrato de adquirente
+-- nunca vê: o dinheiro e a venda a prazo do dia. Venda a prazo é venda — leva
+-- trinta dias para entrar, mas saiu da loja naquele dia — então ela é conferida
+-- junto e entra no total do fechamento.
+ALTER TABLE conciliacao_dinheiro ADD COLUMN IF NOT EXISTS venda_prazo NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE acumulados          ADD COLUMN IF NOT EXISTS venda_prazo NUMERIC(12,2) NOT NULL DEFAULT 0;
+
 -- Como esse lançamento costuma ser pago (PIX, Boleto, Dinheiro...). É previsão,
 -- não registro: o que foi pago de fato fica em contas_pagamentos. Serve para
 -- separar na tela quem se paga por PIX de quem manda boleto — misturados, os

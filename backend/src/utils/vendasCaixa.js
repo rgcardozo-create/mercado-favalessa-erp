@@ -85,6 +85,21 @@ function paraValor(texto) {
   return soNumero(cru);
 }
 
+// A finalizadora vem escrita pelo operador do PDV ("Dinheiro", "VENDA PRAZO"),
+// então a classificação é pelo texto e não pelo código — código de finalizadora
+// muda de loja para loja, o nome não.
+function grupoDaFinalizadora(descricao) {
+  const texto = String(descricao || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  if (texto.includes('dinheiro') || texto.includes('especie')) return 'dinheiro';
+  if (texto.includes('prazo') || texto.includes('fiado') || texto.includes('crediario')) {
+    return 'venda_prazo';
+  }
+  return null;
+}
+
 async function lerVendasPorCaixa(buffer) {
   const zip = await JSZip.loadAsync(buffer);
 
@@ -135,30 +150,54 @@ async function lerVendasPorCaixa(buffer) {
     );
   }
 
-  // Um registro por dia e caixa: o relatório pode trazer mais de uma finalizadora
-  // por caixa (dinheiro e outra qualquer), e o que vai para o fechamento é a soma.
+  // Um registro por dia e caixa, com as finalizadoras separadas. Somar tudo numa
+  // coluna só jogaria a venda a prazo dentro do dinheiro — e ela não é dinheiro:
+  // é venda que sai da loja hoje e entra no caixa daqui a trinta dias.
   const porDiaCaixa = new Map();
+  const ignoradas = new Map();
+
   for (const r of registros) {
+    const grupo = grupoDaFinalizadora(r.descricao);
+    if (!grupo) {
+      // Cartão e PIX também podem estar configurados como finalizadora no PDV,
+      // mas eles vêm do extrato do adquirente. Contá-los aqui duplicaria a venda,
+      // então ficam de fora — e são devolvidos para a tela poder dizer isso.
+      ignoradas.set(r.descricao, (ignoradas.get(r.descricao) || 0) + r.valor);
+      continue;
+    }
     const chave = `${r.data}|${r.pdv}`;
-    porDiaCaixa.set(chave, (porDiaCaixa.get(chave) || 0) + r.valor);
+    const linha = porDiaCaixa.get(chave) || { data: r.data, pdv: r.pdv, dinheiro: 0, venda_prazo: 0 };
+    linha[grupo] += r.valor;
+    porDiaCaixa.set(chave, linha);
   }
 
-  const linhasFinais = [...porDiaCaixa.entries()]
-    .map(([chave, valor]) => {
-      const [data, pdv] = chave.split('|');
-      return { data, pdv, valor: Math.round(valor * 100) / 100 };
-    })
+  if (!porDiaCaixa.size) {
+    throw new Error(
+      'O relatório não traz nenhuma finalizadora de dinheiro ou venda a prazo. ' +
+        `Encontrei: ${[...descricoesVistas].join(', ')}.`
+    );
+  }
+
+  const arredondar = (n) => Math.round(n * 100) / 100;
+  const linhasFinais = [...porDiaCaixa.values()]
+    .map((l) => ({ ...l, dinheiro: arredondar(l.dinheiro), venda_prazo: arredondar(l.venda_prazo) }))
     .sort((a, b) => (a.data === b.data ? a.pdv.localeCompare(b.pdv) : a.data.localeCompare(b.data)));
 
   const datas = linhasFinais.map((l) => l.data);
+  const somar = (campo) => arredondar(linhasFinais.reduce((a, l) => a + l[campo], 0));
 
   return {
     linhas: linhasFinais,
     descricoes: [...descricoesVistas],
+    ignoradas: [...ignoradas.entries()].map(([descricao, valor]) => ({
+      descricao,
+      valor: arredondar(valor),
+    })),
     caixas: [...new Set(linhasFinais.map((l) => l.pdv))].sort(),
     periodo: { de: datas[0], ate: datas[datas.length - 1] },
-    total: Math.round(linhasFinais.reduce((a, l) => a + l.valor, 0) * 100) / 100,
+    totais: { dinheiro: somar('dinheiro'), venda_prazo: somar('venda_prazo') },
+    total: arredondar(somar('dinheiro') + somar('venda_prazo')),
   };
 }
 
-module.exports = { lerVendasPorCaixa, dataDoSerial };
+module.exports = { lerVendasPorCaixa, dataDoSerial, grupoDaFinalizadora };
