@@ -103,9 +103,10 @@ async function consolidado(req, res) {
             COALESCE(sum(cartao), 0) AS cartao,
             COALESCE(sum(pix), 0) AS pix,
             COALESCE(sum(tickets), 0) AS tickets,
+            COALESCE(sum(venda_prazo), 0) AS venda_prazo,
             COALESCE(sum(pos_sistema + pos_maquina), 0) AS maquininha,
             COALESCE(sum(outras), 0) AS outras,
-            COALESCE(sum(dinheiro + cartao + pix + tickets + pos_sistema + pos_maquina + outras), 0) AS total
+            COALESCE(sum(dinheiro + cartao + pix + tickets + venda_prazo + pos_sistema + pos_maquina + outras), 0) AS total
        FROM acumulados WHERE data BETWEEN $1 AND $2`,
     [de, ate]
   );
@@ -128,7 +129,7 @@ async function consolidado(req, res) {
   const vendas = {
     dias: vendasRows[0].dias,
     total: Number(vendasRows[0].total),
-    por_forma: ['dinheiro', 'cartao', 'pix', 'tickets', 'maquininha', 'outras'].map((k) => ({
+    por_forma: ['dinheiro', 'cartao', 'pix', 'tickets', 'venda_prazo', 'maquininha', 'outras'].map((k) => ({
       forma: k,
       valor: Number(vendasRows[0][k]),
     })),
@@ -188,7 +189,7 @@ async function gerencial(req, res) {
   // Uma consulta por origem, todas agrupadas por mês, para o front só somar.
   const { rows: vendas } = await pool.query(
     `SELECT to_char(data, 'YYYY-MM') AS mes,
-            COALESCE(sum(dinheiro + cartao + pix + tickets + pos_sistema + pos_maquina + outras), 0) AS total,
+            COALESCE(sum(dinheiro + cartao + pix + tickets + venda_prazo + pos_sistema + pos_maquina + outras), 0) AS total,
             count(*)::int AS dias
        FROM acumulados WHERE data BETWEEN $1 AND $2 GROUP BY 1`,
     [de, ate]

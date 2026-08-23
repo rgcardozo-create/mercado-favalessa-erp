@@ -3,7 +3,12 @@ const { registrarAuditoria } = require('../utils/auditoria');
 const { HOJE_SP } = require('../db/contasQuery');
 const { GRUPO_FORMA, campoDoFechamento } = require('../db/conciliacaoQuery');
 
-const CAMPOS_VALOR = ['dinheiro', 'cartao', 'pix', 'tickets', 'pos_sistema', 'pos_maquina', 'outras'];
+// Venda a prazo entra na lista porque é venda: sai da loja no dia, mesmo que o
+// dinheiro só entre daqui a trinta dias. Fora do total, o dia de mais venda a
+// prazo pareceria o pior dia do mês.
+const CAMPOS_VALOR = [
+  'dinheiro', 'cartao', 'pix', 'tickets', 'venda_prazo', 'pos_sistema', 'pos_maquina', 'outras',
+];
 
 // O total do dia é sempre derivado dos campos, nunca guardado — evita o total
 // ficar defasado quando alguém corrige um dos valores.
@@ -278,7 +283,9 @@ async function sugestaoDoDia(req, res) {
   );
 
   const { rows: dinheiro } = await pool.query(
-    `SELECT COALESCE(sum(valor), 0) AS total, count(*)::int AS lancamentos
+    `SELECT COALESCE(sum(valor), 0) AS total,
+            COALESCE(sum(venda_prazo), 0) AS venda_prazo,
+            count(*)::int AS lancamentos
        FROM conciliacao_dinheiro WHERE data = $1`,
     [data]
   );
@@ -290,7 +297,13 @@ async function sugestaoDoDia(req, res) {
        FROM conciliacao_transacoes GROUP BY adquirente ORDER BY adquirente`
   );
 
-  const sugestao = { cartao: 0, pix: 0, tickets: 0, dinheiro: Number(dinheiro[0].total) };
+  const sugestao = {
+    cartao: 0,
+    pix: 0,
+    tickets: 0,
+    dinheiro: Number(dinheiro[0].total),
+    venda_prazo: Number(dinheiro[0].venda_prazo),
+  };
   for (const linha of porForma) {
     sugestao[campoDoFechamento(linha.adquirente, linha.grupo)] += Number(linha.bruto);
   }
@@ -345,7 +358,9 @@ async function sugestaoDoPeriodo(req, res) {
   );
 
   const { rows: dinheiro } = await pool.query(
-    `SELECT to_char(data, 'YYYY-MM-DD') AS data, COALESCE(sum(valor), 0) AS total
+    `SELECT to_char(data, 'YYYY-MM-DD') AS data,
+            COALESCE(sum(valor), 0) AS total,
+            COALESCE(sum(venda_prazo), 0) AS venda_prazo
        FROM conciliacao_dinheiro WHERE data BETWEEN $1 AND $2 GROUP BY 1`,
     [de, ate]
   );
@@ -366,22 +381,32 @@ async function sugestaoDoPeriodo(req, res) {
 
   const lista = dias.map(({ data }) => {
     const doDia = transacoes.filter((t) => t.data === data);
-    const sugestao = { cartao: 0, pix: 0, tickets: 0, dinheiro: 0 };
+    const sugestao = { cartao: 0, pix: 0, tickets: 0, dinheiro: 0, venda_prazo: 0 };
     for (const linha of doDia) {
       sugestao[campoDoFechamento(linha.adquirente, linha.grupo)] += Number(linha.bruto);
     }
-    const emDinheiro = dinheiro.find((d) => d.data === data);
-    sugestao.dinheiro = emDinheiro ? Number(emDinheiro.total) : 0;
+    const doPdv = dinheiro.find((d) => d.data === data);
+    sugestao.dinheiro = doPdv ? Number(doPdv.total) : 0;
+    sugestao.venda_prazo = doPdv ? Number(doPdv.venda_prazo) : 0;
 
     const jaLancado = existentes.find((e) => e.data === data);
+    const lancado = jaLancado
+      ? CAMPOS_VALOR.reduce((acc, campo) => ({ ...acc, [campo]: Number(jaLancado[campo]) }), {})
+      : null;
+
+    // Venda a prazo é campo novo: nos fechamentos antigos ela está zerada porque
+    // não existia, não porque alguém decidiu que era zero. Quando o PDV tem o
+    // valor e o fechamento não, o do PDV vale — sem isso todo mês já fechado
+    // ficaria sem a venda a prazo para sempre.
+    if (lancado && !lancado.venda_prazo && sugestao.venda_prazo) {
+      lancado.venda_prazo = sugestao.venda_prazo;
+    }
 
     return {
       data,
       transacoes: doDia.reduce((a, t) => a + t.transacoes, 0),
       sugestao,
-      lancado: jaLancado
-        ? CAMPOS_VALOR.reduce((acc, campo) => ({ ...acc, [campo]: Number(jaLancado[campo]) }), {})
-        : null,
+      lancado,
     };
   });
 

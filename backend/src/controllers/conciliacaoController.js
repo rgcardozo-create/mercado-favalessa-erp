@@ -10,10 +10,10 @@ const ADQUIRENTES = ['cielo', 'stone', 'itau', 'tickets'];
 const ERRO_TROCOU_QUADRO = {
   caixa:
     'Este arquivo é o relatório de vendas por caixa do seu sistema, não um extrato de adquirente. ' +
-    'Carregue-o no quadro "Importar vendas por caixa (dinheiro)".',
+    'Em "De onde veio", escolha Sistema (PDV) e envie de novo.',
   extrato:
     'Este arquivo é um extrato de adquirente, não o relatório de vendas por caixa. ' +
-    'Carregue-o no quadro "Importar extrato" e escolha o adquirente.',
+    'Em "De onde veio", escolha a adquirente (Cielo, Stone, Rede/Itaú ou Tickets) e envie de novo.',
 };
 
 // Grava as transações lidas de um extrato. Usa a mesma impressão digital da
@@ -141,7 +141,9 @@ async function resumo(req, res) {
   const whereDinheiro = condicoesDinheiro.length ? `WHERE ${condicoesDinheiro.join(' AND ')}` : '';
 
   const { rows: dinheiroRows } = await pool.query(
-    `SELECT pdv, count(*)::int AS lancamentos, COALESCE(sum(valor), 0) AS total
+    `SELECT pdv, count(*)::int AS lancamentos,
+            COALESCE(sum(valor), 0) AS total,
+            COALESCE(sum(venda_prazo), 0) AS venda_prazo
        FROM conciliacao_dinheiro
        ${whereDinheiro}
       GROUP BY pdv
@@ -179,8 +181,10 @@ async function resumo(req, res) {
         pdv: r.pdv,
         lancamentos: r.lancamentos,
         total: Number(r.total),
+        venda_prazo: Number(r.venda_prazo),
       })),
       total: dinheiroRows.reduce((acc, r) => acc + Number(r.total), 0),
+      venda_prazo: dinheiroRows.reduce((acc, r) => acc + Number(r.venda_prazo), 0),
     },
   });
 }
@@ -398,22 +402,28 @@ async function analisarVendasCaixa(req, res) {
     return res.status(400).json({ error: err.message });
   }
 
-  // Quais dias já têm dinheiro lançado: reimportar substitui, e quem confere
-  // precisa saber disso antes de clicar, não depois.
+  // Quais dias já têm lançamento: reimportar substitui, e quem confere precisa
+  // saber disso antes de clicar, não depois.
   const { rows: existentes } = await pool.query(
     `SELECT to_char(data, 'YYYY-MM-DD') AS data, count(*)::int AS registros,
-            COALESCE(sum(valor), 0) AS total
+            COALESCE(sum(valor), 0) AS dinheiro,
+            COALESCE(sum(venda_prazo), 0) AS venda_prazo
        FROM conciliacao_dinheiro
       WHERE data BETWEEN $1 AND $2
       GROUP BY 1`,
     [leitura.periodo.de, leitura.periodo.ate]
   );
 
+  const arredondar = (n) => Math.round(n * 100) / 100;
   const porDia = new Map();
   for (const linha of leitura.linhas) {
-    const dia = porDia.get(linha.data) || { data: linha.data, caixas: [], total: 0 };
-    dia.caixas.push({ pdv: linha.pdv, valor: linha.valor });
-    dia.total = Math.round((dia.total + linha.valor) * 100) / 100;
+    const dia = porDia.get(linha.data) || {
+      data: linha.data, caixas: [], dinheiro: 0, venda_prazo: 0, total: 0,
+    };
+    dia.caixas.push({ pdv: linha.pdv, dinheiro: linha.dinheiro, venda_prazo: linha.venda_prazo });
+    dia.dinheiro = arredondar(dia.dinheiro + linha.dinheiro);
+    dia.venda_prazo = arredondar(dia.venda_prazo + linha.venda_prazo);
+    dia.total = arredondar(dia.dinheiro + dia.venda_prazo);
     porDia.set(linha.data, dia);
   }
 
@@ -421,10 +431,15 @@ async function analisarVendasCaixa(req, res) {
     periodo: leitura.periodo,
     caixas: leitura.caixas,
     descricoes: leitura.descricoes,
+    ignoradas: leitura.ignoradas,
+    totais: leitura.totais,
     total: leitura.total,
     dias: [...porDia.values()].map((dia) => {
       const jaTem = existentes.find((e) => e.data === dia.data);
-      return { ...dia, ja_lancado: jaTem ? Number(jaTem.total) : null };
+      return {
+        ...dia,
+        ja_lancado: jaTem ? Number(jaTem.dinheiro) + Number(jaTem.venda_prazo) : null,
+      };
     }),
   });
 }
@@ -448,20 +463,29 @@ async function importarVendasCaixa(req, res) {
   try {
     await cliente.query('BEGIN');
 
-    for (const linha of leitura.linhas) {
-      // Um fechamento por caixa e por dia. Reimportar o mesmo período substitui
-      // o valor em vez de somar outro — foi o mesmo caixa, no mesmo dia, e o
-      // relatório novo é a versão boa.
-      const { rowCount } = await cliente.query(
-        'DELETE FROM conciliacao_dinheiro WHERE data = $1 AND pdv IS NOT DISTINCT FROM $2',
-        [linha.data, linha.pdv]
-      );
-      substituidos += rowCount;
+    // O relatório é a palavra final sobre os dias que ele cobre: apaga tudo que
+    // havia naqueles dias antes de gravar. Substituir caixa a caixa não bastava
+    // — o mesmo caixa aparece como "1" nos lançamentos do sistema antigo e como
+    // "101" no relatório de hoje, e os dois ficavam somando o mesmo dinheiro
+    // duas vezes.
+    const datas = [...new Set(leitura.linhas.map((l) => l.data))];
+    const { rowCount } = await cliente.query(
+      'DELETE FROM conciliacao_dinheiro WHERE data = ANY($1::date[])',
+      [datas]
+    );
+    substituidos = rowCount;
 
+    for (const linha of leitura.linhas) {
       await cliente.query(
-        `INSERT INTO conciliacao_dinheiro (data, pdv, valor, impressao_digital)
-         VALUES ($1, $2, $3, $4)`,
-        [linha.data, linha.pdv, linha.valor, `${linha.data}|${linha.pdv}|${linha.valor.toFixed(2)}`]
+        `INSERT INTO conciliacao_dinheiro (data, pdv, valor, venda_prazo, impressao_digital)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          linha.data,
+          linha.pdv,
+          linha.dinheiro,
+          linha.venda_prazo,
+          `${linha.data}|${linha.pdv}|${linha.dinheiro.toFixed(2)}|${linha.venda_prazo.toFixed(2)}`,
+        ]
       );
     }
 
@@ -485,6 +509,7 @@ async function importarVendasCaixa(req, res) {
     gravados: leitura.linhas.length,
     substituidos,
     periodo: leitura.periodo,
+    totais: leitura.totais,
     total: leitura.total,
     caixas: leitura.caixas,
   });
