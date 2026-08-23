@@ -11,7 +11,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.21.0';
+const VERSAO = '1.22.0';
 
 const state = {
   sessao: getSessao(),
@@ -733,7 +733,7 @@ function importarVendasCaixaHTML() {
       </p>
 
       <form data-action="caixa-analisar" class="form-inline">
-        <label>Arquivo <input type="file" name="arquivo" accept=".xls,.xlsx" /></label>
+        <label>Arquivo <input type="file" name="arquivo" accept=".xls,.xlsx,.csv" /></label>
         <button type="submit" ${state.caixaArquivo ? '' : 'disabled'}>Conferir antes de importar</button>
       </form>
 
@@ -818,7 +818,7 @@ function importarExtratoHTML() {
             ).join('')}
           </select>
         </label>
-        <label>Arquivo <input type="file" name="arquivo" accept=".xlsx,.csv" /></label>
+        <label>Arquivo <input type="file" name="arquivo" accept=".xls,.xlsx,.csv" /></label>
         <button type="submit" ${state.extratoArquivo ? '' : 'disabled'}>Conferir antes de importar</button>
       </form>
 

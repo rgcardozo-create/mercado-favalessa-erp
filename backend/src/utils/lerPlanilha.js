@@ -1,4 +1,5 @@
 const ExcelJS = require('exceljs');
+const { lerXlsxCru } = require('./lerXlsxCru');
 
 // Leitura de extratos de adquirente (.xlsx / .csv).
 //
@@ -68,12 +69,20 @@ function acharCabecalho(linhas) {
     if (acertos > melhor.acertos) melhor = { indice: i, acertos, mapa };
   }
 
+  // Havendo bruto e líquido, a taxa é a diferença entre os dois e a coluna de
+  // desconto não é usada — então ela também não fica no mapa, senão a tela diria
+  // que entendeu como "taxa" uma coluna que não entra em conta nenhuma. A Stone,
+  // por exemplo, divide a taxa em MDR, antecipação e unificado: qualquer uma
+  // delas sozinha seria a resposta errada.
+  if (melhor.mapa.valorBruto !== undefined && melhor.mapa.valorLiquido !== undefined) {
+    delete melhor.mapa.tarifa;
+  }
+
   return melhor;
 }
 
-async function lerArquivo(buffer, nomeArquivo) {
+async function lerComExcelJS(buffer, ehCsv) {
   const workbook = new ExcelJS.Workbook();
-  const ehCsv = /\.csv$/i.test(nomeArquivo || '');
 
   if (ehCsv) {
     const { Readable } = require('stream');
@@ -83,7 +92,7 @@ async function lerArquivo(buffer, nomeArquivo) {
   }
 
   const planilha = workbook.worksheets[0];
-  if (!planilha) throw new Error('A planilha está vazia.');
+  if (!planilha) return [];
 
   const linhas = [];
   planilha.eachRow({ includeEmpty: false }, (row) => {
@@ -94,6 +103,36 @@ async function lerArquivo(buffer, nomeArquivo) {
     linhas.push(valores);
   });
 
+  return linhas;
+}
+
+// O ExcelJS dá conta da maioria dos extratos, mas não de todos: o da Stone vem
+// sem o atributo `r` nas células e ele quebra com um erro que não diz nada. Em
+// vez de mandar o usuário converter o arquivo à mão, a leitura crua entra como
+// segunda tentativa — o mesmo arquivo, lido direto do zip.
+async function lerArquivo(buffer, nomeArquivo) {
+  const ehCsv = /\.csv$/i.test(nomeArquivo || '');
+
+  let linhas = [];
+  let falhaExcelJS = null;
+  try {
+    linhas = await lerComExcelJS(buffer, ehCsv);
+  } catch (err) {
+    falhaExcelJS = err;
+  }
+
+  if (linhas.length || ehCsv) {
+    if (!linhas.length) throw falhaExcelJS || new Error('A planilha está vazia.');
+    return linhas;
+  }
+
+  try {
+    linhas = await lerXlsxCru(buffer);
+  } catch (err) {
+    throw falhaExcelJS || err;
+  }
+
+  if (!linhas.length) throw falhaExcelJS || new Error('A planilha está vazia.');
   return linhas;
 }
 

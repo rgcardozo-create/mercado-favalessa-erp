@@ -69,6 +69,16 @@ function ehTicket(forma, bandeira) {
   return MARCAS_TICKET.some((m) => b.includes(m.trim()));
 }
 
+// A mesma venda precisa sair sempre com o mesmo nome de forma, senão a impressão
+// digital muda e recarregar o período duplica em vez de atualizar. A Stone chama
+// o PIX de "Pix QRcode" no extrato de hoje; o sistema antigo gravou "Pix". É a
+// mesma coisa, e é como PIX que ele entra no fechamento — então vira "Pix".
+function normalizarForma(forma) {
+  const texto = String(forma ?? '').trim();
+  if (!texto) return null;
+  return normalizar(texto).includes('pix') ? 'Pix' : texto;
+}
+
 function valorDe(linha, mapa, campo) {
   const i = mapa[campo];
   return i === undefined || i === null ? '' : linha[i];
@@ -91,26 +101,40 @@ function converterLinhas(linhas, mapa, adquirente, nomeArquivo) {
       continue;
     }
 
-    const forma = String(valorDe(linha, mapa, 'forma') ?? '').trim() || null;
-    const bandeira = String(valorDe(linha, mapa, 'bandeira') ?? '').trim() || null;
+    const forma = normalizarForma(valorDe(linha, mapa, 'forma'));
+    // PIX não tem bandeira de cartão, e extrato que deixa a coluna vazia geraria
+    // uma impressão digital diferente da do mesmo PIX vindo de outro arquivo.
+    const bandeira =
+      String(valorDe(linha, mapa, 'bandeira') ?? '').trim() || (forma === 'Pix' ? 'Pix' : null);
     const bruto = paraValor(valorDe(linha, mapa, 'valorBruto'));
-    const tarifa = Math.abs(paraValor(valorDe(linha, mapa, 'tarifa')));
     const liquidoLido = valorDe(linha, mapa, 'valorLiquido');
+    const temLiquido = liquidoLido !== '' && liquidoLido !== null && liquidoLido !== undefined;
+    const liquido = temLiquido
+      ? paraValor(liquidoLido)
+      : Number((bruto - Math.abs(paraValor(valorDe(linha, mapa, 'tarifa')))).toFixed(6));
+
+    // A taxa é o que não chegou: bruto menos líquido. Contar a coluna de desconto
+    // sozinha erra sempre que o adquirente divide a taxa em várias — a Stone tem
+    // "desconto de MDR", "de antecipação" e "unificado", e na maioria das vendas o
+    // valor está só no unificado. Só quando não há líquido a coluna de taxa manda,
+    // porque aí ela é a única informação existente.
+    const tarifa = temLiquido
+      ? Number((bruto - liquido).toFixed(6))
+      : Math.abs(paraValor(valorDe(linha, mapa, 'tarifa')));
 
     const ticket = ehTicket(forma, bandeira);
 
     transacoes.push({
       adquirente: ticket ? 'tickets' : adquirente,
       data,
-      hora: paraHora(valorDe(linha, mapa, 'hora')),
+      // Extrato que junta data e hora numa coluna só (Stone: "28/07/2026 10:08")
+      // não tem coluna de hora para mapear — a hora sai da própria data.
+      hora: paraHora(valorDe(linha, mapa, 'hora')) || paraHora(valorDe(linha, mapa, 'data')),
       forma,
       bandeira,
       valorBruto: bruto,
       tarifa,
-      // Quando o extrato não traz o líquido, derivamos do bruto menos a tarifa.
-      valorLiquido: liquidoLido === '' || liquidoLido === null || liquidoLido === undefined
-        ? Number((bruto - tarifa).toFixed(6))
-        : paraValor(liquidoLido),
+      valorLiquido: liquido,
       categoria: ticket ? 'ticket' : 'cartao',
       status: String(valorDe(linha, mapa, 'status') ?? '').trim() || 'Aprovada',
       arquivo: nomeArquivo || null,
@@ -120,4 +144,4 @@ function converterLinhas(linhas, mapa, adquirente, nomeArquivo) {
   return { transacoes, ignoradas: ignoradas.length };
 }
 
-module.exports = { converterLinhas, paraDataISO, paraHora, paraValor, ehTicket };
+module.exports = { converterLinhas, paraDataISO, paraHora, paraValor, ehTicket, normalizarForma };
