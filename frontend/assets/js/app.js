@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.27.1';
+const VERSAO = '1.28.0';
 
 const state = {
   sessao: getSessao(),
@@ -3121,6 +3121,12 @@ function bind() {
   const formFornecedor = root.querySelector('[data-action="novo-fornecedor"]');
   if (formFornecedor) formFornecedor.addEventListener('submit', onNovoFornecedor);
 
+  // Enter anda para o próximo campo em vez de enviar o formulário. Quem lança
+  // boleto digita olhando o papel, não a tela: tirar a mão do teclado para
+  // clicar em cada campo é o que faz o lançamento demorar. No último campo o
+  // foco cai no botão, e aí o Enter cadastra.
+  root.querySelectorAll('form.form-inline').forEach(ligarEnterQueAvanca);
+
   const formConta = root.querySelector('[data-action="nova-conta"]');
   if (formConta) formConta.addEventListener('submit', onNovaConta);
 
@@ -4223,6 +4229,33 @@ async function onMoverContas() {
     state.erro = err.message;
     render();
   }
+}
+
+function ligarEnterQueAvanca(form) {
+  form.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' || ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
+
+    const alvo = ev.target;
+    // No botão o Enter tem que continuar valendo como clique, senão não haveria
+    // como enviar sem o mouse. Textarea guarda o Enter para a quebra de linha.
+    if (alvo.tagName === 'BUTTON' || alvo.tagName === 'TEXTAREA') return;
+
+    ev.preventDefault();
+
+    // Campo escondido não entra na fila: a forma de pagamento só aparece quando
+    // a caixa "já paguei" é marcada, e parar num campo invisível travaria a
+    // digitação sem explicação.
+    const campos = [...form.querySelectorAll('input, select, button')].filter(
+      (c) => !c.disabled && c.type !== 'hidden' && c.offsetParent !== null
+    );
+
+    const proximo = campos[campos.indexOf(alvo) + 1];
+    if (!proximo) return;
+    proximo.focus();
+    // Campo já preenchido abre selecionado: digitar por cima é o que se quer
+    // quando se está conferindo um papel, não emendar no que já estava lá.
+    if (typeof proximo.select === 'function' && proximo.value) proximo.select();
+  });
 }
 
 async function onNovaConta(ev) {
