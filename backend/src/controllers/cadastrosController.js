@@ -5,6 +5,11 @@ const { registrarAuditoria } = require('../utils/auditoria');
 // compartilham a mesma forma, então são gerados a partir de uma descrição em vez
 // de quatro controllers iguais.
 const ENTIDADES = {
+  fornecedores: {
+    tabela: 'fornecedores',
+    campos: ['nome', 'cnpj_cpf', 'telefone', 'pix', 'observacoes', 'ceasa'],
+    ordem: 'nome',
+  },
   clientes: {
     tabela: 'clientes',
     campos: ['codigo', 'nome', 'telefone', 'cpf_cnpj', 'observacoes'],
@@ -31,6 +36,13 @@ const ENTIDADES = {
 // índice único e aqui isso vira uma mensagem que o usuário entende.
 function ehNomeRepetido(err) {
   return err && err.code === '23505';
+}
+
+// Cadastro apontado por lançamento não pode sumir: o histórico ficaria órfão. O
+// banco recusa pela chave estrangeira, e aqui isso vira uma explicação em vez de
+// um erro 500 sem sentido.
+function estaEmUso(err) {
+  return err && err.code === '23503';
 }
 
 function criarHandlers(chave) {
@@ -111,7 +123,18 @@ function criarHandlers(chave) {
 
   async function deletar(req, res) {
     const { id } = req.params;
-    const { rows } = await pool.query(`DELETE FROM ${tabela} WHERE id = $1 RETURNING id`, [id]);
+
+    let rows;
+    try {
+      ({ rows } = await pool.query(`DELETE FROM ${tabela} WHERE id = $1 RETURNING id`, [id]));
+    } catch (err) {
+      if (estaEmUso(err)) {
+        return res.status(409).json({
+          error: 'Este cadastro tem lançamentos ligados a ele e por isso não pode ser excluído.',
+        });
+      }
+      throw err;
+    }
 
     if (!rows[0]) {
       return res.status(404).json({ error: 'Registro não encontrado.' });
