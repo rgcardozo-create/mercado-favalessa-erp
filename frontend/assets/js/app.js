@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.28.0';
+const VERSAO = '1.29.0';
 
 const state = {
   sessao: getSessao(),
@@ -2893,14 +2893,7 @@ function contasHTML() {
         <label>Parcelas
           <input type="number" min="1" max="60" step="1" name="parcelas" value="${escapar(pendente.parcelas || 1)}" />
         </label>
-        <label>A cada
-          <select name="intervalo">
-            <option value="mensal" ${pendente.intervalo === '7' || pendente.intervalo === '15' || pendente.intervalo === '20' || pendente.intervalo === '21' || pendente.intervalo === '30' ? '' : 'selected'}>mês (mesmo dia)</option>
-            ${['7', '15', '20', '21', '30']
-              .map((d) => `<option value="${d}" ${pendente.intervalo === d ? 'selected' : ''}>${d} dias</option>`)
-              .join('')}
-          </select>
-        </label>
+        ${campoIntervaloHTML(pendente.intervalo)}
         <label class="campo-marca campo-largo">
           <input type="checkbox" name="pago" id="conta-ja-paga" ${ehCeasa ? 'checked' : ''} />
           Já paguei — lançar como quitada
@@ -2986,6 +2979,25 @@ function barraMoverContasHTML() {
       <button type="button" id="btn-mover-contas">Enviar</button>
       <button type="button" id="btn-limpar-marcadas" class="secundario">Desmarcar</button>
     </div>
+  `;
+}
+
+// Intervalo entre parcelas: ou anda de mês em mês mantendo o dia, ou anda um
+// número de dias que a pessoa digita. Boleto não segue calendário redondo — vem
+// de 2, 9, 93 dias —, e uma lista de opções sempre deixaria de fora justo o que
+// está na mão de quem lança.
+function campoIntervaloHTML(intervalo) {
+  const dias = intervalo && intervalo !== 'mensal' ? String(intervalo) : '';
+  return `
+    <label>A cada
+      <select name="intervalo_tipo">
+        <option value="mensal" ${dias ? '' : 'selected'}>mês (mesmo dia)</option>
+        <option value="dias" ${dias ? 'selected' : ''}>dias corridos</option>
+      </select>
+    </label>
+    <label id="campo-intervalo-dias" class="${dias ? '' : 'escondido'}">Quantos dias
+      <input type="number" name="intervalo_dias" min="1" max="365" step="1" value="${dias || 30}" />
+    </label>
   `;
 }
 
@@ -3164,6 +3176,16 @@ function bind() {
     btnLimparMarcadas.addEventListener('click', () => {
       state.contasMarcadas = new Set();
       render();
+    });
+  }
+
+  const tipoIntervalo = root.querySelector('select[name=intervalo_tipo]');
+  if (tipoIntervalo) {
+    const campoDias = root.querySelector('#campo-intervalo-dias');
+    tipoIntervalo.addEventListener('change', () => {
+      const emDias = tipoIntervalo.value === 'dias';
+      campoDias.classList.toggle('escondido', !emDias);
+      if (emDias) campoDias.querySelector('input').focus();
     });
   }
 
@@ -4277,7 +4299,7 @@ async function onNovaConta(ev) {
     vencimento: fd.get('vencimento'),
     forma_prevista: fd.get('forma_prevista') || null,
     parcelas: fd.get('parcelas') || 1,
-    intervalo: fd.get('intervalo') || 'mensal',
+    intervalo: fd.get('intervalo_tipo') === 'dias' ? fd.get('intervalo_dias') || '30' : 'mensal',
   };
   await enviarNovaConta(payload);
 }

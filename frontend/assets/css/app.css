@@ -177,6 +177,7 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .campo-marca input { width: 16px; height: 16px; margin: 0; accent-color: var(--azul); }
 .campos-embutidos { display: contents; }
 .campos-embutidos.escondido { display: none; }
+label.escondido { display: none; }
 
 .bloco-painel.operacionais { border-top: 3px solid #7A5AF8; }
 .bloco-painel.despesas { border-top: 3px solid var(--verde); }

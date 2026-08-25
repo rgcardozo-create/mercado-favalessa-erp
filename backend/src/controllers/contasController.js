@@ -126,8 +126,20 @@ async function obter(req, res) {
 // com seu vencimento. O intervalo é em dias, menos "mensal", que anda de mês em
 // mês mantendo o dia — quem paga todo dia 10 espera 10/09, não 09/09 (que é o
 // que dariam 30 dias corridos). Mês curto encosta no último dia (31/01 -> 28/02).
-const INTERVALOS = ['mensal', '7', '15', '20', '21', '30'];
+// O intervalo é 'mensal' ou um número de dias digitado. Aceitar qualquer número
+// em vez de uma lista fechada porque boleto não segue calendário redondo: vem de
+// 2, 4, 9, 93 dias, e uma lista de opções sempre deixaria de fora justo o que
+// está na mão da pessoa.
+const MAX_INTERVALO_DIAS = 365;
 const MAX_PARCELAS = 60;
+
+function normalizarIntervalo(valor) {
+  const texto = String(valor ?? 'mensal').trim();
+  if (texto === '' || texto === 'mensal') return 'mensal';
+  const dias = Number(texto);
+  if (!Number.isInteger(dias) || dias < 1 || dias > MAX_INTERVALO_DIAS) return null;
+  return String(dias);
+}
 
 async function datasDasParcelas({ vencimento, parcelas, intervalo }) {
   const sql =
@@ -174,7 +186,12 @@ async function criar(req, res) {
       error: 'Lançamento já pago é de uma parcela só. Para parcelar, cadastre e dê baixa em cada parcela.',
     });
   }
-  const intervalo = INTERVALOS.includes(String(req.body.intervalo)) ? String(req.body.intervalo) : 'mensal';
+  const intervalo = normalizarIntervalo(req.body.intervalo);
+  if (intervalo === null) {
+    return res.status(400).json({
+      error: `O intervalo entre parcelas precisa ser "mensal" ou um número de 1 a ${MAX_INTERVALO_DIAS} dias.`,
+    });
+  }
 
   const datas = await datasDasParcelas({ vencimento, parcelas, intervalo });
 
