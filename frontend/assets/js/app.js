@@ -1,17 +1,18 @@
 import { apiFetch, getSessao, salvarSessao, limparSessao, setFolhaToken, getFolhaToken } from './api.js';
 import { brl, brlCurto, mesCurto, dateBR, todayISO, escapar } from './helpers.js';
 
-// As quatro telas de Contas a pagar. Rótulos iguais aos do sistema atual.
+// As telas de Contas a pagar. Rótulos iguais aos do sistema atual.
 const TIPOS = [
   { tipo: 'fornecedor', rotulo: 'Fornecedores' },
   { tipo: 'fixa', rotulo: 'Despesas fixas' },
   { tipo: 'imposto', rotulo: 'Impostos' },
+  { tipo: 'operacional', rotulo: 'Custos operacionais' },
   { tipo: 'despesa', rotulo: 'Outras despesas' },
 ];
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.23.0';
+const VERSAO = '1.24.0';
 
 const state = {
   sessao: getSessao(),
@@ -27,6 +28,7 @@ const state = {
   filtroFixas: 'ate_hoje',
   filtroImpostos: 'ate_hoje',
   filtroDespesas: 'ate_hoje',
+  filtroOperacionais: 'ate_hoje',
   conciliacao: null,
   acumulados: null,
   // Resumo de vendas: responde "estou vendendo bem?" e cobra os dias em branco.
@@ -178,7 +180,8 @@ async function carregarDados() {
         apiFetch(
           `/painel-do-dia?filtro=${state.filtroBoletos}` +
             `&filtroFixas=${state.filtroFixas}&filtroImpostos=${state.filtroImpostos}` +
-            `&filtroDespesas=${state.filtroDespesas}`,
+            `&filtroDespesas=${state.filtroDespesas}` +
+            `&filtroOperacionais=${state.filtroOperacionais}`,
         ),
         apiFetch('/cadastros/formas-pagamento'),
         apiFetch('/cadastros/bancos'),
@@ -683,6 +686,16 @@ function painelHTML() {
         vazio: 'Nenhum imposto neste recorte.',
         extra: seletorHTML('filtro-impostos', OPCOES_FIXOS, p.filtro_impostos),
         rodape: restante(p.impostos, 'Os que vencem depois aparecem mudando o seletor acima.'),
+      })}
+
+      ${blocoPainelHTML({
+        titulo: 'Custos operacionais',
+        icone: '🧴',
+        bloco: p.operacionais,
+        classe: 'operacionais',
+        vazio: 'Nenhum custo operacional neste recorte.',
+        extra: seletorHTML('filtro-operacionais', OPCOES_FIXOS, p.filtro_operacionais),
+        rodape: restante(p.operacionais, 'Os que vencem depois aparecem mudando o seletor acima.'),
       })}
 
       ${blocoPainelHTML({
@@ -2003,6 +2016,21 @@ function folhaHTML() {
           Não entra nas despesas da empresa.
         </p>
       </form>
+
+      <form data-action="novo-servico-extra" class="form-inline">
+        <h2>Serviço extra pago</h2>
+        <label>Código do funcionário
+          <input type="text" name="codigo" required placeholder="ex.: 344" autocomplete="off" />
+        </label>
+        <label>Valor <input type="number" step="0.01" min="0.01" name="valor" required /></label>
+        <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
+        <label>Observação <input type="text" name="observacoes" placeholder="ex.: descarga de caminhão no domingo" /></label>
+        <button type="submit">Registrar</button>
+        <p class="vazio campo-largo">
+          Serviço que o funcionário fez e <strong>já recebeu</strong>. Entra direto como despesa
+          da empresa e não desconta de salário nenhum — diferente do adiantamento aí do lado.
+        </p>
+      </form>
     </section>
 
     <section class="grupo-painel">
@@ -2046,10 +2074,16 @@ function folhaHTML() {
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
-        <h2>Extras / adiantamentos</h2>
-        <span class="grupo-total">${brl(extras.totais.valor)} <small>em aberto ${brl(extras.totais.saldo)}</small></span>
+        <h2>Adiantamentos e serviços extras</h2>
+        <span class="grupo-total">
+          ${brl(extras.totais.adiantamentos)} <small>em adiantamentos, ${brl(extras.totais.adiantamentos_em_aberto)} em aberto</small>
+          ${extras.totais.servicos ? `&middot; ${brl(extras.totais.servicos)} <small>em serviços extras</small>` : ''}
+        </span>
       </div>
-      <p class="vazio">Extras não entram nas despesas da empresa — já são descontados na folha.</p>
+      <p class="vazio">
+        <strong>Adiantamento</strong> não é despesa da empresa: volta pelo desconto na folha.
+        <strong>Serviço extra</strong> é: já foi pago e não desconta de salário.
+      </p>
       ${
         extras.extras.length
           ? `<table class="tabela-contas">
@@ -2058,7 +2092,13 @@ function folhaHTML() {
                 ${extras.extras
                   .map(
                     (e) => `<tr>
-                      <td>${e.nome}</td><td>${e.tipo || '—'}</td><td>${dateBR(e.data)}</td>
+                      <td>${escapar(e.nome)}${e.codigo ? ` <small>(${escapar(e.codigo)})</small>` : ''}</td>
+                      <td>${
+                        e.tipo === 'servico'
+                          ? '<span class="badge tipo">Serviço extra</span>'
+                          : '<span class="badge aberta">Adiantamento</span>'
+                      }</td>
+                      <td>${dateBR(e.data)}</td>
                       <td>${brl(e.valor)}</td><td>${brl(e.total_baixado)}</td><td>${brl(e.saldo)}</td>
                     </tr>`
                   )
@@ -2242,8 +2282,10 @@ function gerencialHTML() {
     fornecedor: 'Fornecedores',
     fixa: 'Despesas fixas',
     imposto: 'Impostos',
+    operacional: 'Custos operacionais',
     despesa: 'Outras despesas',
     folha: 'Folha de pagamento',
+    servico_extra: 'Serviços extras',
   };
   const composicao = Object.entries(t.despesas_por_tipo)
     .filter(([, v]) => v > 0)
@@ -2567,7 +2609,11 @@ function relatoriosHTML() {
             <td>fiado recebido no período</td>
           </tr>
           <tr>
-            <td>Extras / adiantamentos</td><td>${brl(r.extras_informativo.total)}</td>
+            <td>Serviços extras pagos</td><td>${brl(r.servicos_extras.total)}</td>
+            <td>${r.servicos_extras.nota}</td>
+          </tr>
+          <tr>
+            <td>Adiantamentos</td><td>${brl(r.extras_informativo.total)}</td>
             <td>${r.extras_informativo.nota}</td>
           </tr>
         </tbody>
@@ -3191,6 +3237,9 @@ function bind() {
   const formExtra = root.querySelector('[data-action="novo-extra"]');
   if (formExtra) formExtra.addEventListener('submit', onNovoExtra);
 
+  const formServico = root.querySelector('[data-action="novo-servico-extra"]');
+  if (formServico) formServico.addEventListener('submit', onNovoServicoExtra);
+
   const btnTrancar = root.querySelector('#btn-trancar-folha');
   if (btnTrancar) btnTrancar.addEventListener('click', onTrancarFolha);
 
@@ -3226,6 +3275,7 @@ function bind() {
     'filtro-fixas': 'filtroFixas',
     'filtro-impostos': 'filtroImpostos',
     'filtro-despesas': 'filtroDespesas',
+    'filtro-operacionais': 'filtroOperacionais',
   };
   for (const [id, chave] of Object.entries(SELETORES_PAINEL)) {
     const seletor = root.querySelector(`#${id}`);
@@ -3593,6 +3643,33 @@ async function onNovoLancamentoFolha(ev) {
       }),
     });
     state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+// Serviço extra vai pelo código do funcionário: é o que está no crachá e o que
+// quem lança tem na mão. Quem resolve o código em nome é a API — ela é quem tem
+// o cadastro, e assim o erro de código inexistente vem com o número que a pessoa
+// digitou, não com um silêncio.
+async function onNovoServicoExtra(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  try {
+    const criado = await apiFetch('/folha/extras', {
+      method: 'POST',
+      body: JSON.stringify({
+        codigo: fd.get('codigo'),
+        tipo: 'servico',
+        valor: fd.get('valor'),
+        data: fd.get('data'),
+        observacoes: fd.get('observacoes') || null,
+      }),
+    });
+    state.erro = null;
+    alert(`Serviço extra de ${brl(criado.valor)} registrado para ${criado.nome}.`);
     carregarDados();
   } catch (err) {
     state.erro = err.message;

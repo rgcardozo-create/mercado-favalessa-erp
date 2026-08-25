@@ -88,12 +88,18 @@ async function consolidado(req, res) {
     [de, ate]
   );
 
-  // Extras: fora das despesas de propósito, exibidos apenas como informação.
+  // Adiantamento fica fora das despesas de propósito: ele volta pelo desconto na
+  // folha. Serviço extra é o contrário — saiu e não volta, então é despesa.
   const { rows: extrasRows } = await pool.query(
-    `SELECT count(*)::int AS lancamentos, COALESCE(sum(valor), 0) AS total
+    `SELECT
+       count(*) FILTER (WHERE tipo IS DISTINCT FROM 'servico')::int AS lancamentos,
+       COALESCE(sum(valor) FILTER (WHERE tipo IS DISTINCT FROM 'servico'), 0) AS total,
+       count(*) FILTER (WHERE tipo = 'servico')::int AS servicos_lancamentos,
+       COALESCE(sum(valor) FILTER (WHERE tipo = 'servico'), 0) AS servicos_total
        FROM extras WHERE data BETWEEN $1 AND $2`,
     [de, ate]
   );
+  const servicosExtras = Number(extrasRows[0].servicos_total);
 
   // Venda do período pelo fechamento diário — é a resposta para "quanto vendi",
   // e não se confunde com "quanto entrou de cartão", que chega dias depois.
@@ -125,7 +131,8 @@ async function consolidado(req, res) {
     [de, ate]
   );
 
-  const totalDespesas = despesasPorTipo.reduce((a, d) => a + d.pago, 0) + folhaTotal;
+  const totalDespesas =
+    despesasPorTipo.reduce((a, d) => a + d.pago, 0) + folhaTotal + servicosExtras;
   const vendas = {
     dias: vendasRows[0].dias,
     total: Number(vendasRows[0].total),
@@ -170,10 +177,15 @@ async function consolidado(req, res) {
       compras: Number(prazoRows[0].compras),
       pagamentos: Number(prazoRows[0].pagamentos),
     },
+    servicos_extras: {
+      lancamentos: extrasRows[0].servicos_lancamentos,
+      total: servicosExtras,
+      nota: 'Entra nas despesas: é pagamento por serviço, não desconta de salário.',
+    },
     extras_informativo: {
       lancamentos: extrasRows[0].lancamentos,
       total: Number(extrasRows[0].total),
-      nota: 'Não entra nas despesas: já é descontado na folha.',
+      nota: 'Adiantamentos. Não entram nas despesas: são descontados na folha.',
     },
   });
 }
@@ -208,6 +220,12 @@ async function gerencial(req, res) {
   const { rows: folha } = await pool.query(
     `SELECT to_char(data_pagamento, 'YYYY-MM') AS mes, COALESCE(sum(valor), 0) AS total
        FROM folha_pagamentos WHERE data_pagamento BETWEEN $1 AND $2 GROUP BY 1`,
+    [de, ate]
+  );
+
+  const { rows: servicos } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM') AS mes, COALESCE(sum(valor), 0) AS total
+       FROM extras WHERE tipo = 'servico' AND data BETWEEN $1 AND $2 GROUP BY 1`,
     [de, ate]
   );
 
@@ -252,6 +270,9 @@ async function gerencial(req, res) {
       return acc;
     }, {});
     porTipo.folha = folhaMes ? Number(folhaMes.total) : 0;
+    // Serviço extra é despesa de gente, mas não é folha: aparece separado para
+    // não somir dentro do salário de ninguém.
+    porTipo.servico_extra = Number((acha(servicos, mes) || {}).total || 0);
 
     const totalDespesas = Object.values(porTipo).reduce((a, v) => a + v, 0);
     const totalVendas = venda ? Number(venda.total) : 0;

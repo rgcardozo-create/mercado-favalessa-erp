@@ -177,7 +177,11 @@ async function criar(req, res) {
            FROM extras e
            LEFT JOIN (SELECT extra_id, SUM(valor) AS total FROM extras_baixas GROUP BY extra_id) b
              ON b.extra_id = e.id
-          WHERE e.funcionario_id = $1 AND e.valor - COALESCE(b.total, 0) > 0
+          WHERE e.funcionario_id = $1
+            AND e.valor - COALESCE(b.total, 0) > 0
+            -- Serviço extra já foi pago e nasce quitado; se um dia sobrar saldo
+            -- nele por qualquer motivo, ainda assim não é vale a descontar.
+            AND e.tipo IS DISTINCT FROM 'servico'
           ORDER BY e.data, e.id`,
         [funcionario_id]
       );

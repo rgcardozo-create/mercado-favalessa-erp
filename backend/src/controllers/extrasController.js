@@ -1,12 +1,18 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 
-// Extras = adiantamentos/vales de funcionário.
+// Extras de funcionário. São duas coisas diferentes, e a diferença é o que decide
+// se o valor é despesa da empresa ou não:
 //
-// IMPORTANTE: estes valores NÃO entram em nenhuma soma de despesa da empresa.
-// Eles já são descontados na folha (campo `adiantamento`), então contá-los de novo
-// duplicaria a despesa (SPEC.md, regra 3). Por isso este controller nunca é
-// chamado pelo painel nem pelos relatórios de despesa.
+//   adiantamento — vale que o funcionário pediu. Fica em aberto e é descontado
+//   do salário na folha seguinte. NÃO é despesa: o dinheiro volta pelo desconto,
+//   e contá-lo aqui duplicaria a despesa (SPEC.md, regra 3).
+//
+//   servico — serviço extra que o funcionário fez e já recebeu. Não desconta de
+//   salário nenhum: é dinheiro que saiu da empresa e não volta, então É despesa
+//   e entra nos totais dos relatórios. Nasce já quitado, com a baixa no mesmo
+//   ato, justamente para nunca ser abatido de uma folha futura.
+const TIPO_SERVICO = 'servico';
 const SELECT_EXTRAS = `
   SELECT
     e.*,
@@ -28,41 +34,111 @@ async function listar(req, res) {
     saldo: Number(r.saldo),
   }));
 
+  const somar = (lista, campo) => lista.reduce((a, e) => a + Number(e[campo]), 0);
+  const adiantamentos = extras.filter((e) => e.tipo !== TIPO_SERVICO);
+  const servicos = extras.filter((e) => e.tipo === TIPO_SERVICO);
+
   return res.json({
     extras,
     totais: {
-      valor: extras.reduce((a, e) => a + Number(e.valor), 0),
-      baixado: extras.reduce((a, e) => a + e.total_baixado, 0),
-      saldo: extras.reduce((a, e) => a + e.saldo, 0),
+      valor: somar(extras, 'valor'),
+      baixado: somar(extras, 'total_baixado'),
+      saldo: somar(extras, 'saldo'),
+      // Separados porque respondem a perguntas diferentes: o adiantamento em
+      // aberto é dinheiro a receber de volta; o serviço extra é despesa fechada.
+      adiantamentos: somar(adiantamentos, 'valor'),
+      adiantamentos_em_aberto: somar(adiantamentos, 'saldo'),
+      servicos: somar(servicos, 'valor'),
     },
   });
 }
 
-async function criar(req, res) {
-  const { funcionario_id, nome, codigo, tipo, valor, data, observacoes } = req.body;
-
-  if (!nome || valor === undefined || !data) {
-    return res.status(400).json({ error: 'nome, valor e data são obrigatórios.' });
+// O funcionário pode vir pelo id (lista da tela) ou pelo código digitado. O
+// código é o que está no crachá e na boca do gerente — foi por ele que o
+// funcionário já foi ligado ao cliente da venda a prazo, então é o mesmo caminho.
+async function acharFuncionario({ funcionario_id: id, codigo }) {
+  if (id) {
+    const { rows } = await pool.query('SELECT id, nome, codigo FROM funcionarios WHERE id = $1', [id]);
+    return rows[0] || null;
   }
-  if (Number(valor) < 0) {
-    return res.status(400).json({ error: 'valor não pode ser negativo.' });
-  }
-
+  if (!codigo) return null;
   const { rows } = await pool.query(
-    `INSERT INTO extras (funcionario_id, nome, codigo, tipo, valor, data, observacoes, criado_por)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
-    [funcionario_id || null, nome, codigo || null, tipo || 'adiantamento', valor, data, observacoes || null, req.user.id]
+    'SELECT id, nome, codigo FROM funcionarios WHERE lower(btrim(codigo)) = lower(btrim($1))',
+    [String(codigo)]
   );
+  return rows[0] || null;
+}
+
+async function criar(req, res) {
+  const { valor, data, observacoes } = req.body;
+  const tipo = req.body.tipo === TIPO_SERVICO ? TIPO_SERVICO : 'adiantamento';
+
+  if (valor === undefined || !data) {
+    return res.status(400).json({ error: 'valor e data são obrigatórios.' });
+  }
+  if (!(Number(valor) > 0)) {
+    return res.status(400).json({ error: 'valor precisa ser maior que zero.' });
+  }
+
+  const funcionario = await acharFuncionario(req.body);
+  const nome = funcionario ? funcionario.nome : req.body.nome;
+  if (!nome) {
+    return res.status(400).json({
+      error: req.body.codigo
+        ? `Nenhum funcionário com o código ${req.body.codigo}. Confira no cadastro de funcionários.`
+        : 'Escolha o funcionário (pelo nome ou pelo código).',
+    });
+  }
+
+  const cliente = await pool.connect();
+  let criado;
+  try {
+    await cliente.query('BEGIN');
+
+    const { rows } = await cliente.query(
+      `INSERT INTO extras (funcionario_id, nome, codigo, tipo, valor, data, observacoes, criado_por)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [
+        funcionario ? funcionario.id : null,
+        nome,
+        (funcionario && funcionario.codigo) || req.body.codigo || null,
+        tipo,
+        valor,
+        data,
+        observacoes || null,
+        req.user.id,
+      ]
+    );
+    criado = rows[0];
+
+    // Serviço extra já foi pago: a baixa nasce junto. Sem ela o valor ficaria
+    // "em aberto" e a próxima folha o abateria do salário — cobrando do
+    // funcionário um dinheiro que a empresa já tinha dado a ele.
+    if (tipo === TIPO_SERVICO) {
+      await cliente.query(
+        `INSERT INTO extras_baixas (extra_id, valor, data, observacoes)
+         VALUES ($1, $2, $3, $4)`,
+        [criado.id, valor, data, 'Pago no ato — serviço extra']
+      );
+    }
+
+    await cliente.query('COMMIT');
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
 
   await registrarAuditoria({
     usuarioId: req.user.id,
     acao: 'create',
     entidade: 'extras',
-    entidadeId: rows[0].id,
-    dados: rows[0],
+    entidadeId: criado.id,
+    dados: criado,
   });
 
-  return res.status(201).json(rows[0]);
+  return res.status(201).json(criado);
 }
 
 async function registrarBaixa(req, res) {

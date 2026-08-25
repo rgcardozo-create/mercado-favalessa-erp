@@ -29,14 +29,15 @@ const SEM_ACENTO = (expr) =>
 // "Hoje" sempre no fuso da loja, não no fuso do servidor (Railway roda em UTC).
 const HOJE_SP = `(now() AT TIME ZONE 'America/Sao_Paulo')::date`;
 
-// Os quatro tipos de conta a pagar da empresa. `pessoal` e `extra` não entram aqui
-// de propósito — ver comentário do enum conta_tipo no schema.
-const TIPOS_VALIDOS = ['fornecedor', 'fixa', 'imposto', 'despesa'];
+// Os tipos de conta a pagar da empresa. `pessoal` e `extra` não entram aqui de
+// propósito — ver comentário do enum conta_tipo no schema.
+const TIPOS_VALIDOS = ['fornecedor', 'fixa', 'imposto', 'operacional', 'despesa'];
 
 const ROTULOS_TIPO = {
   fornecedor: 'Fornecedores',
   fixa: 'Despesas fixas',
   imposto: 'Impostos',
+  operacional: 'Custos operacionais',
   despesa: 'Outras despesas',
 };
 

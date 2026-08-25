@@ -357,6 +357,11 @@ UPDATE conciliacao_dinheiro d SET impressao_digital = s.fp
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_impressao ON conciliacao_transacoes(impressao_digital);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_dinheiro_impressao ON conciliacao_dinheiro(impressao_digital);
 
+-- Custos operacionais: o que a loja consome para funcionar (filtro, bobina,
+-- sacola, material de limpeza). Não é fornecedor de mercadoria nem despesa fixa,
+-- e misturado nos dois some — é justamente o gasto que passa despercebido.
+ALTER TYPE conta_tipo ADD VALUE IF NOT EXISTS 'operacional';
+
 -- O relatório de finalizadoras do PDV traz duas coisas que extrato de adquirente
 -- nunca vê: o dinheiro e a venda a prazo do dia. Venda a prazo é venda — leva
 -- trinta dias para entrar, mas saiu da loja naquele dia — então ela é conferida
