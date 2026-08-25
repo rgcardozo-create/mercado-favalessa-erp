@@ -6,7 +6,7 @@
 // ou conta vencida a partir de cache velho seria pior do que não abrir.
 // Trocar o nome descarta o cache antigo inteiro no `activate` — é o que garante
 // que ninguém fique com o casco de um deploy anterior.
-const CACHE = 'mf-casco-v10';
+const CACHE = 'mf-casco-v11';
 
 const CASCO = [
   './',
