@@ -153,6 +153,25 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 }
 .bloco-painel.fixas { border-top: 3px solid var(--azul); }
 .bloco-painel.impostos { border-top: 3px solid var(--amarelo); }
+/* Marcação de lançamentos para mudar de aba. */
+.tabela-contas .col-marca { width: 1%; text-align: center; padding-right: 0; }
+.tabela-contas .col-marca input { width: 16px; height: 16px; margin: 0; accent-color: var(--azul); }
+.tabela-contas tbody tr.marcada td { background: var(--azul-suave); }
+.barra-mover {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #FFF8E1;
+  border: 1px solid var(--amarelo);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.barra-mover label { flex-direction: row; align-items: center; gap: 6px; }
+.barra-mover select { font-size: 13px; padding: 5px 8px; }
+
 /* Caixa de "já paguei" e os campos que ela revela dentro do mesmo formulário. */
 .campo-marca { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--texto); }
 .campo-marca input { width: 16px; height: 16px; margin: 0; accent-color: var(--azul); }

@@ -11,6 +11,8 @@ router.use(authenticate);
 router.get('/', asyncHandler(contasController.listar));
 router.get('/:id', asyncHandler(contasController.obter));
 router.post('/', authorize('master', 'gerente', 'loja'), asyncHandler(contasController.criar));
+// Antes do /:id para "mover" não ser lido como id de conta.
+router.post('/mover', authorize('master', 'gerente'), asyncHandler(contasController.mover));
 
 // Edição, exclusão e pagamento (baixa) exigem permissão de Master ou Gerente.
 // Ajustável: ver "itens em aberto" no SPEC.md sobre o nível de acesso exato do login Loja.
