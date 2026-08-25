@@ -2,10 +2,18 @@ const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 const { SELECT_CONTAS_COM_SALDO, SEM_ACENTO, HOJE_SP, TIPOS_VALIDOS } = require('../db/contasQuery');
 
-// Duas contas iguais no fornecedor, na descrição, no vencimento E no valor são,
-// na prática, o mesmo boleto lançado duas vezes. Repetir fornecedor e descrição é
-// normal (é o mesmo fornecedor todo mês); repetir também data e valor não é.
-// Parcelas diferem no vencimento, e dois boletos do mesmo dia diferem no valor.
+// O mesmo boleto lançado duas vezes é: mesmo fornecedor, mesmo valor, mesmo
+// vencimento. A descrição fica de fora — é texto livre, muda a cada digitação
+// ("ADILSON", "adilson 2", "boleto adilson"), e enquanto ela contava bastava
+// escrever diferente para o mesmo boleto entrar de novo sem aviso.
+//
+// Repetir fornecedor é normal (é o mesmo todo mês) e repetir valor também;
+// parcelas diferem no vencimento e dois boletos do mesmo dia diferem no valor.
+// Os três juntos é que não acontecem por acaso.
+//
+// Sem fornecedor (despesa fixa, imposto, custo operacional, outras), a descrição
+// é o que identifica o lançamento e volta a contar: sem ela, dois impostos
+// diferentes de mesmo valor no mesmo dia seriam tratados como o mesmo.
 async function contaDuplicada({ tipo, fornecedorId, descricao, valor, vencimento, ignorarId = null }) {
   const { rows } = await pool.query(
     `SELECT c.id, c.descricao, c.valor, c.tipo, f.nome AS fornecedor_nome,
@@ -15,13 +23,13 @@ async function contaDuplicada({ tipo, fornecedorId, descricao, valor, vencimento
        LEFT JOIN fornecedores f ON f.id = c.fornecedor_id
       WHERE c.tipo = $1
         AND c.fornecedor_id IS NOT DISTINCT FROM $2
-        AND ${SEM_ACENTO('btrim(c.descricao)')} = ${SEM_ACENTO('btrim($3)')}
         AND c.valor = $4
         AND c.vencimento = $5
-        AND ($6::bigint IS NULL OR c.id <> $6)
+        AND ($6 OR ${SEM_ACENTO('btrim(c.descricao)')} = ${SEM_ACENTO('btrim($3)')})
+        AND ($7::bigint IS NULL OR c.id <> $7)
       ORDER BY c.id
       LIMIT 1`,
-    [tipo, fornecedorId, descricao, valor, vencimento, ignorarId]
+    [tipo, fornecedorId, descricao, valor, vencimento, Boolean(fornecedorId), ignorarId]
   );
   return rows[0] || null;
 }
@@ -31,7 +39,9 @@ function respostaDuplicada(res, existente) {
   const quem = existente.fornecedor_nome ? `${existente.fornecedor_nome} — ` : '';
   return res.status(409).json({
     error:
-      `Já existe um lançamento igual: ${quem}${existente.descricao}, vencimento ${dia}, ` +
+      `Já existe um lançamento com ${
+        existente.fornecedor_nome ? 'o mesmo fornecedor' : 'a mesma descrição'
+      }, valor e vencimento: ${quem}${existente.descricao}, vencimento ${dia}, ` +
       `valor R$ ${Number(existente.valor).toFixed(2).replace('.', ',')}. ` +
       'Se for mesmo outra conta, confirme para cadastrar assim mesmo.',
     duplicada: existente,

@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.26.0';
+const VERSAO = '1.27.1';
 
 const state = {
   sessao: getSessao(),
@@ -58,7 +58,9 @@ const state = {
   sugestaoCarregando: false,
   vendaPrazo: null,
   cadastros: null,
-  cadastroTipo: 'clientes',
+  // Fornecedores abre primeiro: é o cadastro mais consultado e o único com
+  // dados que se procura de novo (chave PIX, CNPJ, telefone).
+  cadastroTipo: 'fornecedores',
   folha: null,
   // Recorte da folha: 'atual' (padrão), 'anterior' ou '' para tudo.
   folhaMes: 'atual',
@@ -563,10 +565,15 @@ function campoFormaPrevistaHTML(atual) {
 // tela de contas. A forma é guardada pelo nome (é assim que o histórico
 // importado já está), o banco por id, que é chave estrangeira. Nada vem
 // escolhido de antemão: forma de pagamento errada por descuido é registro errado.
-function camposFormaEBancoHTML(selecionados = {}) {
+// `obrigatorio` existe porque estes campos também aparecem escondidos, dentro do
+// formulário de lançamento, esperando a caixa "já paguei" ser marcada. Campo
+// escondido e obrigatório trava o envio sem mostrar nada: o navegador se recusa a
+// enviar, não consegue apontar o erro porque o campo não está na tela, e o botão
+// simplesmente não faz nada.
+function camposFormaEBancoHTML(selecionados = {}, obrigatorio = true) {
   return `
     <label>Forma de pagamento
-      <select name="forma_pagamento" required ${state.formasPagamento.length ? '' : 'disabled'}>
+      <select name="forma_pagamento" ${obrigatorio ? 'required' : ''} ${state.formasPagamento.length ? '' : 'disabled'}>
         ${
           state.formasPagamento.length
             ? `<option value="">— escolha —</option>${state.formasPagamento
@@ -1877,6 +1884,7 @@ function vendaPrazoHTML() {
 }
 
 const CADASTROS = [
+  { chave: 'fornecedores', rotulo: 'Fornecedores' },
   { chave: 'clientes', rotulo: 'Clientes' },
   { chave: 'funcionarios', rotulo: 'Funcionários' },
   { chave: 'bancos', rotulo: 'Bancos' },
@@ -1889,6 +1897,7 @@ function cadastrosHTML() {
   const registros = state.cadastros || [];
 
   const colunas = {
+    fornecedores: ['nome', 'cnpj_cpf', 'telefone', 'pix'],
     clientes: ['codigo', 'nome', 'telefone', 'cpf_cnpj'],
     funcionarios: ['codigo', 'nome', 'telefone', 'cpf', 'pix'],
     bancos: ['nome'],
@@ -1897,10 +1906,13 @@ function cadastrosHTML() {
 
   const rotulos = {
     codigo: 'Código', nome: 'Nome', telefone: 'Telefone',
-    cpf_cnpj: 'CPF/CNPJ', cpf: 'CPF', pix: 'PIX',
+    cpf_cnpj: 'CNPJ/CPF', cpf: 'CPF', pix: 'Chave PIX',
   };
 
   const ajuda = {
+    fornecedores:
+      'Todos os fornecedores cadastrados, com os dados de cada um. Só o nome é obrigatório — ' +
+      'o resto entra quando você tiver, e fica guardado aqui para consulta.',
     'formas-pagamento':
       'Estas são as opções que aparecem ao dar baixa em uma conta (Dinheiro, PIX, Boleto…).',
     bancos: 'Os bancos aparecem na baixa, para registrar de onde o dinheiro saiu.',
@@ -1939,7 +1951,14 @@ function cadastrosHTML() {
             ? registros
                 .map(
                   (r) => `<tr>
-                    ${colunas.map((c) => `<td>${r[c] || '—'}</td>`).join('')}
+                    ${colunas
+                      .map(
+                        (c) =>
+                          `<td>${escapar(r[c] || '') || '—'}${
+                            c === 'nome' && r.ceasa ? ' <span class="badge tipo">Ceasa</span>' : ''
+                          }</td>`
+                      )
+                      .join('')}
                     <td class="acoes"><div class="acoes-linha">${podeGerenciar() ? `<button data-action="excluir-cadastro" data-id="${r.id}" class="perigo">Excluir</button>` : ''}</div></td>
                   </tr>`
                 )
@@ -2834,15 +2853,17 @@ function contasHTML() {
           ? `<form data-action="novo-fornecedor" class="form-inline">
               <h2>Novo fornecedor${ehCeasa ? ' da Ceasa' : ''}</h2>
               <label>Nome <input type="text" name="nome" required /></label>
+              <label>CNPJ/CPF <input type="text" name="cnpj_cpf" placeholder="opcional" /></label>
+              <label>Telefone <input type="text" name="telefone" placeholder="opcional" /></label>
+              <label>Chave PIX <input type="text" name="pix" placeholder="opcional" /></label>
               <button type="submit">Adicionar</button>
-              ${
-                ehCeasa
-                  ? `<p class="vazio campo-largo">
-                      O nome fica marcado como da Ceasa e aparece só nesta aba — não polui a
-                      lista de fornecedores.
-                    </p>`
-                  : ''
-              }
+              <p class="vazio campo-largo">
+                Só o nome é obrigatório. ${
+                  ehCeasa
+                    ? 'O fornecedor fica marcado como da Ceasa e aparece só nesta aba — não polui a lista de fornecedores.'
+                    : 'O resto fica guardado em Cadastros › Fornecedores, para consultar quando precisar.'
+                }
+              </p>
             </form>`
           : ''
       }
@@ -2885,7 +2906,7 @@ function contasHTML() {
           Já paguei — lançar como quitada
         </label>
         <div id="campos-ja-pago" class="campos-embutidos ${ehCeasa ? '' : 'escondido'}">
-          ${camposFormaEBancoHTML({ forma: ehCeasa ? 'PIX' : '' })}
+          ${camposFormaEBancoHTML({ forma: ehCeasa ? 'PIX' : '' }, ehCeasa)}
         </div>
         <button type="submit">Cadastrar</button>
         <p class="vazio campo-largo">
@@ -4145,7 +4166,13 @@ async function onNovoFornecedor(ev) {
   try {
     await apiFetch('/fornecedores', {
       method: 'POST',
-      body: JSON.stringify({ nome: fd.get('nome'), ceasa: state.tipo === 'ceasa' }),
+      body: JSON.stringify({
+        nome: fd.get('nome'),
+        cnpj_cpf: fd.get('cnpj_cpf') || null,
+        telefone: fd.get('telefone') || null,
+        pix: fd.get('pix') || null,
+        ceasa: state.tipo === 'ceasa',
+      }),
     });
     carregarDados();
   } catch (err) {
