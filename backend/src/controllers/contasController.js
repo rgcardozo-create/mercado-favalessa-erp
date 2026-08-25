@@ -146,12 +146,23 @@ async function criar(req, res) {
     return res.status(400).json({ error: `tipo inválido. Use um de: ${TIPOS_VALIDOS.join(', ')}.` });
   }
 
-  // Fornecedor só faz sentido em conta do tipo fornecedor.
-  const fornecedorId = tipo === 'fornecedor' ? fornecedor_id || null : null;
+  // Fornecedor só faz sentido em conta de fornecedor — e a Ceasa é isso também:
+  // os nomes de lá estão no mesmo cadastro, marcados como da Ceasa.
+  const fornecedorId = tipo === 'fornecedor' || tipo === 'ceasa' ? fornecedor_id || null : null;
+
+  // Compra da Ceasa é paga por PIX no ato: não existe "a pagar", existe "já
+  // paguei, registra". Lançar e depois dar baixa seriam dois passos para um
+  // pagamento só, e o passo esquecido deixaria a conta pendente para sempre.
+  const jaPago = req.body.pago === true;
 
   const parcelas = Math.trunc(Number(req.body.parcelas) || 1);
   if (!Number.isFinite(parcelas) || parcelas < 1 || parcelas > MAX_PARCELAS) {
     return res.status(400).json({ error: `parcelas precisa ser um número entre 1 e ${MAX_PARCELAS}.` });
+  }
+  if (jaPago && parcelas > 1) {
+    return res.status(400).json({
+      error: 'Lançamento já pago é de uma parcela só. Para parcelar, cadastre e dê baixa em cada parcela.',
+    });
   }
   const intervalo = INTERVALOS.includes(String(req.body.intervalo)) ? String(req.body.intervalo) : 'mensal';
 
@@ -191,6 +202,24 @@ async function criar(req, res) {
         ]
       );
       inseridas.push(rows[0]);
+
+      // A baixa entra na mesma transação: conta marcada como paga que nasce sem
+      // o pagamento seria uma conta pendente que ninguém mais procura.
+      if (jaPago) {
+        await cliente.query(
+          `INSERT INTO contas_pagamentos
+             (conta_id, valor, data_pagamento, forma_pagamento, banco_id, pago_por)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            rows[0].id,
+            valor,
+            req.body.data_pagamento || datas[i],
+            req.body.forma_pagamento || forma_prevista || null,
+            req.body.banco_id || null,
+            req.user.id,
+          ]
+        );
+      }
     }
     await cliente.query('COMMIT');
     criadas = inseridas;

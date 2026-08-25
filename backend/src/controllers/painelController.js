@@ -42,6 +42,7 @@ async function painelDoDia(req, res) {
   const filtroFixas = escolher(FILTROS_FIXOS, req.query.filtroFixas, FILTRO_FIXOS_PADRAO);
   const filtroImpostos = escolher(FILTROS_FIXOS, req.query.filtroImpostos, FILTRO_FIXOS_PADRAO);
   const filtroDespesas = escolher(FILTROS_FIXOS, req.query.filtroDespesas, FILTRO_FIXOS_PADRAO);
+  const filtroOperacionais = escolher(FILTROS_FIXOS, req.query.filtroOperacionais, FILTRO_FIXOS_PADRAO);
 
   const sql = `
     WITH contas_com_saldo AS (${SELECT_CONTAS_COM_SALDO}),
@@ -78,6 +79,11 @@ async function painelDoDia(req, res) {
       (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'imposto') AS impostos_total,
 
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
+         FROM pendentes t WHERE t.tipo = 'operacional' AND ${FILTROS_FIXOS[filtroOperacionais]}) AS operacionais,
+      (SELECT count(*) FROM pendentes t WHERE t.tipo = 'operacional') AS operacionais_em_aberto,
+      (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'operacional') AS operacionais_total,
+
+      (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
          FROM pendentes t WHERE t.tipo = 'despesa' AND ${FILTROS_FIXOS[filtroDespesas]}) AS despesas,
       (SELECT count(*) FROM pendentes t WHERE t.tipo = 'despesa') AS despesas_em_aberto,
       (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'despesa') AS despesas_total
@@ -110,12 +116,14 @@ async function painelDoDia(req, res) {
     filtro_fixas: filtroFixas,
     filtro_impostos: filtroImpostos,
     filtro_despesas: filtroDespesas,
+    filtro_operacionais: filtroOperacionais,
     boletos: {
       ...bloco(p.boletos, emAberto(p.boletos_em_aberto, p.boletos_total)),
       em_aberto_atrasados: Number(p.boletos_atrasados),
     },
     fixas: bloco(p.fixas, emAberto(p.fixas_em_aberto, p.fixas_total)),
     impostos: bloco(p.impostos, emAberto(p.impostos_em_aberto, p.impostos_total)),
+    operacionais: bloco(p.operacionais, emAberto(p.operacionais_em_aberto, p.operacionais_total)),
     despesas: bloco(p.despesas, emAberto(p.despesas_em_aberto, p.despesas_total)),
   });
 }
