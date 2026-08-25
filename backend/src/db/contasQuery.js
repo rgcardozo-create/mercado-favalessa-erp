@@ -31,10 +31,11 @@ const HOJE_SP = `(now() AT TIME ZONE 'America/Sao_Paulo')::date`;
 
 // Os tipos de conta a pagar da empresa. `pessoal` e `extra` não entram aqui de
 // propósito — ver comentário do enum conta_tipo no schema.
-const TIPOS_VALIDOS = ['fornecedor', 'fixa', 'imposto', 'operacional', 'despesa'];
+const TIPOS_VALIDOS = ['fornecedor', 'ceasa', 'fixa', 'imposto', 'operacional', 'despesa'];
 
 const ROTULOS_TIPO = {
   fornecedor: 'Fornecedores',
+  ceasa: 'Ceasa',
   fixa: 'Despesas fixas',
   imposto: 'Impostos',
   operacional: 'Custos operacionais',

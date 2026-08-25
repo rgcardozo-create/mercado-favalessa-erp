@@ -4,6 +4,7 @@ import { brl, brlCurto, mesCurto, dateBR, todayISO, escapar } from './helpers.js
 // As telas de Contas a pagar. Rótulos iguais aos do sistema atual.
 const TIPOS = [
   { tipo: 'fornecedor', rotulo: 'Fornecedores' },
+  { tipo: 'ceasa', rotulo: 'Ceasa' },
   { tipo: 'fixa', rotulo: 'Despesas fixas' },
   { tipo: 'imposto', rotulo: 'Impostos' },
   { tipo: 'operacional', rotulo: 'Custos operacionais' },
@@ -12,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.24.0';
+const VERSAO = '1.25.0';
 
 const state = {
   sessao: getSessao(),
@@ -301,7 +302,7 @@ function linhaConta(conta) {
 
   return `
     <tr>
-      <td>${(conta.tipo === 'fornecedor' ? conta.fornecedor_nome : conta.categoria) || '—'}</td>
+      <td>${(ehContaDeFornecedor(conta.tipo) ? conta.fornecedor_nome : conta.categoria) || '—'}</td>
       <td>${escapar(conta.descricao)}${
         conta.total_parcelas > 1 ? ` <small class="parcela">${conta.parcela}/${conta.total_parcelas}</small>` : ''
       }</td>
@@ -335,8 +336,19 @@ function linhaConta(conta) {
 
 // Corrigir o próprio lançamento: valor digitado errado, vencimento trocado,
 // descrição incompleta. O tipo não muda — para isso, exclua e lance de novo.
+// Ceasa é conta de fornecedor também: os nomes de lá estão no mesmo cadastro,
+// só marcados como da Ceasa. Quem separa as duas é a marca, não o cadastro.
+const ehContaDeFornecedor = (tipo) => tipo === 'fornecedor' || tipo === 'ceasa';
+
+// Cada lista mostra só os fornecedores do seu tipo: o cadastro da Ceasa é grande
+// e afogaria a lista de fornecedores, que é onde se procura o boleto do mês.
+function fornecedoresDoTipo(tipo) {
+  const daCeasa = tipo === 'ceasa';
+  return (state.fornecedores || []).filter((f) => Boolean(f.ceasa) === daCeasa);
+}
+
 function formEditarContaHTML(conta) {
-  const ehFornecedor = conta.tipo === 'fornecedor';
+  const ehFornecedor = ehContaDeFornecedor(conta.tipo);
   const ehDespesa = conta.tipo === 'despesa';
 
   return `
@@ -347,7 +359,7 @@ function formEditarContaHTML(conta) {
             ? `<label>Fornecedor
                 <select name="fornecedor_id">
                   <option value="">— sem fornecedor —</option>
-                  ${state.fornecedores
+                  ${fornecedoresDoTipo(conta.tipo)
                     .map(
                       (f) =>
                         `<option value="${f.id}" ${String(conta.fornecedor_id) === String(f.id) ? 'selected' : ''}>${escapar(f.nome)}</option>`
@@ -470,7 +482,7 @@ function linhaPainelHTML(conta) {
     dateBR(conta.vencimento),
     conta.total_parcelas > 1 ? `parc. ${conta.parcela}/${conta.total_parcelas}` : null,
     Number(conta.total_pago) > 0 ? `pago ${brl(conta.total_pago)} de ${brl(conta.valor)}` : null,
-    conta.tipo === 'fornecedor' ? conta.fornecedor_nome : conta.categoria,
+    ehContaDeFornecedor(conta.tipo) ? conta.fornecedor_nome : conta.categoria,
     conta.observacoes,
   ].filter(Boolean);
 
@@ -2280,6 +2292,7 @@ function gerencialHTML() {
 
   const ROTULO_DESPESA = {
     fornecedor: 'Fornecedores',
+    ceasa: 'Ceasa',
     fixa: 'Despesas fixas',
     imposto: 'Impostos',
     operacional: 'Custos operacionais',
@@ -2766,8 +2779,10 @@ function textoListaVazia() {
 
 function contasHTML() {
   const podeGerir = podeGerenciar();
-  const ehFornecedor = state.tipo === 'fornecedor';
+  const ehCeasa = state.tipo === 'ceasa';
+  const ehFornecedor = ehContaDeFornecedor(state.tipo);
   const ehDespesa = state.tipo === 'despesa';
+  const fornecedoresDaAba = fornecedoresDoTipo(state.tipo);
   const totalEmAberto = state.contas.reduce(
     (acc, c) => (c.quitado ? acc : acc + Number(c.saldo)),
     0
@@ -2801,9 +2816,17 @@ function contasHTML() {
       ${
         ehFornecedor
           ? `<form data-action="novo-fornecedor" class="form-inline">
-              <h2>Novo fornecedor</h2>
+              <h2>Novo fornecedor${ehCeasa ? ' da Ceasa' : ''}</h2>
               <label>Nome <input type="text" name="nome" required /></label>
               <button type="submit">Adicionar</button>
+              ${
+                ehCeasa
+                  ? `<p class="vazio campo-largo">
+                      O nome fica marcado como da Ceasa e aparece só nesta aba — não polui a
+                      lista de fornecedores.
+                    </p>`
+                  : ''
+              }
             </form>`
           : ''
       }
@@ -2815,7 +2838,7 @@ function contasHTML() {
             ? `<label>Fornecedor
                 <select name="fornecedor_id">
                   <option value="">— sem fornecedor —</option>
-                  ${state.fornecedores
+                  ${fornecedoresDaAba
                     .map(
                       (f) =>
                         `<option value="${f.id}" ${String(pendente.fornecedor_id) === String(f.id) ? 'selected' : ''}>${escapar(f.nome)}</option>`
@@ -2841,10 +2864,20 @@ function contasHTML() {
               .join('')}
           </select>
         </label>
+        <label class="campo-marca campo-largo">
+          <input type="checkbox" name="pago" id="conta-ja-paga" ${ehCeasa ? 'checked' : ''} />
+          Já paguei — lançar como quitada
+        </label>
+        <div id="campos-ja-pago" class="campos-embutidos ${ehCeasa ? '' : 'escondido'}">
+          ${camposFormaEBancoHTML({ forma: ehCeasa ? 'PIX' : '' })}
+        </div>
         <button type="submit">Cadastrar</button>
         <p class="vazio campo-largo">
-          Uma parcela é o normal — deixe <strong>1</strong>. Com mais de uma, o valor informado é o
-          <strong>de cada parcela</strong>, e o sistema cria todas de uma vez a partir do vencimento.
+          ${
+            ehCeasa
+              ? 'Compra da Ceasa é paga na hora: o lançamento já nasce quitado, com a data da compra como data do pagamento. Desmarque se por acaso ficou para pagar depois.'
+              : 'Uma parcela é o normal — deixe <strong>1</strong>. Com mais de uma, o valor informado é o <strong>de cada parcela</strong>, e o sistema cria todas de uma vez a partir do vencimento.'
+          }
         </p>
       </form>
     </section>
@@ -3019,6 +3052,18 @@ function bind() {
 
   const formConta = root.querySelector('[data-action="nova-conta"]');
   if (formConta) formConta.addEventListener('submit', onNovaConta);
+
+  const marcaPago = root.querySelector('#conta-ja-paga');
+  if (marcaPago) {
+    // Mostrar/esconder na mão em vez de redesenhar: um render aqui limparia o
+    // que já foi digitado no resto do formulário.
+    const campos = root.querySelector('#campos-ja-pago');
+    marcaPago.addEventListener('change', () => {
+      campos.classList.toggle('escondido', !marcaPago.checked);
+      const forma = campos.querySelector('select[name=forma_pagamento]');
+      if (forma) forma.required = marcaPago.checked;
+    });
+  }
 
   const formBusca = root.querySelector('[data-action="busca-contas"]');
   if (formBusca) {
@@ -4013,7 +4058,7 @@ async function onNovoFornecedor(ev) {
   try {
     await apiFetch('/fornecedores', {
       method: 'POST',
-      body: JSON.stringify({ nome: fd.get('nome') }),
+      body: JSON.stringify({ nome: fd.get('nome'), ceasa: state.tipo === 'ceasa' }),
     });
     carregarDados();
   } catch (err) {
@@ -4025,9 +4070,16 @@ async function onNovoFornecedor(ev) {
 async function onNovaConta(ev) {
   ev.preventDefault();
   const fd = new FormData(ev.target);
+  const pago = fd.get('pago') === 'on';
   const payload = {
     tipo: state.tipo,
     fornecedor_id: fd.get('fornecedor_id') || null,
+    pago,
+    // A compra foi paga no dia em que foi feita — é a mesma data que o campo de
+    // vencimento guarda quando o lançamento já nasce quitado.
+    data_pagamento: pago ? fd.get('vencimento') : null,
+    forma_pagamento: pago ? fd.get('forma_pagamento') || null : null,
+    banco_id: pago ? fd.get('banco_id') || null : null,
     categoria: fd.get('categoria') || null,
     descricao: fd.get('descricao'),
     valor: fd.get('valor'),
