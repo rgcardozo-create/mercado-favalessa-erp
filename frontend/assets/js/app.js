@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.25.0';
+const VERSAO = '1.26.0';
 
 const state = {
   sessao: getSessao(),
@@ -30,6 +30,9 @@ const state = {
   filtroImpostos: 'ate_hoje',
   filtroDespesas: 'ate_hoje',
   filtroOperacionais: 'ate_hoje',
+  // Lançamentos marcados para mudar de aba. Vive fora do render para sobreviver
+  // a ele, como a marcação dos fechamentos.
+  contasMarcadas: new Set(),
   conciliacao: null,
   acumulados: null,
   // Resumo de vendas: responde "estou vendendo bem?" e cobra os dias em branco.
@@ -252,6 +255,8 @@ async function carregarDados() {
       ]);
       state.contas = contas;
       state.fornecedores = fornecedores;
+      // A marcação vale para a lista que estava na tela; recarregou, some.
+      state.contasMarcadas = new Set();
       state.formasPagamento = formas;
       state.bancos = bancos;
     }
@@ -301,7 +306,14 @@ function linhaConta(conta) {
   const editando = state.edicaoContaId === conta.id;
 
   return `
-    <tr>
+    <tr class="${state.contasMarcadas.has(conta.id) ? 'marcada' : ''}">
+      ${
+        podeGerir
+          ? `<td class="col-marca"><input type="checkbox" data-marca-conta="${conta.id}" ${
+              state.contasMarcadas.has(conta.id) ? 'checked' : ''
+            } /></td>`
+          : ''
+      }
       <td>${(ehContaDeFornecedor(conta.tipo) ? conta.fornecedor_nome : conta.categoria) || '—'}</td>
       <td>${escapar(conta.descricao)}${
         conta.total_parcelas > 1 ? ` <small class="parcela">${conta.parcela}/${conta.total_parcelas}</small>` : ''
@@ -342,9 +354,13 @@ const ehContaDeFornecedor = (tipo) => tipo === 'fornecedor' || tipo === 'ceasa';
 
 // Cada lista mostra só os fornecedores do seu tipo: o cadastro da Ceasa é grande
 // e afogaria a lista de fornecedores, que é onde se procura o boleto do mês.
-function fornecedoresDoTipo(tipo) {
+function fornecedoresDoTipo(tipo, manterId = null) {
   const daCeasa = tipo === 'ceasa';
-  return (state.fornecedores || []).filter((f) => Boolean(f.ceasa) === daCeasa);
+  return (state.fornecedores || []).filter(
+    // O fornecedor já preso na conta entra sempre, mesmo sendo do outro lado:
+    // uma conta movida de aba não pode perder o fornecedor dela ao ser editada.
+    (f) => Boolean(f.ceasa) === daCeasa || String(f.id) === String(manterId)
+  );
 }
 
 function formEditarContaHTML(conta) {
@@ -352,14 +368,14 @@ function formEditarContaHTML(conta) {
   const ehDespesa = conta.tipo === 'despesa';
 
   return `
-    <tr class="linha-baixa"><td colspan="8">
+    <tr class="linha-baixa"><td colspan="9">
       <form data-action="form-editar-conta" data-id="${conta.id}" class="form-inline">
         ${
           ehFornecedor
             ? `<label>Fornecedor
                 <select name="fornecedor_id">
                   <option value="">— sem fornecedor —</option>
-                  ${fornecedoresDoTipo(conta.tipo)
+                  ${fornecedoresDoTipo(conta.tipo, conta.fornecedor_id)
                     .map(
                       (f) =>
                         `<option value="${f.id}" ${String(conta.fornecedor_id) === String(f.id) ? 'selected' : ''}>${escapar(f.nome)}</option>`
@@ -401,7 +417,7 @@ function blocoBaixaHTML(conta) {
       : '<p class="vazio">Nenhum pagamento registrado nesta conta.</p>';
 
   return `
-    <tr class="linha-baixa"><td colspan="8">
+    <tr class="linha-baixa"><td colspan="9">
       ${listaPagamentos}
       ${conta.quitado ? '' : formBaixaHTML(conta)}
     </td></tr>
@@ -2882,6 +2898,8 @@ function contasHTML() {
       </form>
     </section>
 
+    ${barraMoverContasHTML()}
+
     <div class="filtros">
       ${FILTROS_STATUS.map(
         ([valor, rotulo]) =>
@@ -2927,10 +2945,42 @@ function posicaoForma(nome) {
 // Quem se paga por PIX e quem manda boleto viram listas separadas — juntos, dá
 // uma lista só, grande demais para achar o que interessa. Só agrupa quando há
 // mais de uma forma em jogo; do contrário, uma tabela só, como sempre foi.
+// Reclassificar em lote: marcar os lançamentos e mandar todos para outra aba.
+// A conta lançada como fornecedor que na verdade é da Ceasa já existe às
+// centenas — refazer uma a uma seria trabalho de dias.
+function barraMoverContasHTML() {
+  if (!podeGerenciar()) return '';
+  const marcadas = state.contas.filter((c) => state.contasMarcadas.has(c.id)).length;
+  if (!marcadas) return '';
+
+  const destinos = TIPOS.filter((t) => t.tipo !== state.tipo);
+  return `
+    <div class="barra-mover">
+      <strong>${marcadas} lançamento(s) marcado(s)</strong>
+      <label>Enviar para
+        <select id="destino-mover">
+          ${destinos.map((t) => `<option value="${t.tipo}">${t.rotulo}</option>`).join('')}
+        </select>
+      </label>
+      <button type="button" id="btn-mover-contas">Enviar</button>
+      <button type="button" id="btn-limpar-marcadas" class="secundario">Desmarcar</button>
+    </div>
+  `;
+}
+
 function listaContasHTML({ ehFornecedor, ehDespesa, podeGerir }) {
+  const todasMarcadas =
+    state.contas.length > 0 && state.contas.every((c) => state.contasMarcadas.has(c.id));
+
   const cabecalho = `
     <thead>
       <tr>
+        ${
+          podeGerir
+            ? `<th class="col-marca"><input type="checkbox" class="marcar-todas-contas"
+                 title="Marcar todos os mostrados" ${todasMarcadas ? 'checked' : ''} /></th>`
+            : ''
+        }
         <th>${ehFornecedor ? 'Fornecedor' : 'Categoria'}</th>
         <th>Descrição</th><th>${ehDespesa ? 'Data' : 'Vencimento'}</th><th>Pago em</th>
         <th>Valor</th><th>Saldo</th><th>Status</th>
@@ -2940,7 +2990,7 @@ function listaContasHTML({ ehFornecedor, ehDespesa, podeGerir }) {
 
   if (!state.contas.length) {
     return `<table class="tabela-contas">${cabecalho}
-      <tbody><tr><td colspan="8">${textoListaVazia()}</td></tr></tbody></table>`;
+      <tbody><tr><td colspan="9">${textoListaVazia()}</td></tr></tbody></table>`;
   }
 
   const grupos = new Map();
@@ -3052,6 +3102,43 @@ function bind() {
 
   const formConta = root.querySelector('[data-action="nova-conta"]');
   if (formConta) formConta.addEventListener('submit', onNovaConta);
+
+  root.querySelectorAll('[data-marca-conta]').forEach((caixa) => {
+    caixa.addEventListener('change', () => {
+      const id = Number(caixa.dataset.marcaConta);
+      if (caixa.checked) state.contasMarcadas.add(id);
+      else state.contasMarcadas.delete(id);
+      caixa.closest('tr').classList.toggle('marcada', caixa.checked);
+      atualizarMarcacaoContas();
+    });
+  });
+
+  root.querySelectorAll('.marcar-todas-contas').forEach((todas) => {
+    todas.addEventListener('change', () => {
+      for (const caixa of root.querySelectorAll('[data-marca-conta]')) {
+        caixa.checked = todas.checked;
+        const id = Number(caixa.dataset.marcaConta);
+        if (todas.checked) state.contasMarcadas.add(id);
+        else state.contasMarcadas.delete(id);
+        caixa.closest('tr').classList.toggle('marcada', todas.checked);
+      }
+      // As outras caixas de "marcar todos" (a lista pode vir agrupada por forma
+      // de pagamento, com um cabeçalho por grupo) acompanham.
+      for (const outra of root.querySelectorAll('.marcar-todas-contas')) outra.checked = todas.checked;
+      atualizarMarcacaoContas();
+    });
+  });
+
+  const btnMover = root.querySelector('#btn-mover-contas');
+  if (btnMover) btnMover.addEventListener('click', onMoverContas);
+
+  const btnLimparMarcadas = root.querySelector('#btn-limpar-marcadas');
+  if (btnLimparMarcadas) {
+    btnLimparMarcadas.addEventListener('click', () => {
+      state.contasMarcadas = new Set();
+      render();
+    });
+  }
 
   const marcaPago = root.querySelector('#conta-ja-paga');
   if (marcaPago) {
@@ -4060,6 +4147,50 @@ async function onNovoFornecedor(ev) {
       method: 'POST',
       body: JSON.stringify({ nome: fd.get('nome'), ceasa: state.tipo === 'ceasa' }),
     });
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+// Marcar uma caixa não redesenha a tela — redesenhar perderia a rolagem no meio
+// da lista, justamente onde a pessoa está marcando. Só quando a barra precisa
+// aparecer ou sumir é que vale o render.
+function atualizarMarcacaoContas() {
+  const marcadas = root.querySelectorAll('[data-marca-conta]:checked').length;
+  const barra = root.querySelector('.barra-mover');
+
+  if (!marcadas !== !barra) {
+    render();
+    return;
+  }
+  if (barra) barra.querySelector('strong').textContent = `${marcadas} lançamento(s) marcado(s)`;
+}
+
+async function onMoverContas() {
+  const ids = [...root.querySelectorAll('[data-marca-conta]:checked')].map((c) => Number(c.dataset.marcaConta));
+  const destino = root.querySelector('#destino-mover').value;
+  if (!ids.length) return;
+
+  const rotulo = (TIPOS.find((t) => t.tipo === destino) || {}).rotulo || destino;
+  if (!confirm(`Enviar ${ids.length} lançamento(s) para ${rotulo}?`)) return;
+
+  try {
+    const r = await apiFetch('/contas/mover', {
+      method: 'POST',
+      body: JSON.stringify({ ids, tipo: destino }),
+    });
+    state.erro = null;
+    state.contasMarcadas = new Set();
+    // Número negativo é fornecedor que deixou de ser da Ceasa: a mensagem
+    // precisa dizer para onde o nome foi, senão some da lista sem explicação.
+    const nomes = r.fornecedores_marcados;
+    alert(
+      `${r.movidas} lançamento(s) enviados para ${rotulo}.` +
+        (nomes > 0 ? ` ${nomes} fornecedor(es) passaram a aparecer na lista da Ceasa.` : '') +
+        (nomes < 0 ? ` ${-nomes} fornecedor(es) voltaram para a lista de Fornecedores.` : '')
+    );
     carregarDados();
   } catch (err) {
     state.erro = err.message;

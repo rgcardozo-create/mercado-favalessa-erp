@@ -243,6 +243,92 @@ async function criar(req, res) {
   return res.status(201).json({ ...criadas[0], parcelas_criadas: criadas.length, contas: criadas });
 }
 
+// Reclassificar em lote. A conta lançada como fornecedor que na verdade é da
+// Ceasa (ou imposto, ou custo operacional) já existe às centenas — refazer uma a
+// uma seria trabalho de dias, e enquanto isso os totais por tipo continuariam
+// mentindo.
+async function mover(req, res) {
+  const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number) : null;
+  const tipo = req.body.tipo;
+
+  if (!ids || !ids.length) {
+    return res.status(400).json({ error: 'Selecione ao menos um lançamento.' });
+  }
+  if (ids.some((id) => !Number.isInteger(id) || id <= 0)) {
+    return res.status(400).json({ error: 'Lista de lançamentos inválida.' });
+  }
+  if (ids.length > 500) {
+    return res.status(400).json({ error: 'Máximo de 500 lançamentos por vez.' });
+  }
+  if (!TIPOS_VALIDOS.includes(tipo)) {
+    return res.status(400).json({ error: `tipo inválido. Use um de: ${TIPOS_VALIDOS.join(', ')}.` });
+  }
+
+  const cliente = await pool.connect();
+  let movidas = [];
+  let fornecedoresMarcados = 0;
+  try {
+    await cliente.query('BEGIN');
+
+    const { rows } = await cliente.query(
+      `UPDATE contas SET tipo = $2, atualizado_em = now()
+        WHERE id = ANY($1::int[]) AND tipo IS DISTINCT FROM $2::conta_tipo
+        RETURNING id, fornecedor_id, descricao`,
+      [ids, tipo]
+    );
+    movidas = rows;
+
+    // Mandar a conta para a Ceasa sem marcar o fornecedor deixaria o nome fora
+    // da lista da aba — e editar a conta depois não acharia o próprio
+    // fornecedor dela. Quem manda a conta para lá está dizendo que o fornecedor
+    // é de lá.
+    const fornecedores = [...new Set(movidas.map((c) => c.fornecedor_id).filter(Boolean))];
+    if (fornecedores.length) {
+      if (tipo === 'ceasa') {
+        const { rowCount } = await cliente.query(
+          'UPDATE fornecedores SET ceasa = true WHERE id = ANY($1::int[]) AND ceasa = false',
+          [fornecedores]
+        );
+        fornecedoresMarcados = rowCount;
+      } else {
+        // Tirando a conta da Ceasa, o fornecedor volta para a lista de
+        // fornecedores — a menos que ainda tenha outra conta lá. Sem isso, um
+        // engano ao mover deixaria o nome preso na aba errada, sem jeito de
+        // voltar pela tela.
+        const { rowCount } = await cliente.query(
+          `UPDATE fornecedores SET ceasa = false
+            WHERE id = ANY($1::int[]) AND ceasa = true
+              AND NOT EXISTS (SELECT 1 FROM contas c WHERE c.fornecedor_id = fornecedores.id AND c.tipo = 'ceasa')`,
+          [fornecedores]
+        );
+        fornecedoresMarcados = -rowCount;
+      }
+    }
+
+    await cliente.query('COMMIT');
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'mover',
+    entidade: 'contas',
+    entidadeId: 0,
+    dados: { tipo, ids: movidas.map((c) => c.id), fornecedores_marcados: fornecedoresMarcados },
+  });
+
+  return res.json({
+    movidas: movidas.length,
+    ignoradas: ids.length - movidas.length,
+    tipo,
+    fornecedores_marcados: fornecedoresMarcados,
+  });
+}
+
 async function atualizar(req, res) {
   const { id } = req.params;
   const { fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista } = req.body;
@@ -429,6 +515,7 @@ async function excluirPagamento(req, res) {
 }
 
 module.exports = {
+  mover,
   listar,
   obter,
   criar,
