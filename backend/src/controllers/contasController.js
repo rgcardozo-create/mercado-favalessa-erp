@@ -356,6 +356,30 @@ async function mover(req, res) {
   });
 }
 
+// Marca de atenção: um clique na lista, sem abrir formulário. É um campo só, e
+// a graça está em marcar rápido enquanto se olha a lista — abrir a conta inteira
+// para trocar um sim/não faria ninguém usar.
+async function marcarAtencao(req, res) {
+  const { id } = req.params;
+  const atencao = req.body.atencao !== false;
+
+  const { rows } = await pool.query(
+    'UPDATE contas SET atencao = $2, atualizado_em = now() WHERE id = $1 RETURNING id, descricao, atencao',
+    [id, atencao]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Conta não encontrada.' });
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: atencao ? 'atencao' : 'atencao-off',
+    entidade: 'contas',
+    entidadeId: Number(id),
+    dados: rows[0],
+  });
+
+  return res.json(rows[0]);
+}
+
 async function atualizar(req, res) {
   const { id } = req.params;
   const { fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista } = req.body;
@@ -543,6 +567,7 @@ async function excluirPagamento(req, res) {
 
 module.exports = {
   mover,
+  marcarAtencao,
   listar,
   obter,
   criar,

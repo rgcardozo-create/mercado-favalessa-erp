@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.29.0';
+const VERSAO = '1.30.0';
 
 const state = {
   sessao: getSessao(),
@@ -30,6 +30,7 @@ const state = {
   filtroImpostos: 'ate_hoje',
   filtroDespesas: 'ate_hoje',
   filtroOperacionais: 'ate_hoje',
+  filtroCeasa: 'ate_hoje',
   // Lançamentos marcados para mudar de aba. Vive fora do render para sobreviver
   // a ele, como a marcação dos fechamentos.
   contasMarcadas: new Set(),
@@ -187,7 +188,8 @@ async function carregarDados() {
           `/painel-do-dia?filtro=${state.filtroBoletos}` +
             `&filtroFixas=${state.filtroFixas}&filtroImpostos=${state.filtroImpostos}` +
             `&filtroDespesas=${state.filtroDespesas}` +
-            `&filtroOperacionais=${state.filtroOperacionais}`,
+            `&filtroOperacionais=${state.filtroOperacionais}` +
+            `&filtroCeasa=${state.filtroCeasa}`,
         ),
         apiFetch('/cadastros/formas-pagamento'),
         apiFetch('/cadastros/bancos'),
@@ -308,7 +310,7 @@ function linhaConta(conta) {
   const editando = state.edicaoContaId === conta.id;
 
   return `
-    <tr class="${state.contasMarcadas.has(conta.id) ? 'marcada' : ''}">
+    <tr class="${state.contasMarcadas.has(conta.id) ? 'marcada' : ''}${conta.atencao ? ' com-atencao' : ''}">
       ${
         podeGerir
           ? `<td class="col-marca"><input type="checkbox" data-marca-conta="${conta.id}" ${
@@ -337,6 +339,17 @@ function linhaConta(conta) {
           ${
             podeGerir
               ? `<button data-action="toggle-editar" data-id="${conta.id}" class="secundario">${editando ? 'Fechar' : 'Editar'}</button>`
+              : ''
+          }
+          ${
+            podeGerir
+              ? `<button data-action="atencao" data-id="${conta.id}" class="marca-atencao ${
+                  conta.atencao ? 'ativa' : ''
+                }" title="${
+                  conta.atencao
+                    ? 'Marcada: aparece no Painel do dia até ser paga. Clique para desmarcar.'
+                    : 'Marcar para aparecer no Painel do dia até ser paga'
+                }">${conta.atencao ? '★' : '☆'}</button>`
               : ''
           }
           ${podeGerir ? `<button data-action="excluir" data-id="${conta.id}" class="perigo">Excluir</button>` : ''}
@@ -516,9 +529,10 @@ function linhaPainelHTML(conta) {
   // situação vira a cor da barra à esquerda em vez de uma etiqueta escrita —
   // numa coluna estreita, a etiqueta comia o nome da conta.
   return `
-    <div class="linha-painel situacao-${classeSituacao}" title="${situacao} · ${escapar(conta.descricao)}">
+    <div class="linha-painel situacao-${classeSituacao}${conta.atencao ? ' com-atencao' : ''}"
+         title="${situacao} · ${escapar(conta.descricao)}${conta.atencao ? ' · marcada para não sumir do painel' : ''}">
       <div class="linha-painel-info">
-        <strong>${escapar(conta.descricao)}</strong>
+        <strong>${conta.atencao ? '★ ' : ''}${escapar(conta.descricao)}</strong>
         <small>${escapar(contexto.join(' · '))}</small>
       </div>
       <div class="linha-painel-acao">
@@ -704,6 +718,26 @@ function painelHTML() {
 
     <div class="colunas-painel">
       ${blocoPainelHTML({
+        titulo: TITULOS_FILTRO[p.filtro],
+        icone: '📄',
+        bloco: p.boletos,
+        classe: 'boletos',
+        vazio: 'Nenhum boleto neste filtro.',
+        extra: seletor,
+        rodape: resumoBoletos,
+      })}
+
+      ${blocoPainelHTML({
+        titulo: 'Ceasa',
+        icone: '🥬',
+        bloco: p.ceasa,
+        classe: 'ceasa',
+        vazio: 'Nada em aberto na Ceasa — o normal, já que ela é paga no ato.',
+        extra: seletorHTML('filtro-ceasa', OPCOES_FIXOS, p.filtro_ceasa),
+        rodape: restante(p.ceasa, 'As que vencem depois aparecem mudando o seletor acima.'),
+      })}
+
+      ${blocoPainelHTML({
         titulo: 'Despesas fixas',
         icone: '📌',
         bloco: p.fixas,
@@ -743,16 +777,6 @@ function painelHTML() {
         rodape: restante(p.despesas, 'As que vencem depois aparecem mudando o seletor acima.'),
       })}
     </div>
-
-    ${blocoPainelHTML({
-      titulo: TITULOS_FILTRO[p.filtro],
-      icone: '📄',
-      bloco: b,
-      classe: 'boletos',
-      vazio: 'Nenhum boleto neste filtro.',
-      extra: seletor,
-      rodape: resumoBoletos,
-    })}
   `;
 }
 
@@ -3142,6 +3166,10 @@ function bind() {
   const formConta = root.querySelector('[data-action="nova-conta"]');
   if (formConta) formConta.addEventListener('submit', onNovaConta);
 
+  root.querySelectorAll('[data-action="atencao"]').forEach((btn) => {
+    btn.addEventListener('click', () => onMarcarAtencao(Number(btn.dataset.id), !btn.classList.contains('ativa')));
+  });
+
   root.querySelectorAll('[data-marca-conta]').forEach((caixa) => {
     caixa.addEventListener('change', () => {
       const id = Number(caixa.dataset.marcaConta);
@@ -3457,6 +3485,7 @@ function bind() {
     'filtro-impostos': 'filtroImpostos',
     'filtro-despesas': 'filtroDespesas',
     'filtro-operacionais': 'filtroOperacionais',
+    'filtro-ceasa': 'filtroCeasa',
   };
   for (const [id, chave] of Object.entries(SELETORES_PAINEL)) {
     const seletor = root.querySelector(`#${id}`);
@@ -4221,6 +4250,17 @@ function atualizarMarcacaoContas() {
     return;
   }
   if (barra) barra.querySelector('strong').textContent = `${marcadas} lançamento(s) marcado(s)`;
+}
+
+async function onMarcarAtencao(id, atencao) {
+  try {
+    await apiFetch(`/contas/${id}/atencao`, { method: 'POST', body: JSON.stringify({ atencao }) });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 async function onMoverContas() {

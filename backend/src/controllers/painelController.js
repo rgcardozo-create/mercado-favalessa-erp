@@ -12,6 +12,10 @@ const { SELECT_CONTAS_COM_SALDO, HOJE_SP } = require('../db/contasQuery');
 // corrente por padrão, saindo sozinho quando vira o dia. A lista completa vive
 // na tela de Contas a pagar, que é onde ela faz sentido.
 //
+// Conta marcada com atenção fura todos esses recortes: ela aparece no bloco dela
+// enquanto não for paga, doa o filtro que estiver escolhido. É a resposta para o
+// boleto que venceu ontem e sairia da vista justamente quando virou problema.
+//
 // Contas pessoais e extras de funcionários não aparecem aqui e nunca podem aparecer:
 // pessoais nunca entram em nenhum total da empresa, e extras (adiantamentos/vales) já
 // são descontados na folha. Por isso ficam fora da tabela `contas` (SPEC.md, regras 1 e 3).
@@ -37,12 +41,16 @@ const FILTRO_FIXOS_PADRAO = 'ate_hoje';
 
 const escolher = (mapa, valor, padrao) => (mapa[valor] ? valor : padrao);
 
+// Todo bloco lista o recorte escolhido MAIS o que está marcado com atenção.
+const comAtencao = (condicao) => `(t.atencao OR (${condicao}))`;
+
 async function painelDoDia(req, res) {
   const filtro = escolher(FILTROS, req.query.filtro, 'hoje');
   const filtroFixas = escolher(FILTROS_FIXOS, req.query.filtroFixas, FILTRO_FIXOS_PADRAO);
   const filtroImpostos = escolher(FILTROS_FIXOS, req.query.filtroImpostos, FILTRO_FIXOS_PADRAO);
   const filtroDespesas = escolher(FILTROS_FIXOS, req.query.filtroDespesas, FILTRO_FIXOS_PADRAO);
   const filtroOperacionais = escolher(FILTROS_FIXOS, req.query.filtroOperacionais, FILTRO_FIXOS_PADRAO);
+  const filtroCeasa = escolher(FILTROS_FIXOS, req.query.filtroCeasa, FILTRO_FIXOS_PADRAO);
 
   const sql = `
     WITH contas_com_saldo AS (${SELECT_CONTAS_COM_SALDO}),
@@ -58,7 +66,7 @@ async function painelDoDia(req, res) {
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
          FROM pendentes t
         WHERE t.tipo = 'fornecedor'
-          AND ${FILTROS[filtro]}) AS boletos,
+          AND ${comAtencao(FILTROS[filtro])}) AS boletos,
 
       -- Quantos boletos existem em aberto ao todo, para o usuário saber que há
       -- mais fora do recorte sem precisar listar todos aqui.
@@ -69,22 +77,27 @@ async function painelDoDia(req, res) {
 
       -- Fixas e impostos: por padrão só o que já venceu ou vence hoje.
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
-         FROM pendentes t WHERE t.tipo = 'fixa' AND ${FILTROS_FIXOS[filtroFixas]}) AS fixas,
+         FROM pendentes t WHERE t.tipo = 'ceasa' AND ${comAtencao(FILTROS_FIXOS[filtroCeasa])}) AS ceasa,
+      (SELECT count(*) FROM pendentes t WHERE t.tipo = 'ceasa') AS ceasa_em_aberto,
+      (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'ceasa') AS ceasa_total,
+
+      (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
+         FROM pendentes t WHERE t.tipo = 'fixa' AND ${comAtencao(FILTROS_FIXOS[filtroFixas])}) AS fixas,
       (SELECT count(*) FROM pendentes t WHERE t.tipo = 'fixa') AS fixas_em_aberto,
       (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'fixa') AS fixas_total,
 
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
-         FROM pendentes t WHERE t.tipo = 'imposto' AND ${FILTROS_FIXOS[filtroImpostos]}) AS impostos,
+         FROM pendentes t WHERE t.tipo = 'imposto' AND ${comAtencao(FILTROS_FIXOS[filtroImpostos])}) AS impostos,
       (SELECT count(*) FROM pendentes t WHERE t.tipo = 'imposto') AS impostos_em_aberto,
       (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'imposto') AS impostos_total,
 
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
-         FROM pendentes t WHERE t.tipo = 'operacional' AND ${FILTROS_FIXOS[filtroOperacionais]}) AS operacionais,
+         FROM pendentes t WHERE t.tipo = 'operacional' AND ${comAtencao(FILTROS_FIXOS[filtroOperacionais])}) AS operacionais,
       (SELECT count(*) FROM pendentes t WHERE t.tipo = 'operacional') AS operacionais_em_aberto,
       (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'operacional') AS operacionais_total,
 
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
-         FROM pendentes t WHERE t.tipo = 'despesa' AND ${FILTROS_FIXOS[filtroDespesas]}) AS despesas,
+         FROM pendentes t WHERE t.tipo = 'despesa' AND ${comAtencao(FILTROS_FIXOS[filtroDespesas])}) AS despesas,
       (SELECT count(*) FROM pendentes t WHERE t.tipo = 'despesa') AS despesas_em_aberto,
       (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'despesa') AS despesas_total
   `;
@@ -117,10 +130,12 @@ async function painelDoDia(req, res) {
     filtro_impostos: filtroImpostos,
     filtro_despesas: filtroDespesas,
     filtro_operacionais: filtroOperacionais,
+    filtro_ceasa: filtroCeasa,
     boletos: {
       ...bloco(p.boletos, emAberto(p.boletos_em_aberto, p.boletos_total)),
       em_aberto_atrasados: Number(p.boletos_atrasados),
     },
+    ceasa: bloco(p.ceasa, emAberto(p.ceasa_em_aberto, p.ceasa_total)),
     fixas: bloco(p.fixas, emAberto(p.fixas_em_aberto, p.fixas_total)),
     impostos: bloco(p.impostos, emAberto(p.impostos_em_aberto, p.impostos_total)),
     operacionais: bloco(p.operacionais, emAberto(p.operacionais_em_aberto, p.operacionais_total)),
