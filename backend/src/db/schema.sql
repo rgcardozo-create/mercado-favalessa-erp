@@ -357,6 +357,12 @@ UPDATE conciliacao_dinheiro d SET impressao_digital = s.fp
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_impressao ON conciliacao_transacoes(impressao_digital);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_dinheiro_impressao ON conciliacao_dinheiro(impressao_digital);
 
+-- Marcar uma conta para "não me deixe esquecer". O Painel do dia mostra por
+-- recorte de data, e boleto que venceu ontem sai do recorte de hoje — some da
+-- vista justamente quando vira problema. A marca fura o recorte: enquanto a
+-- conta não for paga, ela aparece no bloco dela todo dia.
+ALTER TABLE contas ADD COLUMN IF NOT EXISTS atencao BOOLEAN NOT NULL DEFAULT false;
+
 -- Ceasa: a compra de hortifrúti, paga por PIX no ato, quatro vezes por semana.
 -- Separada de Fornecedores porque a pergunta "quanto gastei na Ceasa este mês"
 -- não se responde quando esse gasto está diluído entre os fornecedores todos.
