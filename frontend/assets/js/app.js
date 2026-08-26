@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.30.0';
+const VERSAO = '1.30.1';
 
 const state = {
   sessao: getSessao(),
@@ -30,7 +30,7 @@ const state = {
   filtroImpostos: 'ate_hoje',
   filtroDespesas: 'ate_hoje',
   filtroOperacionais: 'ate_hoje',
-  filtroCeasa: 'ate_hoje',
+  filtroCeasa: 'hoje',
   // Lançamentos marcados para mudar de aba. Vive fora do render para sobreviver
   // a ele, como a marcação dos fechamentos.
   contasMarcadas: new Set(),
@@ -668,6 +668,22 @@ function painelHTML() {
     semana: 'Boletos dos próximos 7 dias',
   };
 
+  const TITULOS_CEASA = {
+    hoje: 'Ceasa vencendo hoje',
+    ontem: 'Ceasa que venceu ontem',
+    atrasados: 'Ceasa atrasada',
+    semana: 'Ceasa dos próximos 7 dias',
+  };
+
+  // Mesmas opções dos boletos: são muitas, e o que interessa ao abrir a tela é
+  // o dia corrente.
+  const OPCOES_BOLETOS = [
+    ['hoje', 'Vencendo hoje'],
+    ['ontem', 'Venceram ontem'],
+    ['atrasados', 'Todos os atrasados'],
+    ['semana', 'Próximos 7 dias'],
+  ];
+
   // Opções dos blocos fixos. `ate_hoje` é o padrão e é o recorte que o dono quer
   // ver ao abrir o painel: o que já venceu mais o que vence hoje.
   const OPCOES_FIXOS = [
@@ -686,12 +702,7 @@ function painelHTML() {
     </select>
   `;
 
-  const seletor = seletorHTML('filtro-boletos', [
-    ['hoje', 'Vencendo hoje'],
-    ['ontem', 'Venceram ontem'],
-    ['atrasados', 'Todos os atrasados'],
-    ['semana', 'Próximos 7 dias'],
-  ], p.filtro);
+  const seletor = seletorHTML('filtro-boletos', OPCOES_BOLETOS, p.filtro);
 
   // Rodapé dos blocos fixos: avisa que existe coisa fora do recorte, sem listar.
   const restante = (bloco, comoVer) =>
@@ -700,14 +711,17 @@ function painelHTML() {
          (${brl(bloco.em_aberto_valor)}). ${comoVer}</p>`
       : '';
 
-  const b = p.boletos;
   // Nota de rodapé do bloco: mostra que existe mais fora do recorte, sem listar.
-  const resumoBoletos =
-    b.em_aberto_total > b.quantidade
-      ? `<p class="vazio">Ao todo há <strong>${b.em_aberto_total}</strong> boleto(s) em aberto
-         (${brl(b.em_aberto_valor)})${b.em_aberto_atrasados ? `, sendo ${b.em_aberto_atrasados} atrasado(s)` : ''}.
+  const resumoEmAberto = (bloco, oQue) =>
+    bloco.em_aberto_total > bloco.quantidade
+      ? `<p class="vazio">Ao todo há <strong>${bloco.em_aberto_total}</strong> ${oQue} em aberto
+         (${brl(bloco.em_aberto_valor)})${
+           bloco.em_aberto_atrasados ? `, sendo ${bloco.em_aberto_atrasados} atrasado(s)` : ''
+         }.
          A lista completa fica em <strong>Contas a pagar</strong>.</p>`
       : '';
+
+  const resumoBoletos = resumoEmAberto(p.boletos, 'boleto(s)');
 
   return `
     ${cabecalho}
@@ -728,13 +742,13 @@ function painelHTML() {
       })}
 
       ${blocoPainelHTML({
-        titulo: 'Ceasa',
+        titulo: TITULOS_CEASA[p.filtro_ceasa],
         icone: '🥬',
         bloco: p.ceasa,
         classe: 'ceasa',
-        vazio: 'Nada em aberto na Ceasa — o normal, já que ela é paga no ato.',
-        extra: seletorHTML('filtro-ceasa', OPCOES_FIXOS, p.filtro_ceasa),
-        rodape: restante(p.ceasa, 'As que vencem depois aparecem mudando o seletor acima.'),
+        vazio: 'Nada da Ceasa neste filtro.',
+        extra: seletorHTML('filtro-ceasa', OPCOES_BOLETOS, p.filtro_ceasa),
+        rodape: resumoEmAberto(p.ceasa, 'compra(s) da Ceasa'),
       })}
 
       ${blocoPainelHTML({

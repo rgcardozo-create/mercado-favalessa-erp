@@ -50,7 +50,10 @@ async function painelDoDia(req, res) {
   const filtroImpostos = escolher(FILTROS_FIXOS, req.query.filtroImpostos, FILTRO_FIXOS_PADRAO);
   const filtroDespesas = escolher(FILTROS_FIXOS, req.query.filtroDespesas, FILTRO_FIXOS_PADRAO);
   const filtroOperacionais = escolher(FILTROS_FIXOS, req.query.filtroOperacionais, FILTRO_FIXOS_PADRAO);
-  const filtroCeasa = escolher(FILTROS_FIXOS, req.query.filtroCeasa, FILTRO_FIXOS_PADRAO);
+  // Ceasa usa o mesmo recorte dos boletos, e pelo mesmo motivo: são muitas, e
+  // listar todas as vencidas ao abrir a tela enche o painel de coisa que não é
+  // do dia. O padrão é o dia corrente; o resto sai pelo seletor do bloco.
+  const filtroCeasa = escolher(FILTROS, req.query.filtroCeasa, 'hoje');
 
   const sql = `
     WITH contas_com_saldo AS (${SELECT_CONTAS_COM_SALDO}),
@@ -77,9 +80,11 @@ async function painelDoDia(req, res) {
 
       -- Fixas e impostos: por padrão só o que já venceu ou vence hoje.
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
-         FROM pendentes t WHERE t.tipo = 'ceasa' AND ${comAtencao(FILTROS_FIXOS[filtroCeasa])}) AS ceasa,
+         FROM pendentes t WHERE t.tipo = 'ceasa' AND ${comAtencao(FILTROS[filtroCeasa])}) AS ceasa,
       (SELECT count(*) FROM pendentes t WHERE t.tipo = 'ceasa') AS ceasa_em_aberto,
       (SELECT COALESCE(sum(t.saldo), 0) FROM pendentes t WHERE t.tipo = 'ceasa') AS ceasa_total,
+      (SELECT count(*) FROM pendentes t
+        WHERE t.tipo = 'ceasa' AND t.vencimento < ${HOJE_SP}) AS ceasa_atrasados,
 
       (SELECT COALESCE(json_agg(t ORDER BY t.vencimento, t.valor DESC), '[]'::json)
          FROM pendentes t WHERE t.tipo = 'fixa' AND ${comAtencao(FILTROS_FIXOS[filtroFixas])}) AS fixas,
@@ -135,7 +140,10 @@ async function painelDoDia(req, res) {
       ...bloco(p.boletos, emAberto(p.boletos_em_aberto, p.boletos_total)),
       em_aberto_atrasados: Number(p.boletos_atrasados),
     },
-    ceasa: bloco(p.ceasa, emAberto(p.ceasa_em_aberto, p.ceasa_total)),
+    ceasa: {
+      ...bloco(p.ceasa, emAberto(p.ceasa_em_aberto, p.ceasa_total)),
+      em_aberto_atrasados: Number(p.ceasa_atrasados),
+    },
     fixas: bloco(p.fixas, emAberto(p.fixas_em_aberto, p.fixas_total)),
     impostos: bloco(p.impostos, emAberto(p.impostos_em_aberto, p.impostos_total)),
     operacionais: bloco(p.operacionais, emAberto(p.operacionais_em_aberto, p.operacionais_total)),
