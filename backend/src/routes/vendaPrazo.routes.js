@@ -1,6 +1,6 @@
 const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, exigirTela } = require('../middleware/auth');
 const c = require('../controllers/vendaPrazoController');
 
 const router = express.Router();
@@ -8,6 +8,7 @@ const router = express.Router();
 // Venda a prazo está na lista de acesso da Gerente, e o login "Loja" tem o mesmo
 // nível dela por padrão — quem está no caixa precisa lançar a compra do fiado.
 router.use(authenticate);
+router.use(exigirTela('venda-prazo'));
 
 router.get('/', asyncHandler(c.resumo));
 router.get('/clientes/:id', asyncHandler(c.extratoCliente));

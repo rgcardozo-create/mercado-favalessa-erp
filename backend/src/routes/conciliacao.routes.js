@@ -1,6 +1,6 @@
 const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, exigirTela } = require('../middleware/auth');
 const {
   resumo,
   listarTransacoes,
@@ -18,6 +18,7 @@ const corpoGrande = express.json({ limit: process.env.LIMITE_IMPORTACAO || '25mb
 // Conciliação está na lista de acesso da Gerente, e o login "Loja" tem o mesmo
 // nível dela por padrão (SPEC.md, seção 3) — por isso vale para os 3 perfis.
 router.use(authenticate);
+router.use(exigirTela('conciliacao'));
 
 router.get('/', asyncHandler(resumo));
 router.get('/transacoes', asyncHandler(listarTransacoes));

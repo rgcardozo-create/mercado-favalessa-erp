@@ -1,11 +1,12 @@
 const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, exigirTela } = require('../middleware/auth');
 const contasController = require('../controllers/contasController');
 
 const router = express.Router();
 
 router.use(authenticate);
+router.use(exigirTela('contas'));
 
 // Cadastro de boleto: qualquer perfil autenticado pode cadastrar (Master, Gerente ou Loja).
 router.get('/', asyncHandler(contasController.listar));

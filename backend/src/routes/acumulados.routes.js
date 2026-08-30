@@ -1,6 +1,6 @@
 const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, exigirTela } = require('../middleware/auth');
 const acumuladosController = require('../controllers/acumuladosController');
 
 const router = express.Router();
@@ -8,6 +8,7 @@ const router = express.Router();
 // Acumulado é conferência de caixa e só faz sentido com supervisão: visível apenas
 // para Master e Gerente, nunca no login "Loja" (SPEC.md, seção 3).
 router.use(authenticate, authorize('master', 'gerente'));
+router.use(exigirTela('acumulado'));
 
 router.get('/resumo', asyncHandler(acumuladosController.resumoVendas));
 router.get('/dias', asyncHandler(acumuladosController.diaADia));

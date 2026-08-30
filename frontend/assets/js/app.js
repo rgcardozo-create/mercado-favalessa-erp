@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.31.0';
+const VERSAO = '1.32.0';
 
 const state = {
   sessao: getSessao(),
@@ -99,6 +99,9 @@ const state = {
   // Lançamento barrado por já existir igual: guarda a mensagem e o que foi
   // digitado, para o usuário corrigir o valor ou confirmar mesmo assim.
   duplicidade: null,
+  // Acessos e o que está sendo editado na Administração.
+  usuarios: null,
+  usuarioEditando: null,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -134,28 +137,47 @@ function podeGerenciar() {
   return state.sessao && state.sessao.usuario.role !== 'loja';
 }
 
-// Painel do dia e Acumulado são só para Master e Gerente. O backend também
-// bloqueia — esconder a aba aqui é conveniência, não a regra de segurança.
-function podeVerPainel() {
-  return podeGerenciar();
+// As telas do sistema, na ordem da barra de navegação. Folha e Administração não
+// se concedem a ninguém: têm salário e criação de acesso, e são do Master.
+const TELAS = [
+  { chave: 'painel', rotulo: 'Painel do dia' },
+  { chave: 'contas', rotulo: 'Contas a pagar' },
+  { chave: 'venda-prazo', rotulo: 'Venda a prazo' },
+  { chave: 'conciliacao', rotulo: 'Conciliação' },
+  { chave: 'acumulado', rotulo: 'Acumulado' },
+  { chave: 'cadastros', rotulo: 'Cadastros' },
+  { chave: 'gerencial', rotulo: 'Gerencial' },
+  { chave: 'relatorios', rotulo: 'Relatórios' },
+  { chave: 'folha', rotulo: 'Folha', soMaster: true },
+  { chave: 'admin', rotulo: 'Administração', soMaster: true },
+];
+
+// Master vê tudo; os demais veem o que foi marcado para eles na Administração.
+// Esconder a aba aqui é conveniência — quem barra de verdade é o backend, que
+// recusa a rota de tela não liberada.
+function podeVerTela(chave) {
+  if (!state.sessao) return false;
+  if (state.sessao.usuario.role === 'master') return true;
+  return (state.sessao.usuario.telas || []).includes(chave);
 }
 
-// Acumulado é conferência de caixa: nunca no login "Loja" (SPEC.md, seção 3).
-function podeVerAcumulado() {
-  return podeGerenciar();
-}
-
-// Folha e Extras: Master apenas, e ainda por trás da senha adicional.
 function podeVerFolha() {
   return state.sessao && state.sessao.usuario.role === 'master';
 }
 
-function podeVerRelatorios() {
-  return podeGerenciar();
+// A senha da folha era o Master digitando a própria senha duas vezes por dia. A
+// folha continua trancada para todo mundo — só que, para o Master, entrar no
+// sistema já é a chave. O backend faz a mesma leitura, então esconder a tela e
+// liberar a rota andam juntos.
+function folhaLiberada() {
+  return podeVerFolha() || Boolean(getFolhaToken());
 }
 
+// Abre na primeira tela que a pessoa tem — quem não tem painel não pode cair
+// numa tela em branco por causa disso.
 function abaInicial() {
-  return podeVerPainel() ? 'painel' : 'contas';
+  const primeira = TELAS.find((t) => podeVerTela(t.chave));
+  return primeira ? primeira.chave : 'contas';
 }
 
 // Período padrão dos relatórios: mês corrente.
@@ -195,7 +217,10 @@ async function carregarDados() {
         apiFetch('/cadastros/bancos'),
       ]);
       state.painel = painel;
-      state.resumoVendas = await apiFetch('/acumulados/resumo');
+      // A faixa de vendas do painel sai do Acumulado. Quem não tem essa tela
+      // simplesmente não vê a faixa — pedir mesmo assim derrubaria o painel inteiro
+      // por causa de um aviso.
+      state.resumoVendas = podeVerTela('acumulado') ? await apiFetch('/acumulados/resumo') : null;
       // A contagem de pendências da folha não exige a senha adicional: é só um
       // aviso, sem nome nem valor. Só o Master enxerga.
       state.folhaPendencias = podeVerFolha() ? await apiFetch('/folha/pendencias') : null;
@@ -223,7 +248,7 @@ async function carregarDados() {
       state.cadastros = await apiFetch(`/cadastros/${state.cadastroTipo}`);
     } else if (state.tab === 'folha') {
       // Sem token da folha a API responde 423 — a tela então pede a senha.
-      if (getFolhaToken()) {
+      if (folhaLiberada()) {
         const p = periodoDaFolha();
         const [folha, extras, funcionarios] = await Promise.all([
           apiFetch(`/folha${p ? `?de=${p.de}&ate=${p.ate}` : ''}`),
@@ -245,7 +270,12 @@ async function carregarDados() {
       const p = periodoOuPadrao();
       state.relatorio = await apiFetch(`/relatorios?de=${p.de}&ate=${p.ate}`);
     } else if (state.tab === 'admin') {
-      state.auditoria = await apiFetch('/admin/auditoria?limite=50');
+      const [auditoria, usuarios] = await Promise.all([
+        apiFetch('/admin/auditoria?limite=50'),
+        apiFetch('/admin/usuarios'),
+      ]);
+      state.auditoria = auditoria;
+      state.usuarios = usuarios;
     } else {
       const params = new URLSearchParams({ tipo: state.tipo });
       if (state.statusFiltro) params.set('status', state.statusFiltro);
@@ -490,16 +520,12 @@ function cabecalhoHTML(titulo) {
     </div>
 
     <nav class="abas">
-      ${podeVerPainel() ? `<button data-tab="painel" class="${state.tab === 'painel' ? 'ativo' : ''}">Painel do dia</button>` : ''}
-      <button data-tab="contas" class="${state.tab === 'contas' ? 'ativo' : ''}">Contas a pagar</button>
-      <button data-tab="venda-prazo" class="${state.tab === 'venda-prazo' ? 'ativo' : ''}">Venda a prazo</button>
-      <button data-tab="conciliacao" class="${state.tab === 'conciliacao' ? 'ativo' : ''}">Conciliação</button>
-      ${podeVerAcumulado() ? `<button data-tab="acumulado" class="${state.tab === 'acumulado' ? 'ativo' : ''}">Acumulado</button>` : ''}
-      <button data-tab="cadastros" class="${state.tab === 'cadastros' ? 'ativo' : ''}">Cadastros</button>
-      ${podeVerRelatorios() ? `<button data-tab="gerencial" class="${state.tab === 'gerencial' ? 'ativo' : ''}">Gerencial</button>` : ''}
-      ${podeVerRelatorios() ? `<button data-tab="relatorios" class="${state.tab === 'relatorios' ? 'ativo' : ''}">Relatórios</button>` : ''}
-      ${podeVerFolha() ? `<button data-tab="folha" class="${state.tab === 'folha' ? 'ativo' : ''}">Folha</button>` : ''}
-      ${podeVerFolha() ? `<button data-tab="admin" class="${state.tab === 'admin' ? 'ativo' : ''}">Administração</button>` : ''}
+      ${TELAS.filter((t) => podeVerTela(t.chave))
+        .map(
+          (t) =>
+            `<button data-tab="${t.chave}" class="${state.tab === t.chave ? 'ativo' : ''}">${t.rotulo}</button>`
+        )
+        .join('')}
     </nav>
 
     ${state.erro ? `<div class="alerta erro">${state.erro}</div>` : ''}
@@ -2032,7 +2058,7 @@ function folhaHTML() {
   const cabecalho = cabecalhoHTML('Folha de pagamento');
 
   // Sem a senha adicional a folha nem carrega — nenhum nome ou valor aparece.
-  if (!getFolhaToken() || !state.folha) {
+  if (!folhaLiberada() || !state.folha) {
     return `
       ${cabecalho}
       <div class="login-wrap" style="min-height:auto;padding:40px 0">
@@ -2767,6 +2793,131 @@ function resultadoImportacaoHTML({ dry_run, resumo }) {
   `;
 }
 
+// Gestão de acessos. O perfil decide o que a pessoa pode ALTERAR (Loja não dá
+// baixa nem exclui); as caixas decidem o que ela chega a VER. São coisas
+// diferentes e por isso ficam em campos diferentes.
+const PERFIS_UI = [
+  { valor: 'master', rotulo: 'Master — vê tudo, inclusive a folha' },
+  { valor: 'gerente', rotulo: 'Gerente — altera lançamentos' },
+  { valor: 'loja', rotulo: 'Loja — só consulta e cadastra' },
+];
+
+function usuariosHTML() {
+  const lista = (state.usuarios && state.usuarios.usuarios) || [];
+  const editando = state.usuarioEditando;
+  const concediveis = TELAS.filter((t) => !t.soMaster);
+
+  const marcadas = new Set(editando ? editando.telas || [] : []);
+  const ehMaster = (editando ? editando.role : 'gerente') === 'master';
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Quem entra no sistema</h2>
+        <span class="grupo-total">${lista.length} acesso(s)</span>
+      </div>
+      <p class="vazio">
+        O <strong>perfil</strong> decide o que a pessoa pode alterar. As <strong>telas
+        marcadas</strong> decidem o que ela enxerga. Folha e Administração são do Master e
+        não se concedem a ninguém.
+      </p>
+
+      <div class="rolagem-x">
+        <table class="tabela-contas">
+          <thead><tr><th>Nome</th><th>E-mail</th><th>Perfil</th><th>Telas</th><th>Situação</th><th>Ações</th></tr></thead>
+          <tbody>
+            ${
+              lista.length
+                ? lista
+                    .map(
+                      (u) => `<tr class="${u.ativo ? '' : 'inativo'}">
+                        <td><strong>${escapar(u.nome)}</strong></td>
+                        <td>${escapar(u.email)}</td>
+                        <td><span class="badge ${u.role === 'master' ? 'role' : 'tipo'}">${u.role}</span></td>
+                        <td>${
+                          u.role === 'master'
+                            ? '<small>todas</small>'
+                            : `<small>${
+                                u.telas.length
+                                  ? u.telas
+                                      .map((c) => (TELAS.find((t) => t.chave === c) || {}).rotulo || c)
+                                      .join(' · ')
+                                  : 'nenhuma — não consegue usar o sistema'
+                              }</small>`
+                        }</td>
+                        <td>${
+                          u.ativo
+                            ? '<span class="badge quitado">Ativo</span>'
+                            : '<span class="badge vencida">Desativado</span>'
+                        }</td>
+                        <td class="acoes"><div class="acoes-linha">
+                          <button data-action="editar-usuario" data-id="${u.id}" class="secundario">Editar</button>
+                          ${
+                            u.id === state.sessao.usuario.id
+                              ? ''
+                              : `<button data-action="excluir-usuario" data-id="${u.id}" class="perigo">Excluir</button>`
+                          }
+                        </div></td>
+                      </tr>`
+                    )
+                    .join('')
+                : '<tr><td colspan="6">Nenhum acesso cadastrado.</td></tr>'
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="cartoes-form">
+      <form data-action="form-usuario" class="form-inline ${editando && editando.id ? 'em-edicao' : ''}">
+        <h2>${editando && editando.id ? `Editando ${escapar(editando.nome)}` : 'Novo acesso'}</h2>
+        <label>Nome <input type="text" name="nome" required value="${escapar((editando && editando.nome) || '')}" /></label>
+        <label>E-mail <input type="email" name="email" required value="${escapar((editando && editando.email) || '')}" /></label>
+        <label>Perfil
+          <select name="role" id="perfil-usuario">
+            ${PERFIS_UI.map(
+              (p) =>
+                `<option value="${p.valor}" ${
+                  (editando ? editando.role : 'gerente') === p.valor ? 'selected' : ''
+                }>${p.rotulo}</option>`
+            ).join('')}
+          </select>
+        </label>
+        <label>Senha
+          <input type="password" name="senha" autocomplete="new-password"
+            placeholder="${editando && editando.id ? 'deixe em branco para manter' : 'mínimo 8 caracteres'}"
+            ${editando && editando.id ? '' : 'required'} />
+        </label>
+
+        <div class="telas-permitidas campo-largo ${ehMaster ? 'escondido' : ''}" id="telas-permitidas">
+          <span class="rotulo-telas">Telas que esta pessoa enxerga</span>
+          <div class="grade-telas">
+            ${concediveis
+              .map(
+                (t) => `<label class="campo-marca">
+                  <input type="checkbox" name="telas" value="${t.chave}" ${marcadas.has(t.chave) ? 'checked' : ''} />
+                  ${t.rotulo}
+                </label>`
+              )
+              .join('')}
+          </div>
+        </div>
+        <p class="vazio campo-largo ${ehMaster ? '' : 'escondido'}" id="aviso-master">
+          Master enxerga todas as telas, inclusive Folha e Administração, e a folha abre sem
+          pedir a senha adicional.
+        </p>
+
+        <label class="campo-marca">
+          <input type="checkbox" name="ativo" ${!editando || editando.ativo !== false ? 'checked' : ''} />
+          Acesso ativo
+        </label>
+        <button type="submit">${editando && editando.id ? 'Salvar' : 'Criar acesso'}</button>
+        ${editando ? '<button type="button" id="btn-cancelar-usuario" class="secundario">Cancelar</button>' : ''}
+      </form>
+    </section>
+  `;
+}
+
 function adminHTML() {
   const cabecalho = cabecalhoHTML('Administração');
   const a = state.auditoria;
@@ -2776,7 +2927,7 @@ function adminHTML() {
       <div class="grupo-cabecalho"><h2>Exportar backup</h2></div>
       <p class="vazio">
         Baixa todos os dados em JSON, para guardar fora do sistema.
-        ${getFolhaToken()
+        ${folhaLiberada()
           ? 'A folha está destravada, então <strong>entra no arquivo</strong>.'
           : 'A folha está trancada, então <strong>fica fora do arquivo</strong> — destrave antes se quiser incluí-la.'}
       </p>
@@ -2804,10 +2955,11 @@ function adminHTML() {
     </section>
   `;
 
-  if (!a) return `${cabecalho}${backup}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+  if (!a) return `${cabecalho}${usuariosHTML()}${backup}${state.carregando ? '<p>Carregando…</p>' : ''}`;
 
   return `
     ${cabecalho}
+    ${usuariosHTML()}
     ${backup}
 
     <section class="grupo-painel">
@@ -3104,18 +3256,25 @@ function listaContasHTML({ ehFornecedor, ehDespesa, podeGerir }) {
     .join('');
 }
 
+const MONTAR_TELA = {
+  painel: () => painelHTML(),
+  contas: () => contasHTML(),
+  'venda-prazo': () => vendaPrazoHTML(),
+  conciliacao: () => conciliacaoHTML(),
+  acumulado: () => acumuladoHTML(),
+  cadastros: () => cadastrosHTML(),
+  gerencial: () => gerencialHTML(),
+  relatorios: () => relatoriosHTML(),
+  folha: () => folhaHTML(),
+  admin: () => adminHTML(),
+};
+
 function telaHTML() {
   if (!state.sessao) return loginHTML();
-  if (state.tab === 'painel' && podeVerPainel()) return painelHTML();
-  if (state.tab === 'conciliacao') return conciliacaoHTML();
-  if (state.tab === 'acumulado' && podeVerAcumulado()) return acumuladoHTML();
-  if (state.tab === 'venda-prazo') return vendaPrazoHTML();
-  if (state.tab === 'cadastros') return cadastrosHTML();
-  if (state.tab === 'folha' && podeVerFolha()) return folhaHTML();
-  if (state.tab === 'gerencial' && podeVerRelatorios()) return gerencialHTML();
-  if (state.tab === 'relatorios' && podeVerRelatorios()) return relatoriosHTML();
-  if (state.tab === 'admin' && podeVerFolha()) return adminHTML();
-  return contasHTML();
+  // Tela sem permissão nunca é montada, mesmo que o estado aponte para ela — é o
+  // caso de quem tinha acesso e perdeu enquanto estava com o sistema aberto.
+  if (podeVerTela(state.tab) && MONTAR_TELA[state.tab]) return MONTAR_TELA[state.tab]();
+  return MONTAR_TELA[abaInicial()]();
 }
 
 function render() {
@@ -3515,6 +3674,43 @@ function bind() {
     seletor.addEventListener('change', (ev) => {
       state[chave] = ev.target.value;
       carregarDados();
+    });
+  }
+
+  const formUsuario = root.querySelector('[data-action="form-usuario"]');
+  if (formUsuario) formUsuario.addEventListener('submit', onSalvarUsuario);
+
+  const perfilUsuario = root.querySelector('#perfil-usuario');
+  if (perfilUsuario) {
+    // Master vê tudo: as caixas somem para não parecerem uma escolha que não é.
+    const caixas = root.querySelector('#telas-permitidas');
+    const aviso = root.querySelector('#aviso-master');
+    perfilUsuario.addEventListener('change', () => {
+      const ehMaster = perfilUsuario.value === 'master';
+      caixas.classList.toggle('escondido', ehMaster);
+      aviso.classList.toggle('escondido', !ehMaster);
+    });
+  }
+
+  root.querySelectorAll('[data-action="editar-usuario"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.id);
+      state.usuarioEditando = (state.usuarios.usuarios || []).find((u) => u.id === id) || null;
+      render();
+      const campo = root.querySelector('[data-action="form-usuario"] input[name=nome]');
+      if (campo) campo.scrollIntoView({ block: 'center' });
+    });
+  });
+
+  root.querySelectorAll('[data-action="excluir-usuario"]').forEach((btn) => {
+    btn.addEventListener('click', () => onExcluirUsuario(Number(btn.dataset.id)));
+  });
+
+  const btnCancelarUsuario = root.querySelector('#btn-cancelar-usuario');
+  if (btnCancelarUsuario) {
+    btnCancelarUsuario.addEventListener('click', () => {
+      state.usuarioEditando = null;
+      render();
     });
   }
 
@@ -4096,6 +4292,50 @@ async function onImportarExtrato() {
   } finally {
     state.extratoCarregando = false;
     carregarDados(); // atualiza os totais da tela
+  }
+}
+
+async function onSalvarUsuario(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const editando = state.usuarioEditando && state.usuarioEditando.id;
+
+  const corpo = {
+    nome: fd.get('nome'),
+    email: fd.get('email'),
+    role: fd.get('role'),
+    telas: fd.getAll('telas'),
+    ativo: fd.get('ativo') === 'on',
+  };
+  // Senha em branco na edição significa "mantém a que está" — mandar vazio
+  // apagaria a senha de quem só teve o nome corrigido.
+  const senha = fd.get('senha');
+  if (senha) corpo.senha = senha;
+
+  try {
+    await apiFetch(editando ? `/admin/usuarios/${state.usuarioEditando.id}` : '/admin/usuarios', {
+      method: editando ? 'PUT' : 'POST',
+      body: JSON.stringify(corpo),
+    });
+    state.erro = null;
+    state.usuarioEditando = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onExcluirUsuario(id) {
+  if (!confirm('Excluir este acesso? Se a pessoa tem lançamentos no histórico, desative em vez de excluir.')) return;
+  try {
+    await apiFetch(`/admin/usuarios/${id}`, { method: 'DELETE' });
+    state.erro = null;
+    if (state.usuarioEditando && state.usuarioEditando.id === id) state.usuarioEditando = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
   }
 }
 

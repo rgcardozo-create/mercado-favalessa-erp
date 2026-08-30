@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
+const { telasDoUsuario } = require('../db/telas');
 
 async function login(req, res) {
   const { email, senha } = req.body;
@@ -9,7 +10,7 @@ async function login(req, res) {
   }
 
   const { rows } = await pool.query(
-    'SELECT id, nome, senha_hash, role, ativo FROM usuarios WHERE email = $1',
+    'SELECT id, nome, email, senha_hash, role::text AS role, ativo, telas FROM usuarios WHERE email = $1',
     [email]
   );
   const usuario = rows[0];
@@ -32,12 +33,19 @@ async function login(req, res) {
 
   return res.json({
     token,
-    usuario: { id: usuario.id, nome: usuario.nome, role: usuario.role },
+    usuario: {
+      id: usuario.id,
+      nome: usuario.nome,
+      email: usuario.email,
+      role: usuario.role,
+      telas: telasDoUsuario(usuario),
+    },
   });
 }
 
 async function me(req, res) {
-  return res.json({ usuario: req.user });
+  const { id, nome, email, role } = req.user;
+  return res.json({ usuario: { id, nome, email, role, telas: telasDoUsuario(req.user) } });
 }
 
 module.exports = { login, me };

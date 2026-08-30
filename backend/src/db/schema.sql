@@ -357,6 +357,22 @@ UPDATE conciliacao_dinheiro d SET impressao_digital = s.fp
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_impressao ON conciliacao_transacoes(impressao_digital);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_concil_dinheiro_impressao ON conciliacao_dinheiro(impressao_digital);
 
+-- Quais telas cada usuário enxerga. O perfil (master/gerente/loja) continua
+-- decidindo o que a pessoa pode ALTERAR; esta lista decide o que ela chega a
+-- VER. Master ignora a lista e vê tudo — é o dono.
+ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telas TEXT[] NOT NULL DEFAULT '{}';
+
+-- Quem já usava o sistema antes desta coluna existir tinha acesso pelo perfil.
+-- Sem este preenchimento, a lista vazia tiraria tudo de todo mundo na primeira
+-- subida: a pessoa entraria e não veria aba nenhuma. Cada perfil recebe aqui o
+-- que ele já alcançava, e a partir daí o Master ajusta na Administração.
+UPDATE usuarios
+   SET telas = CASE role::text
+     WHEN 'gerente' THEN ARRAY['painel','contas','venda-prazo','conciliacao','acumulado','cadastros','gerencial','relatorios']
+     ELSE ARRAY['contas','venda-prazo','conciliacao','cadastros']
+   END
+ WHERE role::text <> 'master' AND cardinality(telas) = 0;
+
 -- Marcar uma conta para "não me deixe esquecer". O Painel do dia mostra por
 -- recorte de data, e boleto que venceu ontem sai do recorte de hoje — some da
 -- vista justamente quando vira problema. A marca fura o recorte: enquanto a
