@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.30.1';
+const VERSAO = '1.31.0';
 
 const state = {
   sessao: getSessao(),
@@ -449,6 +449,9 @@ function linhaPagamentoHTML(conta, p) {
           <label>Valor pago <input type="number" step="0.01" min="0.01" name="valor" required value="${p.valor}" /></label>
           <label>Data <input type="date" name="data_pagamento" required value="${String(p.data_pagamento).slice(0, 10)}" /></label>
           ${camposFormaEBancoHTML({ forma: p.forma_pagamento, banco: p.banco_id })}
+          <label class="campo-largo">Observação
+            <input type="text" name="observacoes" value="${escapar(p.observacoes || '')}" />
+          </label>
           <button type="submit">Salvar pagamento</button>
           <button type="button" data-action="cancelar-editar-pagamento" class="secundario">Cancelar</button>
         </form>
@@ -461,7 +464,9 @@ function linhaPagamentoHTML(conta, p) {
       <td>${dateBR(p.data_pagamento)}</td>
       <td>${brl(p.valor)}</td>
       <td>${escapar(p.forma_pagamento || '—')}</td>
-      <td>${escapar(p.banco_nome || '—')}</td>
+      <td>${escapar(p.banco_nome || '—')}${
+        p.observacoes ? `<br /><small class="obs-pagamento">${escapar(p.observacoes)}</small>` : ''
+      }</td>
       <td class="acoes">
         <div class="acoes-linha">
           <button data-action="editar-pagamento" data-id="${p.id}" class="secundario">Editar</button>
@@ -626,6 +631,9 @@ function formBaixaHTML(conta) {
         </label>
         <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
         ${camposFormaEBancoHTML({ forma: conta.forma_prevista })}
+        <label class="campo-largo">Observação
+          <input type="text" name="observacoes" placeholder="ex.: reembolso ao Jorge, que pagou porque o cartão não passou" />
+        </label>
         <button type="submit">Confirmar pagamento</button>
       </form>
       <p class="vazio">Saldo em aberto: <strong>${brl(conta.saldo)}</strong>${
@@ -4430,6 +4438,7 @@ async function onEditarPagamento(ev) {
         data_pagamento: fd.get('data_pagamento'),
         forma_pagamento: fd.get('forma_pagamento') || null,
         banco_id: fd.get('banco_id') || null,
+        observacoes: fd.get('observacoes') || null,
       }),
     });
     state.pagamentoEditandoId = null;
@@ -4467,6 +4476,7 @@ async function onFormBaixa(ev) {
         data_pagamento: fd.get('data_pagamento'),
         forma_pagamento: fd.get('forma_pagamento') || null,
         banco_id: fd.get('banco_id') || null,
+        observacoes: fd.get('observacoes') || null,
       }),
     });
     // A conta continua aberta: quem paga em partes costuma conferir logo o que
