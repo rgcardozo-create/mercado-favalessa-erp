@@ -1,9 +1,13 @@
 const jwt = require('jsonwebtoken');
 
-// A Folha é Master-only e ainda fica atrás de uma senha adicional, como já era no
-// sistema atual. Destravar emite um token curto e separado do token de sessão —
-// assim fechar/reabrir o sistema volta a trancar a folha, e um token de sessão
-// vazado não dá acesso aos salários.
+// A Folha é Master-only. Para quem não é master ela nem existe como tela, e a
+// senha adicional continua valendo — o token dela é curto e separado do token de
+// sessão, então fechar e reabrir o sistema tranca de novo.
+//
+// O Master entra direto, a pedido do dono: era ele mesmo digitando a própria
+// senha duas vezes por dia. O que se perde com isso é a proteção contra o
+// aparelho dele ficar aberto no balcão — a partir daqui, sessão de Master aberta
+// é salário à vista.
 const FOLHA_ESCOPO = 'folha';
 
 function assinarTokenFolha(usuarioId) {
@@ -16,9 +20,9 @@ function assinarTokenFolha(usuarioId) {
 // relatórios, que mostram a folha como linha genérica quando ela está trancada.
 function detectarFolhaDestravada(req, res, next) {
   const token = req.headers['x-folha-token'];
-  req.folhaDestravada = false;
+  req.folhaDestravada = req.user ? req.user.role === 'master' : false;
 
-  if (token && req.user) {
+  if (!req.folhaDestravada && token && req.user) {
     try {
       const payload = jwt.verify(token, process.env.JWT_SECRET);
       req.folhaDestravada = payload.escopo === FOLHA_ESCOPO && String(payload.sub) === String(req.user.id);

@@ -3,6 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const { authenticate, authorize } = require('../middleware/auth');
 const { detectarFolhaDestravada } = require('../middleware/folha');
 const { auditoria, exportarBackup, importarBackupEnviado } = require('../controllers/adminController');
+const usuarios = require('../controllers/usuariosController');
 
 const router = express.Router();
 
@@ -14,6 +15,11 @@ const corpoGrande = express.json({ limit: process.env.LIMITE_IMPORTACAO || '25mb
 // `detectarFolhaDestravada` não bloqueia nada aqui — só decide se a folha entra
 // no backup exportado.
 router.use(authenticate, authorize('master'), detectarFolhaDestravada);
+
+router.get('/usuarios', asyncHandler(usuarios.listar));
+router.post('/usuarios', asyncHandler(usuarios.criar));
+router.put('/usuarios/:id', asyncHandler(usuarios.atualizar));
+router.delete('/usuarios/:id', asyncHandler(usuarios.deletar));
 
 router.get('/auditoria', asyncHandler(auditoria));
 router.get('/backup', asyncHandler(exportarBackup));

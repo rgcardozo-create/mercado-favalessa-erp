@@ -193,6 +193,21 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .campos-embutidos { display: contents; }
 .campos-embutidos.escondido { display: none; }
 label.escondido { display: none; }
+.escondido { display: none !important; }
+
+/* Caixas das telas liberadas, na Administração. */
+.telas-permitidas { display: flex; flex-direction: column; gap: 8px; }
+.rotulo-telas { font-size: 13px; color: var(--texto-suave); }
+.grade-telas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 8px 16px;
+  background: var(--azul-suave);
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.grade-telas .campo-marca { font-size: 13px; }
+.tabela-contas tbody tr.inativo td { opacity: 0.55; }
 
 .bloco-painel.operacionais { border-top: 3px solid #7A5AF8; }
 .bloco-painel.ceasa { border-top: 3px solid #0FA958; }
@@ -554,6 +569,7 @@ small.parcela { color: var(--azul); background: var(--azul-suave); border-radius
 .tabela-pagamentos { margin-bottom: 12px; }
 .tabela-pagamentos th { background: #DDE6F7; }
 .nova-baixa { border-top: 1px dashed var(--borda); padding-top: 12px; }
+.obs-pagamento { color: var(--texto-suave); font-size: 11.5px; line-height: 1.35; display: inline-block; margin-top: 2px; }
 .tabela-contas .filtros select, #filtro-mes { font-size: 13px; }
 
 code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font-size: 12px; }

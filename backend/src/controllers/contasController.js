@@ -458,7 +458,7 @@ async function deletar(req, res) {
 
 async function registrarPagamento(req, res) {
   const { id } = req.params;
-  const { valor, data_pagamento, forma_pagamento, banco_id } = req.body;
+  const { valor, data_pagamento, forma_pagamento, banco_id, observacoes } = req.body;
 
   if (!valor || Number(valor) <= 0 || !data_pagamento) {
     return res.status(400).json({ error: 'valor (maior que zero) e data_pagamento são obrigatórios.' });
@@ -477,10 +477,14 @@ async function registrarPagamento(req, res) {
     if (!banco[0]) return res.status(400).json({ error: 'Banco não encontrado.' });
   }
 
+  // A observação é o porquê do pagamento, e o porquê some da memória em uma
+  // semana: "reembolso ao Jorge, que pagou este boleto porque o cartão não passou"
+  // é o tipo de coisa que ninguém reconstrói olhando só valor e data.
   const { rows } = await pool.query(
-    `INSERT INTO contas_pagamentos (conta_id, valor, data_pagamento, forma_pagamento, banco_id, pago_por)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [id, valor, data_pagamento, forma_pagamento || null, bancoId, req.user.id]
+    `INSERT INTO contas_pagamentos
+       (conta_id, valor, data_pagamento, forma_pagamento, banco_id, observacoes, pago_por)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    [id, valor, data_pagamento, forma_pagamento || null, bancoId, observacoes || null, req.user.id]
   );
   const pagamento = rows[0];
 
@@ -499,7 +503,7 @@ async function registrarPagamento(req, res) {
 // corrigida — sem isso o único jeito seria apagar a conta e lançar tudo de novo.
 async function atualizarPagamento(req, res) {
   const { id, pagamentoId } = req.params;
-  const { valor, data_pagamento, forma_pagamento, banco_id } = req.body;
+  const { valor, data_pagamento, forma_pagamento, banco_id, observacoes } = req.body;
 
   if (valor !== undefined && Number(valor) <= 0) {
     return res.status(400).json({ error: 'valor precisa ser maior que zero.' });
@@ -518,14 +522,16 @@ async function atualizarPagamento(req, res) {
         SET valor = COALESCE($1, valor),
             data_pagamento = COALESCE($2, data_pagamento),
             forma_pagamento = $3,
-            banco_id = $4
-      WHERE id = $5 AND conta_id = $6
+            banco_id = $4,
+            observacoes = $5
+      WHERE id = $6 AND conta_id = $7
       RETURNING *`,
     [
       valor === undefined ? null : valor,
       data_pagamento || null,
       forma_pagamento || null,
       bancoId,
+      observacoes || null,
       pagamentoId,
       id,
     ]
