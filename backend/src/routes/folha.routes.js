@@ -30,6 +30,7 @@ router.get('/compras-prazo/:id', asyncHandler(folha.comprasDoFuncionario));
 
 router.get('/', asyncHandler(folha.listar));
 router.post('/', asyncHandler(folha.criar));
+router.put('/:id', asyncHandler(folha.atualizar));
 router.post('/:id/pagamentos', asyncHandler(folha.registrarPagamento));
 router.delete('/:id', asyncHandler(folha.deletar));
 
