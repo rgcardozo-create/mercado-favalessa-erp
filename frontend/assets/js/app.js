@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.32.0';
+const VERSAO = '1.33.0';
 
 const state = {
   sessao: getSessao(),
@@ -102,6 +102,8 @@ const state = {
   // Acessos e o que está sendo editado na Administração.
   usuarios: null,
   usuarioEditando: null,
+  // Lançamento da folha aberto para correção. O mesmo formulário lança e corrige.
+  folhaEditando: null,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -2075,6 +2077,9 @@ function folhaHTML() {
   }
 
   const { lancamentos, totais } = state.folha;
+  // O lançamento em correção some se ele não estiver mais na lista carregada —
+  // senão o formulário continuaria oferecendo salvar algo que já não existe.
+  const e = lancamentos.find((l) => state.folhaEditando && l.id === state.folhaEditando.id) || null;
   const extras = state.extras || { extras: [], totais: { valor: 0, saldo: 0 } };
 
   return `
@@ -2094,25 +2099,32 @@ function folhaHTML() {
 
     <section class="cartoes-form">
       <form data-action="novo-lancamento-folha" class="form-inline">
-        <h2>Lançar folha do mês</h2>
+        <h2>${e ? `Corrigir folha de ${escapar(e.nome)}` : 'Lançar folha do mês'}</h2>
         <label>Funcionário
           <select name="funcionario_id" required>
             <option value="">— escolha —</option>
             ${state.funcionarios
-              .map((f) => `<option value="${f.id}">${escapar(f.nome)}</option>`)
+              .map(
+                (f) =>
+                  `<option value="${f.id}" ${e && String(e.funcionario_id) === String(f.id) ? 'selected' : ''}>${escapar(f.nome)}</option>`
+              )
               .join('')}
           </select>
         </label>
-        <label>Referência <input type="date" name="data_ref" required value="${todayISO()}" /></label>
-        <label>Salário <input type="number" step="0.01" name="salario" required /></label>
-        <label>Bonificação <input type="number" step="0.01" name="bonificacao" /></label>
-        <label>Compras <input type="number" step="0.01" name="compras" /></label>
-        <label>Adiantamento <input type="number" step="0.01" name="adiantamento" /></label>
-        <label>Descontos <input type="number" step="0.01" name="descontos" /></label>
-        <button type="submit">Lançar</button>
+        <label>Referência <input type="date" name="data_ref" required value="${e ? (e.data_ref || '').slice(0, 10) : todayISO()}" /></label>
+        <label>Salário <input type="number" step="0.01" name="salario" required value="${e ? e.salario : ''}" /></label>
+        <label>Bonificação <input type="number" step="0.01" name="bonificacao" value="${e ? e.bonificacao : ''}" /></label>
+        <label>Compras <input type="number" step="0.01" name="compras" value="${e ? e.compras : ''}" /></label>
+        <label>Adiantamento <input type="number" step="0.01" name="adiantamento" value="${e ? e.adiantamento : ''}" /></label>
+        <label>Descontos <input type="number" step="0.01" name="descontos" value="${e ? e.descontos : ''}" /></label>
+        <button type="submit">${e ? 'Salvar correção' : 'Lançar'}</button>
+        ${e ? '<button type="button" id="btn-cancelar-folha" class="secundario">Cancelar</button>' : ''}
         <p class="vazio campo-largo" id="aviso-adiantamento">
-          Ao escolher o funcionário, o adiantamento vem preenchido com os vales em aberto dele —
-          e lançar a folha dá baixa nesses vales.
+          ${
+            e
+              ? 'Corrigir refaz as contas por fora: os vales que este lançamento tinha baixado e o fiado que ele tinha quitado voltam atrás e são refeitos com os valores novos.'
+              : 'Ao escolher o funcionário, o adiantamento vem preenchido com os vales em aberto dele — e lançar a folha dá baixa nesses vales.'
+          }
         </p>
       </form>
 
@@ -2163,7 +2175,7 @@ function folhaHTML() {
         <button id="btn-trancar-folha">Trancar folha</button>
       </div>
       <table class="tabela-contas">
-        <thead><tr><th>Funcionário</th><th>Ref.</th><th>Salário</th><th>Bonif.</th><th>Compras</th><th>Adiant.</th><th>Líquido</th><th>Pago</th><th>Saldo</th><th>Status</th></tr></thead>
+        <thead><tr><th>Funcionário</th><th>Ref.</th><th>Salário</th><th>Bonif.</th><th>Compras</th><th>Adiant.</th><th>Líquido</th><th>Pago</th><th>Saldo</th><th>Status</th><th>Ações</th></tr></thead>
         <tbody>
           ${
             lancamentos.length
@@ -2180,10 +2192,14 @@ function folhaHTML() {
                 <td>${brl(l.total_pago)}</td>
                 <td>${brl(l.saldo)}</td>
                 <td>${l.quitado ? '<span class="badge quitado">Quitada</span>' : '<span class="badge vencida">Pendente</span>'}</td>
+                <td class="acoes"><div class="acoes-linha">
+                  <button data-action="editar-folha" data-id="${l.id}" class="secundario">Editar</button>
+                  <button data-action="excluir-folha" data-id="${l.id}" class="perigo">Excluir</button>
+                </div></td>
               </tr>`
                   )
                   .join('')
-              : `<tr><td colspan="10">Nenhum lançamento ${
+              : `<tr><td colspan="11">Nenhum lançamento ${
                   state.folhaMes === 'atual' ? 'neste mês' : state.folhaMes === 'anterior' ? 'no mês passado' : ''
                 }.</td></tr>`
           }
@@ -3624,6 +3640,28 @@ function bind() {
     );
   }
 
+  root.querySelectorAll('[data-action="editar-folha"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.id);
+      state.folhaEditando = ((state.folha && state.folha.lancamentos) || []).find((l) => l.id === id) || null;
+      render();
+      const form = document.querySelector('[data-action="novo-lancamento-folha"]');
+      if (form) form.scrollIntoView({ block: 'center' });
+    });
+  });
+
+  root.querySelectorAll('[data-action="excluir-folha"]').forEach((btn) => {
+    btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
+  });
+
+  const btnCancelarFolha = root.querySelector('#btn-cancelar-folha');
+  if (btnCancelarFolha) {
+    btnCancelarFolha.addEventListener('click', () => {
+      state.folhaEditando = null;
+      render();
+    });
+  }
+
   const formExtra = root.querySelector('[data-action="novo-extra"]');
   if (formExtra) formExtra.addEventListener('submit', onNovoExtra);
 
@@ -4051,14 +4089,17 @@ async function onEscolherFuncionarioFolha(id, form) {
       : 'Ao escolher o funcionário, adiantamento e compras vêm preenchidos com o que ele tem em aberto.';
 }
 
+// O mesmo formulário lança e corrige: os campos são os mesmos, e ter dois
+// formulários iguais só criaria a chance de um ganhar campo que o outro não tem.
 async function onNovoLancamentoFolha(ev) {
   ev.preventDefault();
   const fd = new FormData(ev.target);
   const id = fd.get('funcionario_id');
   const funcionario = state.funcionarios.find((f) => String(f.id) === String(id));
+  const editando = state.folhaEditando;
   try {
-    await apiFetch('/folha', {
-      method: 'POST',
+    await apiFetch(editando ? `/folha/${editando.id}` : '/folha', {
+      method: editando ? 'PUT' : 'POST',
       body: JSON.stringify({
         funcionario_id: id,
         nome: funcionario ? funcionario.nome : '',
@@ -4070,6 +4111,27 @@ async function onNovoLancamentoFolha(ev) {
         descontos: fd.get('descontos') || 0,
       }),
     });
+    state.folhaEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+// O aviso diz o que a exclusão arrasta junto, porque isso não é óbvio olhando a
+// linha: quem apaga a folha do mês desfaz também a baixa dos vales e a quitação
+// do fiado que aquele lançamento tinha feito.
+async function onExcluirFolha(id) {
+  const l = ((state.folha && state.folha.lancamentos) || []).find((x) => x.id === id);
+  const desfaz = l && (Number(l.adiantamento) > 0 || Number(l.compras) > 0)
+    ? '\n\nOs vales e as compras descontados nele voltam a ficar em aberto.'
+    : '';
+  if (!confirm(`Excluir a folha de ${l ? l.nome : 'este funcionário'}?${desfaz}`)) return;
+  try {
+    await apiFetch(`/folha/${id}`, { method: 'DELETE' });
+    if (state.folhaEditando && state.folhaEditando.id === id) state.folhaEditando = null;
     state.erro = null;
     carregarDados();
   } catch (err) {

@@ -8,6 +8,10 @@ const { assinarTokenFolha } = require('../middleware/folha');
 const SELECT_FOLHA = `
   SELECT
     f.*,
+    -- Depois de f.* de propósito: sobrescreve a data crua. DATE virando Date do
+    -- JavaScript volta como instante UTC e escorrega um dia dependendo do fuso —
+    -- o mesmo motivo pelo qual as contas já saem daqui como texto.
+    to_char(f.data_ref, 'YYYY-MM-DD') AS data_ref,
     f.salario + f.bonificacao - f.compras - f.adiantamento - f.outras - f.descontos AS liquido,
     COALESCE(p.total_pago, 0) AS total_pago,
     (f.salario + f.bonificacao - f.compras - f.adiantamento - f.outras - f.descontos)
@@ -127,29 +131,95 @@ async function listar(req, res) {
   });
 }
 
+// Lançar folha mexe em duas coisas que vivem fora dela: dá baixa nos vales em
+// aberto do funcionário e quita, no caderno de fiado, o que foi descontado em
+// "compras". Os dois registros nascem marcados com o número da folha — e é por
+// essa marca que a edição e a exclusão os encontram para desfazer.
+//
+// Sem isso, corrigir um adiantamento digitado errado deixaria o vale baixado
+// pelo valor antigo, e excluir a folha deixaria o vale quitado sem folha
+// nenhuma para justificar. O dinheiro sumiria da conta sem sumir da vida.
+const marcaDaFolha = (id) => `Descontado na folha #${id}`;
+
+async function desfazerEfeitos(cliente, folhaId) {
+  const marca = marcaDaFolha(folhaId);
+  await cliente.query('DELETE FROM extras_baixas WHERE observacoes = $1', [marca]);
+  await cliente.query("DELETE FROM mov_prazo WHERE tipo = 'pagamento' AND observacoes = $1", [marca]);
+}
+
+async function aplicarEfeitos(cliente, { folhaId, funcionarioId, adiantamento, compras, dataRef, usuarioId }) {
+  const quando = dataRef || new Date().toISOString().slice(0, 10);
+  const marca = marcaDaFolha(folhaId);
+  let extrasBaixados = 0;
+  let fiadoLiquidado = 0;
+
+  // O adiantamento descontado aqui quita o vale lá — senão o mesmo dinheiro
+  // ficaria cobrado duas vezes: uma no saldo do extra, outra na folha.
+  if (funcionarioId && adiantamento > 0) {
+    const { rows: abertos } = await cliente.query(
+      `SELECT e.id, e.valor - COALESCE(b.total, 0) AS saldo
+         FROM extras e
+         LEFT JOIN (SELECT extra_id, SUM(valor) AS total FROM extras_baixas GROUP BY extra_id) b
+           ON b.extra_id = e.id
+        WHERE e.funcionario_id = $1
+          AND e.valor - COALESCE(b.total, 0) > 0
+          -- Serviço extra já foi pago e nasce quitado; se um dia sobrar saldo
+          -- nele por qualquer motivo, ainda assim não é vale a descontar.
+          AND e.tipo IS DISTINCT FROM 'servico'
+        ORDER BY e.data, e.id`,
+      [funcionarioId]
+    );
+
+    let restante = adiantamento;
+    for (const extra of abertos) {
+      if (restante <= 0) break;
+      const baixa = Math.min(restante, Number(extra.saldo));
+      await cliente.query(
+        `INSERT INTO extras_baixas (extra_id, valor, data, observacoes)
+         VALUES ($1, $2, $3, $4)`,
+        [extra.id, baixa, quando, marca]
+      );
+      restante -= baixa;
+      extrasBaixados += 1;
+    }
+  }
+
+  // A compra descontada aqui é paga aqui: sem isso a dívida continuaria de pé
+  // no caderno depois de já ter saído do salário.
+  if (funcionarioId && compras > 0) {
+    const { rows: vinculo } = await cliente.query(SALDO_FIADO_DO_FUNCIONARIO, [funcionarioId]);
+    if (vinculo[0]) {
+      await cliente.query(
+        `INSERT INTO mov_prazo (cliente_id, tipo, valor, data, observacoes, criado_por)
+         VALUES ($1, 'pagamento', $2, $3, $4, $5)`,
+        [vinculo[0].cliente_id, compras, quando, marca, usuarioId]
+      );
+      fiadoLiquidado = compras;
+    }
+  }
+
+  return { extrasBaixados, fiadoLiquidado };
+}
+
+const CAMPOS_VALOR = ['salario', 'bonificacao', 'compras', 'adiantamento', 'outras', 'descontos'];
+
 async function criar(req, res) {
   const { funcionario_id, nome, tipo, data_ref } = req.body;
   if (!nome) {
     return res.status(400).json({ error: 'nome é obrigatório.' });
   }
 
-  const numeros = ['salario', 'bonificacao', 'compras', 'adiantamento', 'outras', 'descontos'].map(
-    (c) => Number(req.body[c] || 0)
-  );
+  const numeros = CAMPOS_VALOR.map((c) => Number(req.body[c] || 0));
   if (numeros.some((n) => !Number.isFinite(n))) {
     return res.status(400).json({ error: 'Todos os valores precisam ser numéricos.' });
   }
 
-  const adiantamento = Number(req.body.adiantamento || 0);
-  const abaterExtras = req.body.abater_extras !== false && funcionario_id && adiantamento > 0;
-
-  const compras = Number(req.body.compras || 0);
-  const liquidarFiado = req.body.liquidar_prazo !== false && funcionario_id && compras > 0;
+  const adiantamento = req.body.abater_extras === false ? 0 : Number(req.body.adiantamento || 0);
+  const compras = req.body.liquidar_prazo === false ? 0 : Number(req.body.compras || 0);
 
   const cliente = await pool.connect();
   let criado;
-  let extrasBaixados = 0;
-  let fiadoLiquidado = 0;
+  let efeitos;
   try {
     await cliente.query('BEGIN');
 
@@ -169,56 +239,14 @@ async function criar(req, res) {
     );
     criado = rows[0];
 
-    // O adiantamento descontado aqui quita o vale lá — senão o mesmo dinheiro
-    // ficaria cobrado duas vezes: uma no saldo do extra, outra na folha.
-    if (abaterExtras) {
-      const { rows: abertos } = await cliente.query(
-        `SELECT e.id, e.valor - COALESCE(b.total, 0) AS saldo
-           FROM extras e
-           LEFT JOIN (SELECT extra_id, SUM(valor) AS total FROM extras_baixas GROUP BY extra_id) b
-             ON b.extra_id = e.id
-          WHERE e.funcionario_id = $1
-            AND e.valor - COALESCE(b.total, 0) > 0
-            -- Serviço extra já foi pago e nasce quitado; se um dia sobrar saldo
-            -- nele por qualquer motivo, ainda assim não é vale a descontar.
-            AND e.tipo IS DISTINCT FROM 'servico'
-          ORDER BY e.data, e.id`,
-        [funcionario_id]
-      );
-
-      let restante = adiantamento;
-      for (const extra of abertos) {
-        if (restante <= 0) break;
-        const baixa = Math.min(restante, Number(extra.saldo));
-        await cliente.query(
-          `INSERT INTO extras_baixas (extra_id, valor, data, observacoes)
-           VALUES ($1, $2, $3, $4)`,
-          [extra.id, baixa, data_ref || new Date().toISOString().slice(0, 10), `Descontado na folha #${criado.id}`]
-        );
-        restante -= baixa;
-        extrasBaixados += 1;
-      }
-    }
-
-    // A compra descontada aqui é paga aqui: sem isso a dívida continuaria de pé
-    // no caderno depois de já ter saído do salário.
-    if (liquidarFiado) {
-      const { rows: vinculo } = await cliente.query(SALDO_FIADO_DO_FUNCIONARIO, [funcionario_id]);
-      if (vinculo[0]) {
-        await cliente.query(
-          `INSERT INTO mov_prazo (cliente_id, tipo, valor, data, observacoes, criado_por)
-           VALUES ($1, 'pagamento', $2, $3, $4, $5)`,
-          [
-            vinculo[0].cliente_id,
-            compras,
-            data_ref || new Date().toISOString().slice(0, 10),
-            `Descontado na folha #${criado.id}`,
-            req.user.id,
-          ]
-        );
-        fiadoLiquidado = compras;
-      }
-    }
+    efeitos = await aplicarEfeitos(cliente, {
+      folhaId: criado.id,
+      funcionarioId: funcionario_id,
+      adiantamento,
+      compras,
+      dataRef: data_ref,
+      usuarioId: req.user.id,
+    });
 
     await cliente.query('COMMIT');
   } catch (err) {
@@ -236,7 +264,90 @@ async function criar(req, res) {
     dados: criado,
   });
 
-  return res.status(201).json({ ...criado, extras_baixados: extrasBaixados, fiado_liquidado: fiadoLiquidado });
+  return res
+    .status(201)
+    .json({ ...criado, extras_baixados: efeitos.extrasBaixados, fiado_liquidado: efeitos.fiadoLiquidado });
+}
+
+// Corrigir um lançamento é refazê-lo por inteiro: os vales que ele tinha baixado
+// e o fiado que ele tinha quitado são desfeitos e refeitos com os valores novos.
+// Meio-termo aqui produziria vale baixado por um valor que não está mais em
+// lugar nenhum.
+async function atualizar(req, res) {
+  const id = Number(req.params.id);
+  const { rows: atuais } = await pool.query('SELECT * FROM folha WHERE id = $1', [id]);
+  const atual = atuais[0];
+  if (!atual) {
+    return res.status(404).json({ error: 'Lançamento de folha não encontrado.' });
+  }
+
+  const nome = req.body.nome ?? atual.nome;
+  if (!nome) {
+    return res.status(400).json({ error: 'nome é obrigatório.' });
+  }
+
+  const numeros = CAMPOS_VALOR.map((c) => Number(req.body[c] ?? atual[c]));
+  if (numeros.some((n) => !Number.isFinite(n))) {
+    return res.status(400).json({ error: 'Todos os valores precisam ser numéricos.' });
+  }
+
+  const funcionarioId =
+    req.body.funcionario_id === undefined ? atual.funcionario_id : req.body.funcionario_id || null;
+  const dataRef = req.body.data_ref === undefined ? atual.data_ref : req.body.data_ref || null;
+  const tipo = req.body.tipo === undefined ? atual.tipo : req.body.tipo || null;
+  const observacoes =
+    req.body.observacoes === undefined ? atual.observacoes : req.body.observacoes || null;
+
+  const [, , compras, adiantamento] = numeros;
+
+  const cliente = await pool.connect();
+  let salvo;
+  let efeitos;
+  try {
+    await cliente.query('BEGIN');
+
+    const { rows } = await cliente.query(
+      `UPDATE folha
+          SET funcionario_id = $2, nome = $3, tipo = $4, data_ref = $5,
+              salario = $6, bonificacao = $7, compras = $8, adiantamento = $9,
+              outras = $10, descontos = $11, observacoes = $12, atualizado_em = now()
+        WHERE id = $1
+        RETURNING *`,
+      [id, funcionarioId, nome, tipo, dataRef, ...numeros, observacoes]
+    );
+    salvo = rows[0];
+
+    await desfazerEfeitos(cliente, id);
+    efeitos = await aplicarEfeitos(cliente, {
+      folhaId: id,
+      funcionarioId,
+      adiantamento: req.body.abater_extras === false ? 0 : adiantamento,
+      compras: req.body.liquidar_prazo === false ? 0 : compras,
+      dataRef,
+      usuarioId: req.user.id,
+    });
+
+    await cliente.query('COMMIT');
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'update',
+    entidade: 'folha',
+    entidadeId: id,
+    dados: { antes: atual, depois: salvo },
+  });
+
+  return res.json({
+    ...salvo,
+    extras_baixados: efeitos.extrasBaixados,
+    fiado_liquidado: efeitos.fiadoLiquidado,
+  });
 }
 
 async function registrarPagamento(req, res) {
@@ -269,11 +380,28 @@ async function registrarPagamento(req, res) {
   return res.status(201).json(rows[0]);
 }
 
+// Excluir também desfaz o que o lançamento tinha feito por fora. Sem isso o vale
+// continuaria baixado e o fiado continuaria quitado por uma folha que não existe
+// mais — e o funcionário sairia devendo menos do que deve.
 async function deletar(req, res) {
-  const { id } = req.params;
-  const { rows } = await pool.query('DELETE FROM folha WHERE id = $1 RETURNING id', [id]);
+  const id = Number(req.params.id);
 
-  if (!rows[0]) {
+  const cliente = await pool.connect();
+  let apagado;
+  try {
+    await cliente.query('BEGIN');
+    await desfazerEfeitos(cliente, id);
+    const { rows } = await cliente.query('DELETE FROM folha WHERE id = $1 RETURNING id', [id]);
+    apagado = rows[0];
+    await cliente.query(apagado ? 'COMMIT' : 'ROLLBACK');
+  } catch (err) {
+    await cliente.query('ROLLBACK');
+    throw err;
+  } finally {
+    cliente.release();
+  }
+
+  if (!apagado) {
     return res.status(404).json({ error: 'Lançamento de folha não encontrado.' });
   }
 
@@ -281,7 +409,7 @@ async function deletar(req, res) {
     usuarioId: req.user.id,
     acao: 'delete',
     entidade: 'folha',
-    entidadeId: Number(id),
+    entidadeId: id,
   });
 
   return res.status(204).send();
@@ -293,6 +421,7 @@ module.exports = {
   comprasDoFuncionario,
   listar,
   criar,
+  atualizar,
   registrarPagamento,
   deletar,
   SELECT_FOLHA,
