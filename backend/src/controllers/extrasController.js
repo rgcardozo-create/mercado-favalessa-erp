@@ -25,25 +25,43 @@ const SELECT_EXTRAS = `
   ) b ON b.extra_id = e.id
 `;
 
+// A lista cresce para sempre e quem já foi descontado não é mais assunto: o
+// dinheiro voltou. O padrão passa a ser só o que está em aberto — que é
+// exatamente o que vai ser descontado na folha seguinte. Nada é apagado; o
+// seletor "Todos" traz o histórico de volta.
+const SITUACOES = ['aberto', 'quitado', 'todos'];
+
 async function listar(req, res) {
+  const situacao = SITUACOES.includes(req.query.situacao) ? req.query.situacao : 'aberto';
+
   const { rows } = await pool.query(`${SELECT_EXTRAS} ORDER BY e.data DESC`);
 
-  const extras = rows.map((r) => ({
+  const todos = rows.map((r) => ({
     ...r,
     total_baixado: Number(r.total_baixado),
     saldo: Number(r.saldo),
   }));
 
+  // Serviço extra nasce quitado e some do padrão junto com os vales descontados:
+  // ele já foi pago, já é despesa e não volta para folha nenhuma.
+  const emAberto = (e) => e.saldo > 0;
+  const extras =
+    situacao === 'todos' ? todos : todos.filter((e) => (situacao === 'aberto' ? emAberto(e) : !emAberto(e)));
+
   const somar = (lista, campo) => lista.reduce((a, e) => a + Number(e[campo]), 0);
-  const adiantamentos = extras.filter((e) => e.tipo !== TIPO_SERVICO);
-  const servicos = extras.filter((e) => e.tipo === TIPO_SERVICO);
+  // Os totais somam SEMPRE tudo, não só o que a lista está mostrando: filtro é
+  // para enxergar melhor, não para o número mudar de valor conforme o que se olha.
+  const adiantamentos = todos.filter((e) => e.tipo !== TIPO_SERVICO);
+  const servicos = todos.filter((e) => e.tipo === TIPO_SERVICO);
 
   return res.json({
     extras,
+    situacao,
+    ocultos: todos.length - extras.length,
     totais: {
-      valor: somar(extras, 'valor'),
-      baixado: somar(extras, 'total_baixado'),
-      saldo: somar(extras, 'saldo'),
+      valor: somar(todos, 'valor'),
+      baixado: somar(todos, 'total_baixado'),
+      saldo: somar(todos, 'saldo'),
       // Separados porque respondem a perguntas diferentes: o adiantamento em
       // aberto é dinheiro a receber de volta; o serviço extra é despesa fechada.
       adiantamentos: somar(adiantamentos, 'valor'),
@@ -149,9 +167,18 @@ async function registrarBaixa(req, res) {
     return res.status(400).json({ error: 'valor (maior que zero) e data são obrigatórios.' });
   }
 
-  const { rows: existe } = await pool.query('SELECT id FROM extras WHERE id = $1', [id]);
+  const { rows: existe } = await pool.query(`${SELECT_EXTRAS} WHERE e.id = $1`, [id]);
   if (!existe[0]) {
     return res.status(404).json({ error: 'Extra não encontrado.' });
+  }
+
+  // Baixar mais do que se deve inventa dinheiro: o saldo ficaria negativo e o
+  // total de adiantamentos em aberto passaria a mentir para menos.
+  const saldo = Number(existe[0].saldo);
+  if (Number(valor) > saldo) {
+    return res.status(400).json({
+      error: `Este vale tem R$ ${saldo.toFixed(2)} em aberto — não dá para baixar R$ ${Number(valor).toFixed(2)}.`,
+    });
   }
 
   const { rows } = await pool.query(
