@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.33.0';
+const VERSAO = '1.34.0';
 
 const state = {
   sessao: getSessao(),
@@ -104,6 +104,9 @@ const state = {
   usuarioEditando: null,
   // Lançamento da folha aberto para correção. O mesmo formulário lança e corrige.
   folhaEditando: null,
+  // A lista de vales abre no que ainda está em aberto: quem já foi descontado
+  // não é mais assunto, e é isso que a mantém do tamanho do mês.
+  filtroExtras: 'aberto',
   carregando: false,
   erro: null,
   loginErro: null,
@@ -254,7 +257,7 @@ async function carregarDados() {
         const p = periodoDaFolha();
         const [folha, extras, funcionarios] = await Promise.all([
           apiFetch(`/folha${p ? `?de=${p.de}&ate=${p.ate}` : ''}`),
-          apiFetch('/folha/extras'),
+          apiFetch(`/folha/extras?situacao=${state.filtroExtras}`),
           apiFetch('/cadastros/funcionarios'),
         ]);
         state.folha = folha;
@@ -2210,6 +2213,11 @@ function folhaHTML() {
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
         <h2>Adiantamentos e serviços extras</h2>
+        <select id="filtro-extras">
+          <option value="aberto" ${state.filtroExtras === 'aberto' ? 'selected' : ''}>Em aberto</option>
+          <option value="quitado" ${state.filtroExtras === 'quitado' ? 'selected' : ''}>Já descontados</option>
+          <option value="todos" ${state.filtroExtras === 'todos' ? 'selected' : ''}>Todos</option>
+        </select>
         <span class="grupo-total">
           ${brl(extras.totais.adiantamentos)} <small>em adiantamentos, ${brl(extras.totais.adiantamentos_em_aberto)} em aberto</small>
           ${extras.totais.servicos ? `&middot; ${brl(extras.totais.servicos)} <small>em serviços extras</small>` : ''}
@@ -2218,11 +2226,16 @@ function folhaHTML() {
       <p class="vazio">
         <strong>Adiantamento</strong> não é despesa da empresa: volta pelo desconto na folha.
         <strong>Serviço extra</strong> é: já foi pago e não desconta de salário.
+        ${
+          extras.ocultos
+            ? ` Os totais aí em cima somam tudo — <strong>${extras.ocultos}</strong> lançamento(s) estão fora desta lista pelo filtro.`
+            : ''
+        }
       </p>
       ${
         extras.extras.length
           ? `<table class="tabela-contas">
-              <thead><tr><th>Funcionário</th><th>Tipo</th><th>Data</th><th>Valor</th><th>Baixado</th><th>Saldo</th></tr></thead>
+              <thead><tr><th>Funcionário</th><th>Tipo</th><th>Data</th><th>Valor</th><th>Baixado</th><th>Saldo</th><th>Ações</th></tr></thead>
               <tbody>
                 ${extras.extras
                   .map(
@@ -2235,12 +2248,24 @@ function folhaHTML() {
                       }</td>
                       <td>${dateBR(e.data)}</td>
                       <td>${brl(e.valor)}</td><td>${brl(e.total_baixado)}</td><td>${brl(e.saldo)}</td>
+                      <td class="acoes"><div class="acoes-linha">
+                        ${
+                          e.saldo > 0
+                            ? `<button data-action="baixar-extra" data-id="${e.id}" class="secundario">Dar baixa</button>`
+                            : ''
+                        }
+                        <button data-action="excluir-extra" data-id="${e.id}" class="perigo">Excluir</button>
+                      </div></td>
                     </tr>`
                   )
                   .join('')}
               </tbody>
             </table>`
-          : ''
+          : `<p class="vazio">${
+              state.filtroExtras === 'aberto'
+                ? 'Nenhum adiantamento em aberto. Quando alguém pedir um vale, ele aparece aqui até ser descontado numa folha.'
+                : 'Nada neste filtro.'
+            }</p>`
       }
     </section>
   `;
@@ -3654,6 +3679,22 @@ function bind() {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
 
+  const filtroExtras = root.querySelector('#filtro-extras');
+  if (filtroExtras) {
+    filtroExtras.addEventListener('change', (ev) => {
+      state.filtroExtras = ev.target.value;
+      carregarDados();
+    });
+  }
+
+  root.querySelectorAll('[data-action="baixar-extra"]').forEach((btn) => {
+    btn.addEventListener('click', () => onBaixarExtra(Number(btn.dataset.id)));
+  });
+
+  root.querySelectorAll('[data-action="excluir-extra"]').forEach((btn) => {
+    btn.addEventListener('click', () => onExcluirExtra(Number(btn.dataset.id)));
+  });
+
   const btnCancelarFolha = root.querySelector('#btn-cancelar-folha');
   if (btnCancelarFolha) {
     btnCancelarFolha.addEventListener('click', () => {
@@ -4112,6 +4153,50 @@ async function onNovoLancamentoFolha(ev) {
       }),
     });
     state.folhaEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+// Vale que foi descontado fora do sistema — na folha antiga, ou em dinheiro na
+// mão — não tem como o sistema adivinhar. Aqui a pessoa diz que já recebeu de
+// volta, e o vale sai da lista de aberto sem ninguém apagar o registro dele.
+async function onBaixarExtra(id) {
+  const e = ((state.extras && state.extras.extras) || []).find((x) => x.id === id);
+  if (!e) return;
+  const digitado = prompt(
+    `Quanto foi descontado do vale de ${e.nome}?\n\nEm aberto: ${brl(e.saldo)}. ` +
+      'Pode ser parcial — o que sobrar continua em aberto.',
+    Number(e.saldo).toFixed(2)
+  );
+  if (digitado === null) return;
+  const valor = Number(String(digitado).replace(',', '.'));
+  if (!Number.isFinite(valor) || valor <= 0) {
+    state.erro = 'Valor inválido para a baixa do vale.';
+    render();
+    return;
+  }
+  try {
+    await apiFetch(`/folha/extras/${id}/baixas`, {
+      method: 'POST',
+      body: JSON.stringify({ valor, data: todayISO(), observacoes: 'Baixa manual' }),
+    });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onExcluirExtra(id) {
+  const e = ((state.extras && state.extras.extras) || []).find((x) => x.id === id);
+  if (!confirm(`Excluir este lançamento de ${e ? e.nome : 'funcionário'}? As baixas dele vão junto.`)) return;
+  try {
+    await apiFetch(`/folha/extras/${id}`, { method: 'DELETE' });
     state.erro = null;
     carregarDados();
   } catch (err) {
