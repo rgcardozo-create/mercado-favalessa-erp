@@ -126,7 +126,26 @@ async function listar(req, res) {
     liquido: Number(r.liquido),
     total_pago: Number(r.total_pago),
     saldo: Number(r.saldo),
+    pagamentos: [],
   }));
+
+  // Os pagamentos vêm numa consulta à parte, não embutidos na de cima. Aninhar
+  // mais uma coluna naquele SELECT foi exatamente o que produziu o "data_ref is
+  // ambiguous" — e a folha do mês tem uma dúzia de linhas, não um milhão.
+  if (lancamentos.length) {
+    const { rows: pagos } = await pool.query(
+      `SELECT id, folha_id, valor, to_char(data_pagamento, 'YYYY-MM-DD') AS data_pagamento,
+              forma_pagamento, observacoes
+         FROM folha_pagamentos
+        WHERE folha_id = ANY($1::int[])
+        ORDER BY data_pagamento, id`,
+      [lancamentos.map((l) => l.id)]
+    );
+    const porFolha = new Map(lancamentos.map((l) => [l.id, l.pagamentos]));
+    for (const p of pagos) {
+      porFolha.get(p.folha_id).push({ ...p, valor: Number(p.valor) });
+    }
+  }
 
   return res.json({
     lancamentos,
@@ -365,9 +384,18 @@ async function registrarPagamento(req, res) {
     return res.status(400).json({ error: 'valor (maior que zero) e data_pagamento são obrigatórios.' });
   }
 
-  const { rows: existe } = await pool.query('SELECT id FROM folha WHERE id = $1', [id]);
+  const { rows: existe } = await pool.query(`${SELECT_FOLHA} WHERE f.id = $1`, [id]);
   if (!existe[0]) {
     return res.status(404).json({ error: 'Lançamento de folha não encontrado.' });
+  }
+
+  // Pagar mais do que se deve não é generosidade, é erro de digitação: o saldo
+  // vira negativo e o total em aberto da folha passa a mentir para menos.
+  const saldo = Number(existe[0].saldo);
+  if (Number(valor) > saldo) {
+    return res.status(400).json({
+      error: `Faltam R$ ${saldo.toFixed(2)} nesta folha — não dá para pagar R$ ${Number(valor).toFixed(2)}.`,
+    });
   }
 
   const { rows } = await pool.query(
@@ -385,6 +413,31 @@ async function registrarPagamento(req, res) {
   });
 
   return res.status(201).json(rows[0]);
+}
+
+// Pagamento lançado errado precisa de volta. Sem isto, quem digitasse 2.000 em
+// vez de 200 ficaria com a folha quitada e sem jeito de desfazer — foi essa
+// exata parede que motivou o Editar do lançamento.
+async function deletarPagamento(req, res) {
+  const { id, pagamentoId } = req.params;
+
+  const { rows } = await pool.query(
+    'DELETE FROM folha_pagamentos WHERE id = $1 AND folha_id = $2 RETURNING *',
+    [pagamentoId, id]
+  );
+  if (!rows[0]) {
+    return res.status(404).json({ error: 'Pagamento não encontrado nesta folha.' });
+  }
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'pagamento-estornado',
+    entidade: 'folha',
+    entidadeId: Number(id),
+    dados: rows[0],
+  });
+
+  return res.status(204).send();
 }
 
 // Excluir também desfaz o que o lançamento tinha feito por fora. Sem isso o vale
@@ -430,6 +483,7 @@ module.exports = {
   criar,
   atualizar,
   registrarPagamento,
+  deletarPagamento,
   deletar,
   SELECT_FOLHA,
 };

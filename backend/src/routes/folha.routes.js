@@ -32,6 +32,7 @@ router.get('/', asyncHandler(folha.listar));
 router.post('/', asyncHandler(folha.criar));
 router.put('/:id', asyncHandler(folha.atualizar));
 router.post('/:id/pagamentos', asyncHandler(folha.registrarPagamento));
+router.delete('/:id/pagamentos/:pagamentoId', asyncHandler(folha.deletarPagamento));
 router.delete('/:id', asyncHandler(folha.deletar));
 
 module.exports = router;
