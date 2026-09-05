@@ -7,11 +7,15 @@ const { assinarTokenFolha } = require('../middleware/folha');
 // Mesma conta do sistema atual; nunca é armazenado, sempre derivado.
 const SELECT_FOLHA = `
   SELECT
-    f.*,
-    -- Depois de f.* de propósito: sobrescreve a data crua. DATE virando Date do
-    -- JavaScript volta como instante UTC e escorrega um dia dependendo do fuso —
-    -- o mesmo motivo pelo qual as contas já saem daqui como texto.
+    -- Sem f.* de propósito. A data precisa sair como texto — DATE virando Date do
+    -- JavaScript volta como instante UTC e escorrega um dia dependendo do fuso,
+    -- o mesmo motivo pelo qual as contas já saem daqui como texto. Com o coringa,
+    -- o to_char viraria uma SEGUNDA coluna chamada data_ref, e qualquer consulta
+    -- que envolvesse esta aqui quebrava com "column reference is ambiguous".
+    f.id, f.funcionario_id, f.nome, f.tipo,
     to_char(f.data_ref, 'YYYY-MM-DD') AS data_ref,
+    f.salario, f.bonificacao, f.compras, f.adiantamento, f.outras, f.descontos,
+    f.dias_ferias, f.observacoes, f.legado_id, f.criado_por, f.criado_em, f.atualizado_em,
     f.salario + f.bonificacao - f.compras - f.adiantamento - f.outras - f.descontos AS liquido,
     COALESCE(p.total_pago, 0) AS total_pago,
     (f.salario + f.bonificacao - f.compras - f.adiantamento - f.outras - f.descontos)
@@ -61,8 +65,11 @@ async function desbloquear(req, res) {
 // atrás da senha (SPEC.md, seção 3).
 async function pendencias(req, res) {
   const { rows } = await pool.query(
+    // data_ref já vem como texto 'AAAA-MM-DD' — e nesse formato a ordem
+    // alfabética é a ordem do calendário, então min() dá a folha mais antiga e os
+    // sete primeiros caracteres dão o mês.
     `SELECT count(*)::int AS pendentes,
-            to_char(min(data_ref), 'YYYY-MM') AS desde
+            left(min(t.data_ref), 7) AS desde
        FROM (${SELECT_FOLHA}) t
       WHERE t.saldo > 0`
   );
