@@ -187,6 +187,25 @@ input[type="file"] { padding: 6px; font-size: 13px; }
 .barra-mover label { flex-direction: row; align-items: center; gap: 6px; }
 .barra-mover select { font-size: 13px; padding: 5px 8px; }
 
+/* Soma das linhas marcadas da folha. Fica embaixo da tabela, onde o olho para
+   depois de escolher, e o "falta pagar" é o número grande porque é o que a
+   pessoa foi ali buscar. */
+.barra-soma-folha {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  background: #FFF8E1;
+  border: 1px solid var(--amarelo);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-top: 12px;
+  font-size: 13px;
+}
+.barra-soma-folha .soma-destaque { margin-left: auto; font-size: 15px; }
+.barra-soma-folha .soma-destaque strong { color: var(--vermelho); }
+.barra-soma-folha button { margin-left: 8px; }
+
 /* Caixa de "já paguei" e os campos que ela revela dentro do mesmo formulário. */
 .campo-marca { flex-direction: row; align-items: center; gap: 8px; font-size: 13px; color: var(--texto); }
 .campo-marca input { width: 16px; height: 16px; margin: 0; accent-color: var(--azul); }
