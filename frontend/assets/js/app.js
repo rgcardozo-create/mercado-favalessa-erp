@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.35.0';
+const VERSAO = '1.36.0';
 
 const state = {
   sessao: getSessao(),
@@ -109,6 +109,10 @@ const state = {
   filtroExtras: 'aberto',
   // Lançamento da folha com a área de pagamento aberta.
   folhaPagando: null,
+  // Linhas da folha marcadas para somar. Serve para a pergunta "quanto preciso
+  // ter em caixa para pagar ESTES quatro?", que o total geral lá de cima não
+  // responde. Vive fora do render para sobreviver a ele.
+  folhaMarcadas: new Set(),
   carregando: false,
   erro: null,
   loginErro: null,
@@ -267,6 +271,9 @@ async function carregarDados() {
         state.extras = extras;
         state.funcionarios = funcionarios;
         state.formasPagamento = formasFolha;
+        // A marcação vale para a lista que estava na tela; recarregou, some —
+        // senão a soma passaria a falar de linhas que já não existem.
+        state.folhaMarcadas = new Set();
       } else {
         state.folha = null;
         state.extras = null;
@@ -2063,6 +2070,37 @@ function periodoDaFolha() {
   return { de: iso(inicio), ate: iso(fim) };
 }
 
+// A soma de quem está marcado. O total lá de cima responde "quanto é a folha
+// inteira"; esta responde "quanto preciso separar para pagar ESTES aqui" — que é
+// a conta que se faz na véspera, com o dinheiro contado na mão.
+//
+// O número que importa é o que FALTA pagar: quem já recebeu não precisa de
+// dinheiro novo. O líquido vai junto para a soma bater com a coluna da tabela.
+function somaFolha(lancamentos) {
+  const marcados = lancamentos.filter((l) => state.folhaMarcadas.has(l.id));
+  return {
+    quantidade: marcados.length,
+    liquido: marcados.reduce((a, l) => a + Number(l.liquido), 0),
+    pago: marcados.reduce((a, l) => a + Number(l.total_pago), 0),
+    saldo: marcados.reduce((a, l) => a + Number(l.saldo), 0),
+  };
+}
+
+function barraSomaFolhaHTML(lancamentos) {
+  const t = somaFolha(lancamentos);
+  if (!t.quantidade) return '';
+
+  return `
+    <div class="barra-soma-folha">
+      <strong data-soma="quantidade">${t.quantidade} funcionário(s) marcado(s)</strong>
+      <span>Líquido <strong data-soma="liquido">${brl(t.liquido)}</strong></span>
+      <span>Já pago <strong data-soma="pago">${brl(t.pago)}</strong></span>
+      <span class="soma-destaque">Falta pagar <strong data-soma="saldo">${brl(t.saldo)}</strong></span>
+      <button type="button" id="btn-limpar-marcadas-folha" class="secundario">Desmarcar</button>
+    </div>
+  `;
+}
+
 // Área aberta pelo "Pagar": o que já foi pago nesta folha e o formulário do
 // próximo pagamento. O valor vem com o saldo mas é editável — meia folha paga
 // hoje e o resto na semana que vem é o caso comum, não a exceção.
@@ -2073,7 +2111,7 @@ function periodoDaFolha() {
 function blocoPagamentoFolhaHTML(l) {
   const pagos = l.pagamentos || [];
   return `
-    <tr class="linha-baixa"><td colspan="11">
+    <tr class="linha-baixa"><td colspan="12">
       ${
         pagos.length
           ? `<table class="tabela-contas tabela-pagamentos">
@@ -2244,13 +2282,21 @@ function folhaHTML() {
         <button id="btn-trancar-folha">Trancar folha</button>
       </div>
       <table class="tabela-contas">
-        <thead><tr><th>Funcionário</th><th>Ref.</th><th>Salário</th><th>Bonif.</th><th>Compras</th><th>Adiant.</th><th>Líquido</th><th>Pago</th><th>Saldo</th><th>Status</th><th>Ações</th></tr></thead>
+        <thead><tr>
+          <th class="col-marca"><input type="checkbox" class="marcar-todas-folha"
+            ${lancamentos.length && lancamentos.every((l) => state.folhaMarcadas.has(l.id)) ? 'checked' : ''}
+            title="Marcar todos" /></th>
+          <th>Funcionário</th><th>Ref.</th><th>Salário</th><th>Bonif.</th><th>Compras</th><th>Adiant.</th><th>Líquido</th><th>Pago</th><th>Saldo</th><th>Status</th><th>Ações</th>
+        </tr></thead>
         <tbody>
           ${
             lancamentos.length
               ? lancamentos
                   .map(
-                    (l) => `<tr>
+                    (l) => `<tr class="${state.folhaMarcadas.has(l.id) ? 'marcada' : ''}">
+                <td class="col-marca">
+                  <input type="checkbox" data-marca-folha="${l.id}" ${state.folhaMarcadas.has(l.id) ? 'checked' : ''} />
+                </td>
                 <td>${escapar(l.nome)}</td>
                 <td>${l.data_ref ? dateBR(l.data_ref) : '—'}</td>
                 <td>${brl(l.salario)}</td>
@@ -2270,12 +2316,13 @@ function folhaHTML() {
               ${state.folhaPagando === l.id ? blocoPagamentoFolhaHTML(l) : ''}`
                   )
                   .join('')
-              : `<tr><td colspan="11">Nenhum lançamento ${
+              : `<tr><td colspan="12">Nenhum lançamento ${
                   state.folhaMes === 'atual' ? 'neste mês' : state.folhaMes === 'anterior' ? 'no mês passado' : ''
                 }.</td></tr>`
           }
         </tbody>
       </table>
+      ${barraSomaFolhaHTML(lancamentos)}
     </section>
 
     <section class="grupo-painel">
@@ -3747,6 +3794,38 @@ function bind() {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
 
+  root.querySelectorAll('[data-marca-folha]').forEach((caixa) => {
+    caixa.addEventListener('change', () => {
+      const id = Number(caixa.dataset.marcaFolha);
+      if (caixa.checked) state.folhaMarcadas.add(id);
+      else state.folhaMarcadas.delete(id);
+      caixa.closest('tr').classList.toggle('marcada', caixa.checked);
+      atualizarSomaFolha();
+    });
+  });
+
+  const marcarTodasFolha = root.querySelector('.marcar-todas-folha');
+  if (marcarTodasFolha) {
+    marcarTodasFolha.addEventListener('change', () => {
+      for (const caixa of root.querySelectorAll('[data-marca-folha]')) {
+        const id = Number(caixa.dataset.marcaFolha);
+        if (marcarTodasFolha.checked) state.folhaMarcadas.add(id);
+        else state.folhaMarcadas.delete(id);
+        caixa.checked = marcarTodasFolha.checked;
+        caixa.closest('tr').classList.toggle('marcada', marcarTodasFolha.checked);
+      }
+      atualizarSomaFolha();
+    });
+  }
+
+  const btnLimparFolha = root.querySelector('#btn-limpar-marcadas-folha');
+  if (btnLimparFolha) {
+    btnLimparFolha.addEventListener('click', () => {
+      state.folhaMarcadas = new Set();
+      render();
+    });
+  }
+
   root.querySelectorAll('[data-action="pagar-folha"]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const id = Number(btn.dataset.id);
@@ -4786,6 +4865,28 @@ function atualizarMarcacaoContas() {
     return;
   }
   if (barra) barra.querySelector('strong').textContent = `${marcadas} lançamento(s) marcado(s)`;
+}
+
+// Redesenhar a tabela inteira a cada clique perderia a rolagem e faria a caixa
+// piscar. Só quando a barra precisa nascer ou morrer é que vale um render.
+function atualizarSomaFolha() {
+  const lancamentos = (state.folha && state.folha.lancamentos) || [];
+  const t = somaFolha(lancamentos);
+  const barra = root.querySelector('.barra-soma-folha');
+
+  if (!t.quantidade !== !barra) {
+    render();
+    return;
+  }
+  if (!barra) return;
+
+  barra.querySelector('[data-soma="quantidade"]').textContent = `${t.quantidade} funcionário(s) marcado(s)`;
+  barra.querySelector('[data-soma="liquido"]').textContent = brl(t.liquido);
+  barra.querySelector('[data-soma="pago"]').textContent = brl(t.pago);
+  barra.querySelector('[data-soma="saldo"]').textContent = brl(t.saldo);
+
+  const todas = root.querySelector('.marcar-todas-folha');
+  if (todas) todas.checked = lancamentos.length > 0 && t.quantidade === lancamentos.length;
 }
 
 async function onMarcarAtencao(id, atencao) {
