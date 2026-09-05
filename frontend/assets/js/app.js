@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.34.1';
+const VERSAO = '1.35.0';
 
 const state = {
   sessao: getSessao(),
@@ -107,6 +107,8 @@ const state = {
   // A lista de vales abre no que ainda está em aberto: quem já foi descontado
   // não é mais assunto, e é isso que a mantém do tamanho do mês.
   filtroExtras: 'aberto',
+  // Lançamento da folha com a área de pagamento aberta.
+  folhaPagando: null,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -255,14 +257,16 @@ async function carregarDados() {
       // Sem token da folha a API responde 423 — a tela então pede a senha.
       if (folhaLiberada()) {
         const p = periodoDaFolha();
-        const [folha, extras, funcionarios] = await Promise.all([
+        const [folha, extras, funcionarios, formasFolha] = await Promise.all([
           apiFetch(`/folha${p ? `?de=${p.de}&ate=${p.ate}` : ''}`),
           apiFetch(`/folha/extras?situacao=${state.filtroExtras}`),
           apiFetch('/cadastros/funcionarios'),
+          apiFetch('/cadastros/formas-pagamento'),
         ]);
         state.folha = folha;
         state.extras = extras;
         state.funcionarios = funcionarios;
+        state.formasPagamento = formasFolha;
       } else {
         state.folha = null;
         state.extras = null;
@@ -2059,6 +2063,68 @@ function periodoDaFolha() {
   return { de: iso(inicio), ate: iso(fim) };
 }
 
+// Área aberta pelo "Pagar": o que já foi pago nesta folha e o formulário do
+// próximo pagamento. O valor vem com o saldo mas é editável — meia folha paga
+// hoje e o resto na semana que vem é o caso comum, não a exceção.
+//
+// Cada pagamento pode ser estornado. Pagamento sem volta recria exatamente a
+// parede que motivou o Editar do lançamento: digitou 2.000 em vez de 200 e
+// pronto, quitada para sempre.
+function blocoPagamentoFolhaHTML(l) {
+  const pagos = l.pagamentos || [];
+  return `
+    <tr class="linha-baixa"><td colspan="11">
+      ${
+        pagos.length
+          ? `<table class="tabela-contas tabela-pagamentos">
+              <thead><tr><th>Pago em</th><th>Valor</th><th>Forma</th><th>Observação</th><th>Ações</th></tr></thead>
+              <tbody>
+                ${pagos
+                  .map(
+                    (p) => `<tr>
+                      <td>${dateBR(p.data_pagamento)}</td>
+                      <td>${brl(p.valor)}</td>
+                      <td>${escapar(p.forma_pagamento || '—')}</td>
+                      <td>${escapar(p.observacoes || '')}</td>
+                      <td class="acoes"><div class="acoes-linha">
+                        <button data-action="estornar-pagamento-folha" data-id="${l.id}" data-pagamento="${p.id}" class="perigo">Estornar</button>
+                      </div></td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+            </table>`
+          : '<p class="vazio">Nenhum pagamento registrado nesta folha.</p>'
+      }
+      <div class="nova-baixa">
+        <form data-action="form-pagamento-folha" data-id="${l.id}" class="form-inline">
+          <label>Valor pago
+            <input type="number" step="0.01" min="0.01" name="valor" required value="${l.saldo > 0 ? l.saldo : ''}" />
+          </label>
+          <label>Data <input type="date" name="data_pagamento" required value="${todayISO()}" /></label>
+          <label>Forma de pagamento
+            <select name="forma_pagamento" ${state.formasPagamento.length ? '' : 'disabled'}>
+              <option value="">— sem forma —</option>
+              ${state.formasPagamento
+                .map((f) => `<option value="${escapar(f.nome)}">${escapar(f.nome)}</option>`)
+                .join('')}
+            </select>
+          </label>
+          <label class="campo-largo">Observação
+            <input type="text" name="observacoes" placeholder="ex.: metade agora, resto no dia 20" />
+          </label>
+          <button type="submit">Confirmar pagamento</button>
+          <button type="button" data-action="fechar-pagamento-folha" class="secundario">Fechar</button>
+        </form>
+        <p class="vazio">
+          Falta pagar <strong>${brl(l.saldo)}</strong> de ${brl(l.liquido)}.
+          Pagou menos? Ajuste o valor — a folha continua pendente pela diferença.
+        </p>
+      </div>
+    </td></tr>
+  `;
+}
+
 function folhaHTML() {
   const cabecalho = cabecalhoHTML('Folha de pagamento');
 
@@ -2196,10 +2262,12 @@ function folhaHTML() {
                 <td>${brl(l.saldo)}</td>
                 <td>${l.quitado ? '<span class="badge quitado">Quitada</span>' : '<span class="badge vencida">Pendente</span>'}</td>
                 <td class="acoes"><div class="acoes-linha">
+                  ${l.saldo > 0 ? `<button data-action="pagar-folha" data-id="${l.id}">Pagar</button>` : ''}
                   <button data-action="editar-folha" data-id="${l.id}" class="secundario">Editar</button>
                   <button data-action="excluir-folha" data-id="${l.id}" class="perigo">Excluir</button>
                 </div></td>
-              </tr>`
+              </tr>
+              ${state.folhaPagando === l.id ? blocoPagamentoFolhaHTML(l) : ''}`
                   )
                   .join('')
               : `<tr><td colspan="11">Nenhum lançamento ${
@@ -3679,6 +3747,31 @@ function bind() {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
 
+  root.querySelectorAll('[data-action="pagar-folha"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.id);
+      state.folhaPagando = state.folhaPagando === id ? null : id;
+      render();
+    });
+  });
+
+  root.querySelectorAll('[data-action="fechar-pagamento-folha"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.folhaPagando = null;
+      render();
+    });
+  });
+
+  root.querySelectorAll('[data-action="form-pagamento-folha"]').forEach((form) => {
+    form.addEventListener('submit', onPagarFolha);
+  });
+
+  root.querySelectorAll('[data-action="estornar-pagamento-folha"]').forEach((btn) => {
+    btn.addEventListener('click', () =>
+      onEstornarPagamentoFolha(Number(btn.dataset.id), Number(btn.dataset.pagamento))
+    );
+  });
+
   const filtroExtras = root.querySelector('#filtro-extras');
   if (filtroExtras) {
     filtroExtras.addEventListener('change', (ev) => {
@@ -4153,6 +4246,40 @@ async function onNovoLancamentoFolha(ev) {
       }),
     });
     state.folhaEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onPagarFolha(ev) {
+  ev.preventDefault();
+  const id = Number(ev.target.dataset.id);
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch(`/folha/${id}/pagamentos`, {
+      method: 'POST',
+      body: JSON.stringify({
+        valor: fd.get('valor'),
+        data_pagamento: fd.get('data_pagamento'),
+        forma_pagamento: fd.get('forma_pagamento') || null,
+        observacoes: fd.get('observacoes') || null,
+      }),
+    });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onEstornarPagamentoFolha(id, pagamentoId) {
+  if (!confirm('Estornar este pagamento? A folha volta a ficar pendente pelo valor dele.')) return;
+  try {
+    await apiFetch(`/folha/${id}/pagamentos/${pagamentoId}`, { method: 'DELETE' });
     state.erro = null;
     carregarDados();
   } catch (err) {
