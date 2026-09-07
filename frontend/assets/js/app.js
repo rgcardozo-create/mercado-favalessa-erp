@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.37.1';
+const VERSAO = '1.38.0';
 
 const state = {
   sessao: getSessao(),
@@ -1727,6 +1727,32 @@ function sugestaoHTML() {
 // para fechar; fazer um por um é o mesmo clique repetido trinta vezes. Aqui cada
 // dia já vem com o que o extrato sabe e só falta digitar o dinheiro, que é o
 // único valor que nenhum extrato conhece.
+// Um ano de fechamento são trezentas e poucas linhas iguais. A faixa do mês, com
+// o total sugerido, dá onde o olho se segurar na rolagem e serve de conferência
+// grossa: o mês fechou perto do que a gente esperava?
+function linhasComSeparadorDeMes(dias, linha, colunas) {
+  const CAMPOS_SOMA = ['dinheiro', 'cartao', 'pix', 'tickets', 'venda_prazo', 'outras'];
+  const somaDoMes = (mes) =>
+    dias
+      .filter((d) => d.data.slice(0, 7) === mes)
+      .reduce((a, d) => a + CAMPOS_SOMA.reduce((x, c) => x + Number((d.lancado || d.sugestao)[c] || 0), 0), 0);
+
+  let mesAtual = null;
+  return dias
+    .map((d) => {
+      const mes = d.data.slice(0, 7);
+      let faixa = '';
+      if (mes !== mesAtual) {
+        mesAtual = mes;
+        faixa = `<tr class="separador-mes"><td colspan="${colunas}">
+          ${mesExtenso(mes)} <small>${brl(somaDoMes(mes))} somando o que está na tela</small>
+        </td></tr>`;
+      }
+      return faixa + linha(d);
+    })
+    .join('');
+}
+
 function loteHTML() {
   const l = state.lote;
 
@@ -1803,7 +1829,7 @@ function loteHTML() {
           <thead>
             <tr><th>Dia</th>${CAMPOS.map(([, rotulo]) => `<th>${rotulo}</th>`).join('')}</tr>
           </thead>
-          <tbody>${l.dias.map(linha).join('')}</tbody>
+          <tbody>${linhasComSeparadorDeMes(l.dias, linha, CAMPOS.length + 1)}</tbody>
         </table>
       </div>
 
