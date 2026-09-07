@@ -28,13 +28,27 @@ if (process.env.CORS_ORIGIN) {
 }
 
 // Limite apertado por padrão: nenhum lançamento do sistema chega perto de 1 MB.
-// A importação de backup é a exceção (o arquivo passa de 2 MB) e traz o próprio
-// parser, então precisa escapar deste aqui — senão o corpo já seria rejeitado
-// antes de chegar na rota.
+//
+// As rotas de arquivo são a exceção e trazem o próprio parser, mais largo. Elas
+// precisam escapar DESTE aqui, senão o corpo é rejeitado antes de chegar lá — o
+// parser da rota nem roda. Era o que acontecia com os extratos: a rota dizia
+// 25 MB e o envio morria em 1 MB, que dá menos de 800 KB de planilha depois do
+// base64. Rota de arquivo nova precisa entrar nesta lista.
 const jsonPadrao = express.json({ limit: '1mb' });
 
+// Cada roteador declara os próprios caminhos de arquivo; aqui eles só ganham o
+// prefixo. Assim uma rota de arquivo nova já nasce isenta, sem depender de
+// alguém lembrar de mexer neste arquivo.
+const comPrefixo = (prefixo, roteador) =>
+  (roteador.caminhosComArquivo || []).map((c) => `${prefixo}${c}`);
+
+const ROTAS_COM_ARQUIVO = new Set([
+  ...comPrefixo('/api/admin', adminRoutes),
+  ...comPrefixo('/api/conciliacao', conciliacaoRoutes),
+]);
+
 app.use((req, res, next) => {
-  if (req.path === '/api/admin/importar') return next();
+  if (ROTAS_COM_ARQUIVO.has(req.path)) return next();
   return jsonPadrao(req, res, next);
 });
 

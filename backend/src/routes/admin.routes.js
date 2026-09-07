@@ -11,6 +11,10 @@ const router = express.Router();
 // esta rota (e só ela) aceita corpos grandes.
 const corpoGrande = express.json({ limit: process.env.LIMITE_IMPORTACAO || '25mb' });
 
+// Ver a nota em conciliacao.routes.js: o app monta a lista de isenções a partir
+// daqui, para ela não se perder de vista quando uma rota nova aparecer.
+const CAMINHOS_COM_ARQUIVO = ['/importar'];
+
 // Trilha de auditoria e backup completo são de supervisão: Master apenas.
 // `detectarFolhaDestravada` não bloqueia nada aqui — só decide se a folha entra
 // no backup exportado.
@@ -24,5 +28,7 @@ router.delete('/usuarios/:id', asyncHandler(usuarios.deletar));
 router.get('/auditoria', asyncHandler(auditoria));
 router.get('/backup', asyncHandler(exportarBackup));
 router.post('/importar', corpoGrande, asyncHandler(importarBackupEnviado));
+
+router.caminhosComArquivo = CAMINHOS_COM_ARQUIVO;
 
 module.exports = router;
