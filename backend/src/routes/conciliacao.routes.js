@@ -15,6 +15,13 @@ const router = express.Router();
 // Extratos chegam como planilha em base64; o corpo passa do limite global de 1 MB.
 const corpoGrande = express.json({ limit: process.env.LIMITE_IMPORTACAO || '25mb' });
 
+// O app precisa saber quais caminhos daqui trazem o próprio parser, para não
+// rejeitar o corpo no limite apertado antes de a rota ser alcançada. A lista
+// mora ao lado das rotas de propósito: em app.js ela envelheceria calada, e foi
+// exatamente assim que os extratos ficaram presos em 1 MB enquanto a rota dizia
+// 25 MB.
+const CAMINHOS_COM_ARQUIVO = ['/extratos', '/extratos/analisar', '/vendas-caixa', '/vendas-caixa/analisar'];
+
 // Conciliação está na lista de acesso da Gerente, e o login "Loja" tem o mesmo
 // nível dela por padrão (SPEC.md, seção 3) — por isso vale para os 3 perfis.
 router.use(authenticate);
@@ -31,5 +38,7 @@ router.post('/extratos', authorize('master', 'gerente'), corpoGrande, asyncHandl
 // Relatório de vendas por caixa: é ele que traz o dinheiro do dia.
 router.post('/vendas-caixa/analisar', authorize('master', 'gerente'), corpoGrande, asyncHandler(analisarVendasCaixa));
 router.post('/vendas-caixa', authorize('master', 'gerente'), corpoGrande, asyncHandler(importarVendasCaixa));
+
+router.caminhosComArquivo = CAMINHOS_COM_ARQUIVO;
 
 module.exports = router;
