@@ -367,6 +367,9 @@ label.escondido { display: none; }
 .valor-barra.fora { fill: var(--texto-suave); }
 .grafico-svg .eixo-semana { font-size: 8px; fill: #98A2B3; }
 .grafico-svg .eixo-semana.domingo { fill: var(--vermelho); }
+/* O dia do mês comparado, embaixo do dia da semana. Na cor da barra comparada,
+   para o olho ligar um ao outro sem legenda. */
+.grafico-svg .eixo-par { font-size: 8px; fill: #B4BCCA; }
 
 /* Seletores de mês dentro do cabeçalho do bloco. */
 .filtro-mes { flex-direction: row; align-items: center; gap: 6px; font-size: 12px; }
