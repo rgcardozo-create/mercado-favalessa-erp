@@ -17,7 +17,8 @@ const ENTIDADES = {
   },
   funcionarios: {
     tabela: 'funcionarios',
-    campos: ['codigo', 'nome', 'telefone', 'cpf', 'pix', 'observacoes', 'ativo'],
+    campos: ['codigo', 'nome', 'telefone', 'cpf', 'pix', 'salario_base', 'data_admissao', 'observacoes', 'ativo'],
+    datas: ['data_admissao'],
     ordem: 'nome',
   },
   bancos: {
@@ -45,12 +46,29 @@ function estaEmUso(err) {
   return err && err.code === '23503';
 }
 
+// Coluna DATE vira Date do JavaScript e sai como instante UTC, escorregando um
+// dia conforme o fuso — a mesma armadilha que já apareceu na folha. O driver
+// monta a data à meia-noite LOCAL, então ler dia, mês e ano dela devolve o que
+// está gravado, sem passar por UTC.
+function comoTexto(d) {
+  if (!(d instanceof Date)) return d;
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function criarHandlers(chave) {
-  const { tabela, campos, ordem } = ENTIDADES[chave];
+  const { tabela, campos, ordem, datas = [] } = ENTIDADES[chave];
+
+  const arrumarDatas = (linha) => {
+    if (!linha || !datas.length) return linha;
+    const copia = { ...linha };
+    for (const campo of datas) copia[campo] = comoTexto(copia[campo]);
+    return copia;
+  };
 
   async function listar(req, res) {
     const { rows } = await pool.query(`SELECT * FROM ${tabela} ORDER BY ${ordem}`);
-    return res.json(rows);
+    return res.json(rows.map(arrumarDatas));
   }
 
   async function criar(req, res) {
@@ -85,7 +103,7 @@ function criarHandlers(chave) {
       dados: rows[0],
     });
 
-    return res.status(201).json(rows[0]);
+    return res.status(201).json(arrumarDatas(rows[0]));
   }
 
   async function atualizar(req, res) {
@@ -118,7 +136,7 @@ function criarHandlers(chave) {
       dados: rows[0],
     });
 
-    return res.json(rows[0]);
+    return res.json(arrumarDatas(rows[0]));
   }
 
   async function deletar(req, res) {

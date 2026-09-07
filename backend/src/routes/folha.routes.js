@@ -4,6 +4,7 @@ const { authenticate, authorize } = require('../middleware/auth');
 const { detectarFolhaDestravada, exigirFolhaDestravada } = require('../middleware/folha');
 const folha = require('../controllers/folhaController');
 const extras = require('../controllers/extrasController');
+const parametros = require('../controllers/parametrosController');
 
 const router = express.Router();
 
@@ -27,6 +28,13 @@ router.delete('/extras/:id', asyncHandler(extras.deletar));
 
 // Antes das rotas com `:id` para o caminho literal não virar id.
 router.get('/compras-prazo/:id', asyncHandler(folha.comprasDoFuncionario));
+
+// Calculadora: não grava nada, só devolve a conta aberta.
+router.post('/calculo-horas', asyncHandler(folha.calculoHoras));
+
+// Percentuais da convenção coletiva.
+router.get('/parametros', asyncHandler(parametros.listar));
+router.put('/parametros', asyncHandler(parametros.salvar));
 
 router.get('/', asyncHandler(folha.listar));
 router.post('/', asyncHandler(folha.criar));

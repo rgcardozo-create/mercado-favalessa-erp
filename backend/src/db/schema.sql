@@ -103,6 +103,12 @@ CREATE TABLE IF NOT EXISTS funcionarios (
   criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Salário base e data de admissão: sem os dois não existe cálculo trabalhista
+-- nenhum. O salário é a origem do valor da hora; a data de admissão é o que dá
+-- o tempo de casa, que férias e rescisão vão precisar.
+ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS salario_base   NUMERIC(12,2);
+ALTER TABLE funcionarios ADD COLUMN IF NOT EXISTS data_admissao  DATE;
+
 -- Formas de pagamento (Dinheiro, PIX, Boleto...). Existem como cadastro para a
 -- baixa ser escolhida numa lista em vez de digitada de novo a cada pagamento —
 -- texto livre vira "pix", "PIX" e "Pix" no mesmo relatório.
@@ -295,13 +301,19 @@ CREATE TABLE IF NOT EXISTS auditoria (
   usuario_id   INTEGER REFERENCES usuarios(id),
   acao         VARCHAR(40) NOT NULL,   -- create | update | delete | pagamento
   entidade     VARCHAR(40) NOT NULL,   -- 'contas', 'fornecedores', etc.
-  entidade_id  INTEGER NOT NULL,
+  entidade_id  INTEGER,   -- nulo em auditoria de configuração, que não tem id numérico
   dados        JSONB,
   criado_em    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Colunas acrescentadas depois da primeira versão do schema: os CREATE TABLE acima
 -- não alteram tabelas que já existem, então repetimos como ALTER idempotente.
+-- Nem tudo que se audita tem id numérico: os percentuais da convenção coletiva
+-- são uma linha de configuração por chave de texto. Com a coluna obrigatória,
+-- salvar o percentual gravava o valor e depois estourava na auditoria — sucesso
+-- reportado como erro, que é o pior dos dois mundos.
+ALTER TABLE auditoria ALTER COLUMN entidade_id DROP NOT NULL;
+
 ALTER TABLE fornecedores
   ADD COLUMN IF NOT EXISTS pix VARCHAR(140),
   ADD COLUMN IF NOT EXISTS legado_id VARCHAR(40) UNIQUE;

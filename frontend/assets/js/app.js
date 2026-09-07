@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.39.0';
+const VERSAO = '1.40.0';
 
 const state = {
   sessao: getSessao(),
@@ -113,6 +113,11 @@ const state = {
   // ter em caixa para pagar ESTES quatro?", que o total geral lá de cima não
   // responde. Vive fora do render para sobreviver a ele.
   folhaMarcadas: new Set(),
+  // Resultado da calculadora e o que foi digitado nela. Vive fora do render para
+  // os campos não se apagarem quando a conta volta.
+  calculoHoras: null,
+  calculoEntrada: {},
+  parametrosTrabalhistas: null,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -261,16 +266,18 @@ async function carregarDados() {
       // Sem token da folha a API responde 423 — a tela então pede a senha.
       if (folhaLiberada()) {
         const p = periodoDaFolha();
-        const [folha, extras, funcionarios, formasFolha] = await Promise.all([
+        const [folha, extras, funcionarios, formasFolha, parametros] = await Promise.all([
           apiFetch(`/folha${p ? `?de=${p.de}&ate=${p.ate}` : ''}`),
           apiFetch(`/folha/extras?situacao=${state.filtroExtras}`),
           apiFetch('/cadastros/funcionarios'),
           apiFetch('/cadastros/formas-pagamento'),
+          apiFetch('/folha/parametros'),
         ]);
         state.folha = folha;
         state.extras = extras;
         state.funcionarios = funcionarios;
         state.formasPagamento = formasFolha;
+        state.parametrosTrabalhistas = parametros;
         // A marcação vale para a lista que estava na tela; recarregou, some —
         // senão a soma passaria a falar de linhas que já não existem.
         state.folhaMarcadas = new Set();
@@ -286,12 +293,14 @@ async function carregarDados() {
       const p = periodoOuPadrao();
       state.relatorio = await apiFetch(`/relatorios?de=${p.de}&ate=${p.ate}`);
     } else if (state.tab === 'admin') {
-      const [auditoria, usuarios] = await Promise.all([
+      const [auditoria, usuarios, parametros] = await Promise.all([
         apiFetch('/admin/auditoria?limite=50'),
         apiFetch('/admin/usuarios'),
+        apiFetch('/folha/parametros'),
       ]);
       state.auditoria = auditoria;
       state.usuarios = usuarios;
+      state.parametrosTrabalhistas = parametros;
     } else {
       const params = new URLSearchParams({ tipo: state.tipo });
       if (state.statusFiltro) params.set('status', state.statusFiltro);
@@ -2055,7 +2064,7 @@ function cadastrosHTML() {
   const colunas = {
     fornecedores: ['nome', 'cnpj_cpf', 'telefone', 'pix'],
     clientes: ['codigo', 'nome', 'telefone', 'cpf_cnpj'],
-    funcionarios: ['codigo', 'nome', 'telefone', 'cpf', 'pix'],
+    funcionarios: ['codigo', 'nome', 'telefone', 'cpf', 'pix', 'salario_base', 'data_admissao'],
     bancos: ['nome'],
     'formas-pagamento': ['nome'],
   }[tipo];
@@ -2063,6 +2072,17 @@ function cadastrosHTML() {
   const rotulos = {
     codigo: 'Código', nome: 'Nome', telefone: 'Telefone',
     cpf_cnpj: 'CNPJ/CPF', cpf: 'CPF', pix: 'Chave PIX',
+    salario_base: 'Salário base', data_admissao: 'Admissão',
+  };
+
+  // Salário e data pedem o campo certo: digitar data em campo de texto é como
+  // não ter campo, e o cálculo de hora extra depende dos dois estarem lá.
+  const tipoDoCampo = { salario_base: 'number', data_admissao: 'date' };
+  const mostrar = (campo, valor) => {
+    if (!valor && valor !== 0) return '—';
+    if (campo === 'salario_base') return brl(valor);
+    if (campo === 'data_admissao') return dateBR(valor);
+    return escapar(String(valor));
   };
 
   const ajuda = {
@@ -2090,7 +2110,9 @@ function cadastrosHTML() {
         <h2>Novo</h2>
         ${colunas
           .map(
-            (c) => `<label>${rotulos[c] || c} <input type="text" name="${c}" ${c === 'nome' ? 'required' : ''} /></label>`
+            (c) => `<label>${rotulos[c] || c} <input type="${tipoDoCampo[c] || 'text'}" ${
+              tipoDoCampo[c] === 'number' ? 'step="0.01" min="0"' : ''
+            } name="${c}" ${c === 'nome' ? 'required' : ''} /></label>`
           )
           .join('')}
         <button type="submit">Adicionar</button>
@@ -2110,7 +2132,7 @@ function cadastrosHTML() {
                     ${colunas
                       .map(
                         (c) =>
-                          `<td>${escapar(r[c] || '') || '—'}${
+                          `<td>${mostrar(c, r[c])}${
                             c === 'nome' && r.ceasa ? ' <span class="badge tipo">Ceasa</span>' : ''
                           }</td>`
                       )
@@ -2231,6 +2253,102 @@ function blocoPagamentoFolhaHTML(l) {
   `;
 }
 
+// Calculadora de hora extra e feriado. Não grava nada: mostra a conta aberta,
+// linha por linha, com a fórmula de cada uma ao lado.
+//
+// O número que sai daqui é BRUTO — sem INSS e sem IR. As tabelas dos dois mudam
+// todo ano e dependem do total do mês inteiro, não desta verba sozinha. Serve
+// para saber quanto separar e para conferir o que o contador mandou, não para
+// substituir a folha dele.
+function calculadoraHorasHTML() {
+  const c = state.calculoHoras;
+  const p = (state.parametrosTrabalhistas && state.parametrosTrabalhistas.parametros) || {};
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Calcular hora extra e feriado</h2>
+        ${c ? `<span class="grupo-total">${brl(c.total)}</span>` : ''}
+      </div>
+
+      <form data-action="calculo-horas" class="form-inline">
+        <label>Funcionário
+          <select name="funcionario_id" required>
+            <option value="">— escolha —</option>
+            ${state.funcionarios
+              .map(
+                (f) =>
+                  `<option value="${f.id}" ${c && c.funcionario.id === f.id ? 'selected' : ''}>${escapar(f.nome)}${
+                    f.salario_base ? '' : ' (sem salário no cadastro)'
+                  }</option>`
+              )
+              .join('')}
+          </select>
+        </label>
+        <label>Mês <input type="month" name="mes" required value="${escapar((c && c.mes) || todayISO().slice(0, 7))}" /></label>
+        <label>Horas extras <input type="number" step="0.5" min="0" name="horas_normais" value="${c ? escapar(String(state.calculoEntrada.horas_normais || '')) : ''}" /></label>
+        <label>% <input type="number" step="1" min="0" name="percentual_normal" value="${p.he_percentual ?? 50}" /></label>
+        <label>Horas em domingo/feriado <input type="number" step="0.5" min="0" name="horas_domingo" value="${c ? escapar(String(state.calculoEntrada.horas_domingo || '')) : ''}" /></label>
+        <label>% <input type="number" step="1" min="0" name="percentual_domingo" value="${p.he_percentual_domingo ?? 100}" /></label>
+        <label>Feriados no mês <input type="number" step="1" min="0" name="feriados_no_mes" value="${c ? escapar(String(state.calculoEntrada.feriados_no_mes || '')) : ''}" /></label>
+        <label>Feriados trabalhados sem folga <input type="number" step="1" min="0" name="dias_feriado_trabalhado" value="${c ? escapar(String(state.calculoEntrada.dias_feriado_trabalhado || '')) : ''}" /></label>
+        <button type="submit">Calcular</button>
+        <p class="vazio campo-largo">
+          Os percentuais vêm da sua convenção coletiva, ajustáveis na Administração — a lei manda
+          no mínimo 50%, mas convenção de supermercado costuma pedir mais.
+          <strong>Feriados no mês</strong> é quantos caíram em dia útil: eles entram no descanso e mudam o DSR.
+        </p>
+      </form>
+
+      ${
+        c
+          ? `<table class="tabela-contas">
+              <thead><tr><th>O quê</th><th>Conta</th><th>Valor</th></tr></thead>
+              <tbody>
+                ${
+                  c.linhas.length
+                    ? c.linhas
+                        .map(
+                          (l) => `<tr>
+                            <td>${escapar(l.rotulo)}</td>
+                            <td><small>${escapar(l.detalhe)}</small></td>
+                            <td><strong>${brl(l.valor)}</strong></td>
+                          </tr>`
+                        )
+                        .join('')
+                    : '<tr><td colspan="3">Nada a pagar com esses números.</td></tr>'
+                }
+              </tbody>
+              <tfoot>
+                <tr><td colspan="2"><strong>Total bruto</strong></td><td><strong>${brl(c.total)}</strong></td></tr>
+              </tfoot>
+            </table>
+            <p class="vazio">
+              ${escapar(c.funcionario.nome)} &middot; salário ${brl(c.funcionario.salario_base)} &middot;
+              hora ${brl(c.valor_hora)} (salário ÷ ${c.parametros.divisor_horas}) &middot;
+              dia ${brl(c.valor_dia)} (salário ÷ 30).
+              ${mesExtenso(c.mes)}: ${c.base_do_mes.dias} dias, ${c.base_do_mes.domingos} domingo(s)${
+                c.base_do_mes.feriados ? ` e ${c.base_do_mes.feriados} feriado(s)` : ''
+              }, ${c.base_do_mes.uteis} úteis.
+            </p>
+            <div class="alerta aviso">
+              <strong>Valor bruto</strong>, sem INSS e sem imposto de renda — os dois dependem do total do
+              mês inteiro, não só desta verba. Use para saber quanto separar e para conferir a folha do
+              contador; quem fecha o número é ele.
+            </div>
+            ${
+              c.total > 0
+                ? `<div class="acoes-alerta">
+                    <button type="button" id="btn-lancar-calculo">Lançar ${brl(c.total)} como serviço extra pago</button>
+                  </div>`
+                : ''
+            }`
+          : ''
+      }
+    </section>
+  `;
+}
+
 function folhaHTML() {
   const cabecalho = cabecalhoHTML('Folha de pagamento');
 
@@ -2338,6 +2456,8 @@ function folhaHTML() {
         </p>
       </form>
     </section>
+
+    ${calculadoraHorasHTML()}
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
@@ -3146,6 +3266,30 @@ function adminHTML() {
   const cabecalho = cabecalhoHTML('Administração');
   const a = state.auditoria;
 
+  const pt = state.parametrosTrabalhistas;
+  const parametrosTrabalhistas = pt
+    ? `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Convenção coletiva</h2></div>
+      <p class="vazio">
+        Os percentuais que a calculadora de hora extra usa. A lei manda no mínimo
+        <strong>50%</strong> na hora extra e <strong>100%</strong> em domingo e feriado, mas a convenção do
+        seu sindicato pode pedir mais — e pagar 50% onde se deve 60% é pagar a menos todo mês.
+        Confira na convenção e ajuste aqui.
+      </p>
+      <form data-action="form-parametros" class="form-inline">
+        <label>Hora extra (%) <input type="number" step="1" min="0" max="300" name="he_percentual" value="${pt.parametros.he_percentual}" /></label>
+        <label>Domingo e feriado (%) <input type="number" step="1" min="0" max="300" name="he_percentual_domingo" value="${pt.parametros.he_percentual_domingo}" /></label>
+        <label>Divisor de horas <input type="number" step="1" min="1" max="400" name="divisor_horas" value="${pt.parametros.divisor_horas}" /></label>
+        <button type="submit">Salvar</button>
+        <p class="vazio campo-largo">
+          O divisor é 220 para quem trabalha 44 horas por semana e 200 para 40 horas.
+          É por ele que o salário vira o valor da hora.
+        </p>
+      </form>
+    </section>`
+    : '';
+
   const backup = `
     <section class="grupo-painel">
       <div class="grupo-cabecalho"><h2>Exportar backup</h2></div>
@@ -3179,11 +3323,12 @@ function adminHTML() {
     </section>
   `;
 
-  if (!a) return `${cabecalho}${usuariosHTML()}${backup}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+  if (!a) return `${cabecalho}${usuariosHTML()}${parametrosTrabalhistas}${backup}${state.carregando ? '<p>Carregando…</p>' : ''}`;
 
   return `
     ${cabecalho}
     ${usuariosHTML()}
+    ${parametrosTrabalhistas}
     ${backup}
 
     <section class="grupo-painel">
@@ -3862,6 +4007,12 @@ function bind() {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
 
+  const formCalculo = root.querySelector('[data-action="calculo-horas"]');
+  if (formCalculo) formCalculo.addEventListener('submit', onCalcularHoras);
+
+  const btnLancarCalculo = root.querySelector('#btn-lancar-calculo');
+  if (btnLancarCalculo) btnLancarCalculo.addEventListener('click', onLancarCalculo);
+
   root.querySelectorAll('[data-marca-folha]').forEach((caixa) => {
     caixa.addEventListener('change', () => {
       const id = Number(caixa.dataset.marcaFolha);
@@ -3995,6 +4146,9 @@ function bind() {
       carregarDados();
     });
   }
+
+  const formParametros = root.querySelector('[data-action="form-parametros"]');
+  if (formParametros) formParametros.addEventListener('submit', onSalvarParametros);
 
   const formUsuario = root.querySelector('[data-action="form-usuario"]');
   if (formUsuario) formUsuario.addEventListener('submit', onSalvarUsuario);
@@ -4393,6 +4547,69 @@ async function onNovoLancamentoFolha(ev) {
       }),
     });
     state.folhaEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onSalvarParametros(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const corpo = {};
+  for (const [k, v] of fd.entries()) corpo[k] = v;
+  try {
+    state.parametrosTrabalhistas = await apiFetch('/folha/parametros', { method: 'PUT', body: JSON.stringify(corpo) });
+    state.erro = null;
+  } catch (err) {
+    state.erro = err.message;
+  }
+  render();
+}
+
+async function onCalcularHoras(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const corpo = {};
+  for (const [k, v] of fd.entries()) corpo[k] = v;
+  state.calculoEntrada = corpo;
+  try {
+    state.calculoHoras = await apiFetch('/folha/calculo-horas', { method: 'POST', body: JSON.stringify(corpo) });
+    state.erro = null;
+  } catch (err) {
+    state.calculoHoras = null;
+    state.erro = err.message;
+  }
+  render();
+}
+
+// O cálculo vira lançamento pelo caminho que já existe: serviço extra pago é
+// dinheiro que saiu e não volta, que é exatamente o caso da hora extra.
+async function onLancarCalculo() {
+  const c = state.calculoHoras;
+  if (!c) return;
+  const descricao = `Hora extra e feriado — ${mesExtenso(c.mes)}`;
+  if (!confirm(`Lançar ${brl(c.total)} para ${c.funcionario.nome} como serviço extra pago?`)) return;
+  try {
+    await apiFetch('/folha/extras', {
+      method: 'POST',
+      body: JSON.stringify({
+        funcionario_id: c.funcionario.id,
+        codigo: c.funcionario.codigo || undefined,
+        tipo: 'servico',
+        valor: c.total,
+        data: todayISO(),
+        observacoes: descricao,
+      }),
+    });
+    state.calculoHoras = null;
+    state.calculoEntrada = {};
+    // Serviço extra nasce quitado, e a lista abre nos em aberto: sem trocar o
+    // filtro, o lançamento cairia numa aba que não está à vista e o clique
+    // pareceria não ter feito nada.
+    state.filtroExtras = 'todos';
     state.erro = null;
     carregarDados();
   } catch (err) {
