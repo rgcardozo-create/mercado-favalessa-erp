@@ -2,6 +2,8 @@ const bcrypt = require('bcryptjs');
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 const { assinarTokenFolha } = require('../middleware/folha');
+const { calcularHoras } = require('../utils/calculoHoras');
+const { lerParametros } = require('./parametrosController');
 
 // Líquido = salário + bonificação - compras - adiantamento - outras - descontos.
 // Mesma conta do sistema atual; nunca é armazenado, sempre derivado.
@@ -475,8 +477,55 @@ async function deletar(req, res) {
   return res.status(204).send();
 }
 
+// Calcula sem gravar nada. O dono confere na tela e decide se lança — o cálculo
+// em si não é lançamento nenhum, é só a conta que ele faria no papel.
+async function calculoHoras(req, res) {
+  const id = Number(req.body.funcionario_id);
+  const mes = String(req.body.mes || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) {
+    return res.status(400).json({ error: 'Informe o mês no formato AAAA-MM.' });
+  }
+
+  const { rows } = await pool.query(
+    'SELECT id, nome, codigo, salario_base FROM funcionarios WHERE id = $1',
+    [id]
+  );
+  const funcionario = rows[0];
+  if (!funcionario) return res.status(404).json({ error: 'Funcionário não encontrado.' });
+
+  const salario = Number(funcionario.salario_base);
+  if (!salario) {
+    return res.status(400).json({
+      error: `${funcionario.nome} está sem salário base no cadastro. Sem ele não dá para calcular o valor da hora.`,
+    });
+  }
+
+  const p = await lerParametros();
+  const numero = (v, padrao = 0) => (v === undefined || v === '' ? padrao : Number(v));
+
+  const resultado = calcularHoras({
+    salarioBase: salario,
+    mes,
+    divisorHoras: p.divisor_horas,
+    horasNormais: numero(req.body.horas_normais),
+    percentualNormal: numero(req.body.percentual_normal, p.he_percentual),
+    horasDomingo: numero(req.body.horas_domingo),
+    percentualDomingo: numero(req.body.percentual_domingo, p.he_percentual_domingo),
+    feriadosNoMes: numero(req.body.feriados_no_mes),
+    diasFeriadoTrabalhado: numero(req.body.dias_feriado_trabalhado),
+  });
+
+  return res.json({
+    funcionario: { id: funcionario.id, nome: funcionario.nome, codigo: funcionario.codigo, salario_base: salario },
+    mes,
+    parametros: p,
+    ...resultado,
+  });
+}
+
 module.exports = {
   desbloquear,
+  calculoHoras,
   pendencias,
   comprasDoFuncionario,
   listar,
