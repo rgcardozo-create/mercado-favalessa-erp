@@ -448,3 +448,27 @@ CREATE INDEX IF NOT EXISTS idx_mov_prazo_cliente ON mov_prazo(cliente_id);
 CREATE INDEX IF NOT EXISTS idx_mov_prazo_data ON mov_prazo(data);
 CREATE INDEX IF NOT EXISTS idx_folha_pagamentos_folha ON folha_pagamentos(folha_id);
 CREATE INDEX IF NOT EXISTS idx_extras_baixas_extra ON extras_baixas(extra_id);
+
+-- O que o dono ensinou sobre cada descrição do extrato bancário.
+--
+-- A `chave` é a descrição depois de apagar o que muda de um lançamento para o
+-- outro (data, hora, CNPJ, documento). É por ela que "Tar. agrupadas -
+-- ocorrencia 29/05" e "... 03/06" são a mesma coisa, e que os Pix da noite,
+-- cada um com seu horário, são uma regra só.
+--
+-- `ignorar` existe porque nem toda saída é despesa: transferência entre contas
+-- do próprio dono sai do banco mas não sai da empresa. Marcada uma vez, some
+-- de todas as importações seguintes.
+CREATE TABLE IF NOT EXISTS regras_extrato (
+  id             SERIAL PRIMARY KEY,
+  chave          TEXT NOT NULL UNIQUE,
+  exemplo        TEXT,
+  acao           VARCHAR(10) NOT NULL DEFAULT 'lancar',  -- lancar | ignorar
+  tipo           conta_tipo,
+  fornecedor_id  INTEGER REFERENCES fornecedores(id),
+  categoria      VARCHAR(60),
+  vezes          INTEGER NOT NULL DEFAULT 0,
+  criado_por     INTEGER REFERENCES usuarios(id),
+  criado_em      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

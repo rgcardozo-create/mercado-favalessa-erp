@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.41.0';
+const VERSAO = '1.42.0';
 
 const state = {
   sessao: getSessao(),
@@ -120,6 +120,10 @@ const state = {
   parametrosTrabalhistas: null,
   // Registro do Cadastros aberto para correção. O mesmo formulário cadastra e edita.
   cadastroEditando: null,
+  // Prévia do extrato do banco, o que foi decidido nela e o resultado da gravação.
+  extratoBanco: null,
+  extratoBancoEscolhas: {},
+  extratoBancoResultado: null,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -245,7 +249,12 @@ async function carregarDados() {
       state.formasPagamento = formasPainel;
       state.bancos = bancosPainel;
     } else if (state.tab === 'conciliacao') {
-      state.conciliacao = await apiFetch('/conciliacao');
+      const [conc, fornecedoresConc] = await Promise.all([
+        apiFetch('/conciliacao'),
+        apiFetch('/fornecedores'),
+      ]);
+      state.conciliacao = conc;
+      state.fornecedores = fornecedoresConc;
     } else if (state.tab === 'acumulado') {
       const [acumulados, resumo, diaADia] = await Promise.all([
         apiFetch('/acumulados'),
@@ -859,15 +868,21 @@ function painelHTML() {
 // quem importa, é a mesma tarefa: escolher de onde veio o arquivo e mandar. Só o
 // que ele traz é diferente — dinheiro e venda a prazo, que adquirente não vê.
 const ORIGEM_SISTEMA = 'sistema';
+// O extrato do banco entra pela mesma porta dos outros arquivos, mas anda por um
+// caminho próprio: aqui não se importa venda, se importa o que foi PAGO.
+const ORIGEM_BANCO = 'banco';
+
 const ADQUIRENTES_UI = [
   { valor: 'cielo', rotulo: 'Cielo' },
   { valor: 'stone', rotulo: 'Stone' },
   { valor: 'itau', rotulo: 'Rede / Itaú' },
   { valor: 'tickets', rotulo: 'Tickets / Parceiros' },
   { valor: ORIGEM_SISTEMA, rotulo: 'Sistema (PDV) — dinheiro e venda a prazo' },
+  { valor: ORIGEM_BANCO, rotulo: 'Banco (conta corrente) — o que foi pago' },
 ];
 
 const ehImportacaoDoSistema = () => state.extratoAdquirente === ORIGEM_SISTEMA;
+const ehImportacaoDoBanco = () => state.extratoAdquirente === ORIGEM_BANCO;
 
 // Prévia do relatório de vendas por caixa. O dinheiro e a venda a prazo vêm
 // separados: somados numa coluna só, a venda a prazo entraria como dinheiro em
@@ -925,11 +940,110 @@ function previaVendasCaixaHTML() {
   `;
 }
 
+// Prévia do extrato do banco: uma linha por GRUPO, não por lançamento. É o
+// grupo que se ensina, e é ele que carrega os vinte e cinco Pix de uma vez.
+function previaExtratoBancoHTML() {
+  const b = state.extratoBanco;
+  if (!b) return '';
+  if (!b.reconhecido) {
+    return `<div class="alerta erro">
+      Não reconheci as colunas deste extrato. Encontrei:
+      ${b.colunas.map((c) => `<code>${escapar(c.titulo || '(vazia)')}</code>`).join(', ')}.
+      Preciso de pelo menos <strong>Data</strong> e <strong>Valor</strong>.
+    </div>`;
+  }
+
+  const escolha = (g) => state.extratoBancoEscolhas[g.chave] || g.regra || {};
+  const decididos = b.grupos.filter((g) => (escolha(g).acao || '') !== '');
+  const aLancar = b.grupos.filter((g) => escolha(g).acao === 'lancar');
+  const totalLancar = aLancar.reduce((a, g) => a + g.total, 0);
+
+  const linha = (g) => {
+    const e = escolha(g);
+    const acao = e.acao || '';
+    return `
+      <tr class="${acao === 'ignorar' ? 'inativo' : ''}" data-grupo="${escapar(g.chave)}">
+        <td>
+          <strong>${escapar(g.exemplo.slice(0, 52) || g.lancamento)}</strong>
+          <small>${escapar(g.lancamento)} · ${g.quantidade} lançamento(s) · ${g.forma}${
+            g.ja_importadas ? ` · <strong>${g.ja_importadas} já lançado(s) antes</strong>` : ''
+          }${g.regra ? ' · <span class="badge quitado">o sistema já sabia</span>' : ''}</small>
+        </td>
+        <td><strong>${brl(g.total)}</strong></td>
+        <td>
+          <select data-banco-acao="${escapar(g.chave)}">
+            <option value="" ${acao === '' ? 'selected' : ''}>— decidir —</option>
+            <option value="ignorar" ${acao === 'ignorar' ? 'selected' : ''}>Ignorar (não é despesa)</option>
+            <option value="lancar" ${acao === 'lancar' ? 'selected' : ''}>Lançar como despesa</option>
+          </select>
+        </td>
+        <td>
+          <select data-banco-tipo="${escapar(g.chave)}" class="${acao === 'lancar' ? '' : 'escondido'}">
+            <option value="">— onde entra —</option>
+            ${TIPOS.map((t) => `<option value="${t.tipo}" ${e.tipo === t.tipo ? 'selected' : ''}>${t.rotulo}</option>`).join('')}
+          </select>
+        </td>
+        <td>
+          <select data-banco-fornecedor="${escapar(g.chave)}" class="${acao === 'lancar' && e.tipo === 'fornecedor' ? '' : 'escondido'}">
+            <option value="">— sem fornecedor —</option>
+            ${(state.fornecedores || [])
+              .map((f) => `<option value="${f.id}" ${String(e.fornecedor_id) === String(f.id) ? 'selected' : ''}>${escapar(f.nome)}</option>`)
+              .join('')}
+          </select>
+          <input type="text" data-banco-categoria="${escapar(g.chave)}" placeholder="categoria"
+            value="${escapar(e.categoria || '')}" class="${acao === 'lancar' && e.tipo !== 'fornecedor' ? '' : 'escondido'}" />
+        </td>
+      </tr>`;
+  };
+
+  return `
+    <p class="vazio">
+      <strong>${b.total_saidas}</strong> saída(s) somando <strong>${brl(b.total_valor)}</strong>, em
+      <strong>${b.grupos.length}</strong> tipo(s) diferentes. Fora da conta ficaram
+      ${b.ignoradas.entrada} recebimento(s) e ${b.ignoradas.saldo} linha(s) de saldo.
+      Decida o que fizer sentido — o que ficar em "decidir" não é lançado e volta no próximo extrato.
+    </p>
+
+    <div class="rolagem-tabela">
+      <table class="tabela-contas">
+        <thead><tr><th>O que é</th><th>Total</th><th>Fazer o quê</th><th>Onde entra</th><th>Quem / categoria</th></tr></thead>
+        <tbody>${b.grupos.map(linha).join('')}</tbody>
+      </table>
+    </div>
+
+    <div class="barra-soma-folha">
+      <strong>${decididos.length} de ${b.grupos.length} decidido(s)</strong>
+      <span class="soma-destaque">Vai lançar <strong>${brl(totalLancar)}</strong> em ${aLancar.reduce((a, g) => a + g.quantidade, 0)} conta(s)</span>
+      <button type="button" id="btn-banco-importar" ${decididos.length ? '' : 'disabled'}>Gravar</button>
+    </div>
+
+    ${
+      state.extratoBancoResultado
+        ? `<div class="alerta sucesso">
+            <strong>${state.extratoBancoResultado.lancadas}</strong> conta(s) lançada(s) somando
+            ${brl(state.extratoBancoResultado.valor_lancado)}.
+            ${state.extratoBancoResultado.ignoradas} ignorada(s),
+            ${state.extratoBancoResultado.ja_existiam} já estavam lançadas,
+            ${state.extratoBancoResultado.sem_regra} sem decisão.
+            O que você ensinou fica guardado para os próximos extratos.
+          </div>`
+        : ''
+    }
+  `;
+}
+
 function importarExtratoHTML() {
   const e = state.extrato;
   const doSistema = ehImportacaoDoSistema();
 
-  const explicacao = doSistema
+  const doBanco = ehImportacaoDoBanco();
+
+  const explicacao = doBanco
+    ? `Extrato da conta corrente em .xlsx. Só o que <strong>saiu</strong> é lido — os recebimentos
+       ficam de fora por enquanto. Você diz uma vez quem é cada tipo de lançamento e o sistema
+       <strong>lembra</strong>: no próximo extrato ele já classifica sozinho. Transferência entre
+       contas suas é marcada como ignorar e some das próximas importações.`
+    : doSistema
     ? `Relatório <strong>Finalizadoras Analítico — Por Caixa</strong> do seu sistema de frente de
        caixa. É dele que saem o <strong>dinheiro</strong> e a <strong>venda a prazo</strong> do dia,
        que extrato de adquirente nunca mostra. Os caixas são somados por dia. Reimportar o mesmo
@@ -960,6 +1074,7 @@ function importarExtratoHTML() {
       ${state.extratoCarregando || state.caixaCarregando ? '<p>Lendo a planilha…</p>' : ''}
 
       ${doSistema ? previaVendasCaixaHTML() : ''}
+      ${doBanco ? previaExtratoBancoHTML() : ''}
       ${
         doSistema && state.caixaResultado
           ? `<div class="alerta sucesso">
@@ -977,7 +1092,7 @@ function importarExtratoHTML() {
       }
 
       ${
-        !doSistema && e && !e.reconhecido
+        !doSistema && !doBanco && e && !e.reconhecido
           ? `<div class="alerta erro">
               Não reconheci as colunas desta planilha. Colunas encontradas:
               ${e.colunas.map((c) => `<code>${c.titulo || '(vazia)'}</code>`).join(', ')}.
@@ -987,7 +1102,7 @@ function importarExtratoHTML() {
       }
 
       ${
-        !doSistema && e && e.reconhecido && e.previa
+        !doSistema && !doBanco && e && e.reconhecido && e.previa
           ? `<div class="alerta aviso">
               <strong>Confira antes de gravar.</strong> Nada foi importado ainda.
             </div>
@@ -1020,7 +1135,7 @@ function importarExtratoHTML() {
       }
 
       ${
-        !doSistema && state.extratoResultado
+        !doSistema && !doBanco && state.extratoResultado
           ? `<div class="alerta sucesso">
               <strong>Importado.</strong>
               ${state.extratoResultado.novas} nova(s) e
@@ -4231,6 +4346,24 @@ function bind() {
     formExtrato.addEventListener('submit', onAnalisarExtrato);
   }
 
+  const mexerEscolha = (chave, campo, valor) => {
+    const g = ((state.extratoBanco && state.extratoBanco.grupos) || []).find((x) => x.chave === chave);
+    const base = state.extratoBancoEscolhas[chave] || (g && g.regra) || {};
+    state.extratoBancoEscolhas[chave] = { ...base, [campo]: valor };
+    render();
+  };
+  root.querySelectorAll('[data-banco-acao]').forEach((sel) =>
+    sel.addEventListener('change', () => mexerEscolha(sel.dataset.bancoAcao, 'acao', sel.value)));
+  root.querySelectorAll('[data-banco-tipo]').forEach((sel) =>
+    sel.addEventListener('change', () => mexerEscolha(sel.dataset.bancoTipo, 'tipo', sel.value)));
+  root.querySelectorAll('[data-banco-fornecedor]').forEach((sel) =>
+    sel.addEventListener('change', () => mexerEscolha(sel.dataset.bancoFornecedor, 'fornecedor_id', sel.value)));
+  root.querySelectorAll('[data-banco-categoria]').forEach((campo) =>
+    campo.addEventListener('change', () => mexerEscolha(campo.dataset.bancoCategoria, 'categoria', campo.value)));
+
+  const btnBancoImportar = root.querySelector('#btn-banco-importar');
+  if (btnBancoImportar) btnBancoImportar.addEventListener('click', onImportarExtratoBanco);
+
   const btnImportarExtrato = root.querySelector('#btn-extrato-importar');
   if (btnImportarExtrato) btnImportarExtrato.addEventListener('click', onImportarExtrato);
 
@@ -4920,10 +5053,93 @@ async function onEscolherExtrato(ev) {
   render();
 }
 
+async function onAnalisarExtratoBanco() {
+  state.extratoCarregando = true;
+  state.extratoBanco = null;
+  state.extratoBancoResultado = null;
+  state.extratoBancoEscolhas = {};
+  state.erro = null;
+  render();
+  try {
+    state.extratoBanco = await apiFetch('/conciliacao/extrato-banco/analisar', {
+      method: 'POST',
+      body: JSON.stringify({
+        arquivo_base64: state.extratoArquivo.base64,
+        nome_arquivo: state.extratoArquivo.nome,
+      }),
+    });
+  } catch (err) {
+    state.erro = err.message;
+  } finally {
+    state.extratoCarregando = false;
+    render();
+  }
+}
+
+// O que vale é a escolha da tela; quando ela não existe, vale o que o sistema já
+// sabia daquele grupo. Assim reabrir o extrato não pede tudo de novo.
+function escolhasDoBanco() {
+  const b = state.extratoBanco;
+  if (!b || !b.grupos) return [];
+  return b.grupos
+    .map((g) => {
+      const e = state.extratoBancoEscolhas[g.chave] || g.regra || {};
+      if (!e.acao) return null;
+      return {
+        chave: g.chave,
+        exemplo: g.exemplo,
+        acao: e.acao,
+        tipo: e.acao === 'lancar' ? e.tipo || null : null,
+        fornecedor_id: e.tipo === 'fornecedor' && e.fornecedor_id ? Number(e.fornecedor_id) : null,
+        categoria: e.tipo !== 'fornecedor' ? e.categoria || null : null,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function onImportarExtratoBanco() {
+  const regras = escolhasDoBanco();
+  const semTipo = regras.find((r) => r.acao === 'lancar' && !r.tipo);
+  if (semTipo) {
+    state.erro = 'Tem lançamento marcado para lançar sem dizer onde entra. Escolha o tipo.';
+    render();
+    return;
+  }
+  const aLancar = regras.filter((r) => r.acao === 'lancar').length;
+  if (!confirm(`Gravar? ${aLancar} tipo(s) viram contas já pagas, e o que você ensinou fica guardado.`)) return;
+
+  state.extratoCarregando = true;
+  render();
+  try {
+    state.extratoBancoResultado = await apiFetch('/conciliacao/extrato-banco', {
+      method: 'POST',
+      body: JSON.stringify({
+        arquivo_base64: state.extratoArquivo.base64,
+        nome_arquivo: state.extratoArquivo.nome,
+        regras,
+      }),
+    });
+    state.erro = null;
+    // Reanalisa para a lista já mostrar o que passou a ser sabido e o que já foi
+    // lançado — a pessoa vê o efeito, não precisa acreditar.
+    state.extratoBanco = await apiFetch('/conciliacao/extrato-banco/analisar', {
+      method: 'POST',
+      body: JSON.stringify({ arquivo_base64: state.extratoArquivo.base64, nome_arquivo: state.extratoArquivo.nome }),
+    });
+    state.extratoBancoEscolhas = {};
+  } catch (err) {
+    state.erro = err.message;
+  } finally {
+    state.extratoCarregando = false;
+    render();
+  }
+}
+
 async function onAnalisarExtrato(ev) {
   ev.preventDefault();
   if (!state.extratoArquivo) return;
   if (ehImportacaoDoSistema()) return onAnalisarVendasCaixa();
+  if (ehImportacaoDoBanco()) return onAnalisarExtratoBanco();
 
   state.extratoCarregando = true;
   state.extrato = null;
