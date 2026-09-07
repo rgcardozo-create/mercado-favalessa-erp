@@ -106,15 +106,24 @@ function criarHandlers(chave) {
     return res.status(201).json(arrumarDatas(rows[0]));
   }
 
+  // Só mexe no que veio no corpo. Campo ausente fica como está; campo que veio
+  // vazio VIRA VAZIO — antes um COALESCE mantinha o valor antigo, então limpar um
+  // telefone digitado errado era impossível: a tela dizia que salvou e o dado
+  // continuava lá.
   async function atualizar(req, res) {
     const { id } = req.params;
-    const valores = campos.map((c) => (req.body[c] === undefined ? null : req.body[c]));
-    const sets = campos.map((c, i) => `${c} = COALESCE($${i + 1}, ${c})`).join(', ');
+    const usados = campos.filter((c) => req.body[c] !== undefined);
+    if (!usados.length) {
+      return res.status(400).json({ error: 'Nada para alterar.' });
+    }
+
+    const valores = usados.map((c) => (req.body[c] === '' ? null : req.body[c]));
+    const sets = usados.map((c, i) => `${c} = $${i + 1}`).join(', ');
 
     let rows;
     try {
       ({ rows } = await pool.query(
-        `UPDATE ${tabela} SET ${sets} WHERE id = $${campos.length + 1} RETURNING *`,
+        `UPDATE ${tabela} SET ${sets} WHERE id = $${usados.length + 1} RETURNING *`,
         [...valores, id]
       ));
     } catch (err) {

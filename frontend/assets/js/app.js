@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.40.0';
+const VERSAO = '1.41.0';
 
 const state = {
   sessao: getSessao(),
@@ -118,6 +118,8 @@ const state = {
   calculoHoras: null,
   calculoEntrada: {},
   parametrosTrabalhistas: null,
+  // Registro do Cadastros aberto para correção. O mesmo formulário cadastra e edita.
+  cadastroEditando: null,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -2060,6 +2062,9 @@ function cadastrosHTML() {
   const cabecalho = cabecalhoHTML('Cadastros');
   const tipo = state.cadastroTipo;
   const registros = state.cadastros || [];
+  // O registro em edição some se ele não estiver mais na lista carregada — senão
+  // o formulário seguiria oferecendo salvar algo que já não existe.
+  const e = registros.find((r) => state.cadastroEditando && r.id === state.cadastroEditando.id) || null;
 
   const colunas = {
     fornecedores: ['nome', 'cnpj_cpf', 'telefone', 'pix'],
@@ -2107,15 +2112,21 @@ function cadastrosHTML() {
 
     <section class="cartoes-form">
       <form data-action="novo-cadastro" class="form-inline">
-        <h2>Novo</h2>
+        <h2>${e ? `Editar ${escapar(e.nome)}` : 'Novo'}</h2>
         ${colunas
           .map(
             (c) => `<label>${rotulos[c] || c} <input type="${tipoDoCampo[c] || 'text'}" ${
               tipoDoCampo[c] === 'number' ? 'step="0.01" min="0"' : ''
-            } name="${c}" ${c === 'nome' ? 'required' : ''} /></label>`
+            } name="${c}" value="${e ? escapar(String(e[c] ?? '')) : ''}" ${c === 'nome' ? 'required' : ''} /></label>`
           )
           .join('')}
-        <button type="submit">Adicionar</button>
+        <button type="submit">${e ? 'Salvar alterações' : 'Adicionar'}</button>
+        ${e ? '<button type="button" id="btn-cancelar-cadastro" class="secundario">Cancelar</button>' : ''}
+        ${
+          e
+            ? '<p class="vazio campo-largo">Campo apagado fica apagado — deixar em branco não mantém o valor de antes.</p>'
+            : ''
+        }
       </form>
     </section>
 
@@ -2137,7 +2148,10 @@ function cadastrosHTML() {
                           }</td>`
                       )
                       .join('')}
-                    <td class="acoes"><div class="acoes-linha">${podeGerenciar() ? `<button data-action="excluir-cadastro" data-id="${r.id}" class="perigo">Excluir</button>` : ''}</div></td>
+                    <td class="acoes"><div class="acoes-linha">
+                      <button data-action="editar-cadastro" data-id="${r.id}" class="secundario">Editar</button>
+                      ${podeGerenciar() ? `<button data-action="excluir-cadastro" data-id="${r.id}" class="perigo">Excluir</button>` : ''}
+                    </div></td>
                   </tr>`
                 )
                 .join('')
@@ -4236,9 +4250,30 @@ function bind() {
     btn.addEventListener('click', () => {
       if (state.cadastroTipo === btn.dataset.cadastro) return;
       state.cadastroTipo = btn.dataset.cadastro;
+      // Trocar de aba fecha a edição: os campos da próxima são outros, e o
+      // formulário ficaria oferecendo salvar um funcionário na tela de bancos.
+      state.cadastroEditando = null;
       carregarDados();
     });
   });
+
+  root.querySelectorAll('[data-action="editar-cadastro"]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = Number(btn.dataset.id);
+      state.cadastroEditando = (state.cadastros || []).find((r) => r.id === id) || null;
+      render();
+      const campo = document.querySelector('[data-action="novo-cadastro"] input[name=nome]');
+      if (campo) campo.scrollIntoView({ block: 'center' });
+    });
+  });
+
+  const btnCancelarCadastro = root.querySelector('#btn-cancelar-cadastro');
+  if (btnCancelarCadastro) {
+    btnCancelarCadastro.addEventListener('click', () => {
+      state.cadastroEditando = null;
+      render();
+    });
+  }
 
   root.querySelectorAll('[data-action="excluir-cadastro"]').forEach((btn) => {
     btn.addEventListener('click', () => onExcluirCadastro(Number(btn.dataset.id)));
@@ -4453,17 +4488,25 @@ async function onNovoMovPrazo(ev) {
   }
 }
 
+// O mesmo formulário cadastra e corrige. Sem isso, arrumar o salário base de um
+// funcionário que já existe pedia excluir e cadastrar de novo — e excluir quem
+// tem folha lançada levaria o histórico junto.
 async function onNovoCadastro(ev) {
   ev.preventDefault();
   const fd = new FormData(ev.target);
   const corpo = {};
-  for (const [k, v] of fd.entries()) corpo[k] = v || null;
+  // Na edição o vazio é intenção: manda string vazia, que a API grava como
+  // vazio. No cadastro novo, vazio é campo não preenchido e vira nulo.
+  const editando = state.cadastroEditando;
+  for (const [k, v] of fd.entries()) corpo[k] = editando ? v : v || null;
 
   try {
-    await apiFetch(`/cadastros/${state.cadastroTipo}`, {
-      method: 'POST',
+    await apiFetch(editando ? `/cadastros/${state.cadastroTipo}/${editando.id}` : `/cadastros/${state.cadastroTipo}`, {
+      method: editando ? 'PUT' : 'POST',
       body: JSON.stringify(corpo),
     });
+    state.cadastroEditando = null;
+    state.erro = null;
     carregarDados();
   } catch (err) {
     state.erro = err.message;
