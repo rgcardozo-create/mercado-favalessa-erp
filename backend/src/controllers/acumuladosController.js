@@ -126,8 +126,12 @@ async function resumoVendas(req, res) {
                 'dias_lancados', COALESCE(m.dias, 0),
                 'dias_no_mes', EXTRACT(DAY FROM (g.mes + interval '1 month' - interval '1 day'))::int
               ) ORDER BY g.mes), '[]'::json)
+         -- Doze meses, não seis: meia dúzia não mostra o ano, e é o ano que
+         -- responde se o movimento está subindo ou se foi só um mês bom. Como a
+         -- janela termina no mês corrente, ela sempre contém de janeiro até hoje
+         -- e ainda traz o fim do ano passado para comparar.
          FROM generate_series(
-                date_trunc('month', (SELECT d FROM hoje)) - interval '5 month',
+                date_trunc('month', (SELECT d FROM hoje)) - interval '11 month',
                 date_trunc('month', (SELECT d FROM hoje)),
                 interval '1 month') g(mes)
          LEFT JOIN (
