@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.36.0';
+const VERSAO = '1.37.0';
 
 const state = {
   sessao: getSessao(),
@@ -1304,6 +1304,28 @@ function graficoBarrasComMediaSVG(
 
 const DIAS_SEMANA = ['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'];
 
+// Comparar dia 1 com dia 1 mistura segunda com domingo: no mercado o sábado
+// vende o dobro da terça, e a barra ao lado acusaria uma queda que é só o
+// calendário tendo virado.
+//
+// Aqui os dois meses são encaixados pelo dia da semana e daí caminham juntos.
+// Setembro/26 começa numa terça e agosto começou num sábado, então o encaixe
+// anda três dias: 01/set ↔ 04/ago, 02/set ↔ 05/ago, e assim por diante, sempre
+// terça com terça e sábado com sábado.
+//
+// A outra saída seria casar a 1ª terça com a 1ª terça — mas aí o 1º sábado de
+// setembro (dia 5) voltaria para o dia 1 de agosto, e a régua embaixo do gráfico
+// pularia para trás no meio da semana. Escolha do dono: ler em ordem vale mais.
+//
+// O rabo do mês fica sem par quando o outro mês acaba antes. Fica sem barra de
+// comparação em vez de ganhar um par inventado.
+function parearPorDiaDaSemana(dias, outros) {
+  if (!dias.length || !outros.length) return dias.map(() => null);
+
+  const desvio = (dias[0].semana - outros[0].semana + 7) % 7;
+  return dias.map((_, i) => outros[i + desvio] || null);
+}
+
 // Nome do mês por extenso, para o seletor: no gráfico "ago/26" basta, mas numa
 // lista de escolher é o nome inteiro que se lê sem pensar.
 const MESES_EXTENSO = [
@@ -1325,15 +1347,16 @@ function mesExtenso(iso) {
 function graficoDiaADiaSVG(principal, comparacao) {
   const L = 48;
   const largura = 760;
-  const altura = 280;
+  // A linha do dia pareado só existe quando há comparação — o gráfico cresce
+  // exatamente o que ela ocupa, em vez de deixar um vão sempre reservado.
+  const altura = comparacao ? 292 : 280;
   const topo = 16;
-  const base = altura - 46;
+  const base = altura - (comparacao ? 58 : 46);
 
   const dias = principal.dias;
   const outros = comparacao ? comparacao.dias : null;
-  // Alinhamento pelo número do dia: é assim que a comparação é lida ("dia 9
-  // contra dia 9"). Mês mais curto simplesmente não tem a última barra.
-  const parDe = (i) => (outros && outros[i] ? outros[i] : null);
+  const pares = comparacao ? parearPorDiaDaSemana(dias, outros) : null;
+  const parDe = (i) => (pares ? pares[i] : null);
 
   const valores = dias.map((d) => d.total).concat(outros ? outros.map((d) => d.total) : []);
   const maior = Math.max(...valores, 1);
@@ -1438,10 +1461,19 @@ function graficoDiaADiaSVG(principal, comparacao) {
   const eixo = dias
     .map((d, i) => {
       const x = centro(i);
+      const par = parDe(i);
+      // Com dois meses, o dia do mês comparado vai embaixo: sem isso ninguém
+      // sabe que a barra ao lado é do dia 4, e não do dia 1.
+      const linhaPar = comparacao
+        ? `<text x="${x}" y="${base + 38}" text-anchor="middle" class="eixo-par">${
+            par ? String(par.dia).padStart(2, '0') : '–'
+          }</text>`
+        : '';
       return `<text x="${x}" y="${base + 15}" text-anchor="middle" class="eixo">${String(d.dia).padStart(2, '0')}</text>
               <text x="${x}" y="${base + 27}" text-anchor="middle" class="eixo-semana ${
                 d.semana === 0 ? 'domingo' : ''
-              }">${DIAS_SEMANA[d.semana]}</text>`;
+              }">${DIAS_SEMANA[d.semana]}</text>
+              ${linhaPar}`;
     })
     .join('');
 
@@ -1487,6 +1519,9 @@ function blocoDiaADiaHTML() {
   const desigual =
     comparacao && principal.dias_lancados && comparacao.dias_lancados &&
     Math.abs(principal.dias_lancados - comparacao.dias_lancados) > 2;
+  const semPar = comparacao
+    ? parearPorDiaDaSemana(principal.dias, comparacao.dias).filter((p) => !p).length
+    : 0;
   const variacao =
     comparacao && comparacao.total > 0
       ? ((principal.total - comparacao.total) / comparacao.total) * 100
@@ -1522,6 +1557,13 @@ function blocoDiaADiaHTML() {
                   ? `<br /><small>Atenção: ${principal.dias_lancados} dia(s) lançados contra ${comparacao.dias_lancados} — a diferença acima não compara períodos iguais.</small>`
                   : ''
               }
+              <br /><small>
+                As barras estão lado a lado por <strong>dia da semana</strong> — terça com terça, sábado com
+                sábado —, e não por número do dia. O número claro embaixo do gráfico é o dia de
+                ${mesExtenso(comparacao.mes)} com que aquela barra está sendo comparada${
+                  semPar ? `, e “–” marca os ${semPar} dia(s) do fim do mês que ficaram sem par` : ''
+                }.
+              </small>
             </p>`
           : ''
       }
