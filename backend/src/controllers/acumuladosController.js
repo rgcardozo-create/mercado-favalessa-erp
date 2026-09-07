@@ -182,6 +182,11 @@ async function resumoVendas(req, res) {
 // olhar dia contra dia — é isso que este endpoint serve.
 const MES_VALIDO = /^\d{4}-(0[1-9]|1[0-2])$/;
 
+// Teto do fechamento em lote, nas duas pontas: montar a lista e salvá-la. Um ano
+// cobre "importei o ano inteiro e quero fechar tudo" sem deixar a tela virar uma
+// lista infinita nem o salvamento virar uma transação sem fim.
+const DIAS_POR_LOTE = 366;
+
 async function serieDoMes(mes) {
   const TOTAL = CAMPOS_VALOR.map((c) => `COALESCE(a.${c}, 0)`).join(' + ');
   const { rows } = await pool.query(
@@ -338,11 +343,15 @@ async function sugestaoDoPeriodo(req, res) {
     return res.status(400).json({ error: 'A data inicial precisa ser anterior à final.' });
   }
 
-  // Limite de dois meses: acima disso a tela vira uma parede de campos, e
-  // conferência que ninguém consegue ler não é conferência.
+  // Um ano de cada vez. O limite antigo era de dois meses, pensando em não
+  // encher a tela — mas quem acabou de importar seis meses de extrato quer
+  // fechar os seis, e obrigar a repetir o mesmo trabalho três vezes é pior do
+  // que uma lista comprida. A lista vem separada por mês para não se perder.
   const { rows: tamanho } = await pool.query(`SELECT ($2::date - $1::date) + 1 AS dias`, [de, ate]);
-  if (Number(tamanho[0].dias) > 62) {
-    return res.status(400).json({ error: 'Período muito longo: escolha no máximo 62 dias.' });
+  if (Number(tamanho[0].dias) > DIAS_POR_LOTE) {
+    return res.status(400).json({
+      error: `Período muito longo: escolha no máximo ${DIAS_POR_LOTE} dias (um ano). Faça um ano de cada vez.`,
+    });
   }
 
   const { rows: transacoes } = await pool.query(
@@ -420,8 +429,8 @@ async function salvarLote(req, res) {
   if (!dias || !dias.length) {
     return res.status(400).json({ error: 'Envie a lista de dias a salvar.' });
   }
-  if (dias.length > 62) {
-    return res.status(400).json({ error: 'Máximo de 62 dias por vez.' });
+  if (dias.length > DIAS_POR_LOTE) {
+    return res.status(400).json({ error: `Máximo de ${DIAS_POR_LOTE} dias por vez.` });
   }
 
   for (const dia of dias) {
