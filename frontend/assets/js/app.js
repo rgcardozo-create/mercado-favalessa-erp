@@ -1000,7 +1000,13 @@ function previaExtratoBancoHTML() {
     <p class="vazio">
       <strong>${b.total_saidas}</strong> saída(s) somando <strong>${brl(b.total_valor)}</strong>, em
       <strong>${b.grupos.length}</strong> tipo(s) diferentes. Fora da conta ficaram
-      ${b.ignoradas.entrada} recebimento(s) e ${b.ignoradas.saldo} linha(s) de saldo.
+      ${b.ignoradas.entrada} recebimento(s), ${b.ignoradas.saldo} linha(s) de saldo${
+        b.ignoradas.rodape ? ` e ${b.ignoradas.rodape} do rodapé do extrato` : ''
+      }${
+        b.ignoradas.invalida
+          ? ` — e <strong>${b.ignoradas.invalida} linha(s) que não consegui ler</strong>, confira se elas importam`
+          : ''
+      }.
       Decida o que fizer sentido — o que ficar em "decidir" não é lançado e volta no próximo extrato.
     </p>
 
