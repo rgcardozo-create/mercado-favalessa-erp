@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.43.0';
+const VERSAO = '1.44.0';
 
 const state = {
   sessao: getSessao(),
@@ -124,6 +124,8 @@ const state = {
   extratoBanco: null,
   extratoBancoEscolhas: {},
   extratoBancoResultado: null,
+  // De qual conta é o extrato do banco. Cada uma tem as próprias regras.
+  extratoBancoId: '',
   carregando: false,
   erro: null,
   loginErro: null,
@@ -249,12 +251,14 @@ async function carregarDados() {
       state.formasPagamento = formasPainel;
       state.bancos = bancosPainel;
     } else if (state.tab === 'conciliacao') {
-      const [conc, fornecedoresConc] = await Promise.all([
+      const [conc, fornecedoresConc, bancosConc] = await Promise.all([
         apiFetch('/conciliacao'),
         apiFetch('/fornecedores'),
+        apiFetch('/cadastros/bancos'),
       ]);
       state.conciliacao = conc;
       state.fornecedores = fornecedoresConc;
+      state.bancos = bancosConc;
     } else if (state.tab === 'acumulado') {
       const [acumulados, resumo, diaADia] = await Promise.all([
         apiFetch('/acumulados'),
@@ -1010,6 +1014,7 @@ function previaExtratoBancoHTML() {
     <p class="vazio">
       <strong>${b.total_saidas}</strong> saída(s) somando <strong>${brl(b.total_valor)}</strong>, em
       <strong>${b.grupos.length}</strong> tipo(s) diferentes.
+      Conta: <strong>${escapar((b.banco && b.banco.nome) || '—')}</strong>.
       Extrato <strong>${b.modo === 'agrupado' ? 'agrupado' : 'sem agrupar'}</strong>.${
         b.modo === 'agrupado'
           ? ' <strong>Prefira baixar sem agrupar:</strong> no agrupado o banco junta os Pix enviados do dia numa linha só e sem número de documento, então dois pagamentos diferentes viram um e o sistema perde a única marca segura contra lançar em dobro.'
@@ -1061,7 +1066,9 @@ function importarExtratoHTML() {
   const doBanco = ehImportacaoDoBanco();
 
   const explicacao = doBanco
-    ? `Extrato da conta corrente em .xlsx. Só o que <strong>saiu</strong> é lido — os recebimentos
+    ? `Extrato de conta em .xlsx — Banco do Brasil, PagSeguro, Stone, Itaú. <strong>Escolha de qual conta é</strong>:
+       cada uma tem as próprias regras e o próprio histórico, e sem isso o mesmo período de duas contas se
+       misturaria. Só o que <strong>saiu</strong> é lido — os recebimentos
        ficam de fora por enquanto. Você diz uma vez quem é cada tipo de lançamento e o sistema
        <strong>lembra</strong>: no próximo extrato ele já classifica sozinho. Transferência entre
        contas suas é marcada como ignorar e some das próximas importações.`
@@ -1088,8 +1095,20 @@ function importarExtratoHTML() {
             ).join('')}
           </select>
         </label>
+        ${
+          doBanco
+            ? `<label>De qual conta
+                <select name="banco_id" id="banco-do-extrato" required>
+                  <option value="">— escolha —</option>
+                  ${(state.bancos || [])
+                    .map((b) => `<option value="${b.id}" ${String(state.extratoBancoId) === String(b.id) ? 'selected' : ''}>${escapar(b.nome)}</option>`)
+                    .join('')}
+                </select>
+              </label>`
+            : ''
+        }
         <label>Arquivo <input type="file" name="arquivo" accept=".xls,.xlsx,.csv" /></label>
-        <button type="submit" ${state.extratoArquivo ? '' : 'disabled'}>Conferir antes de importar</button>
+        <button type="submit" ${state.extratoArquivo && (!doBanco || state.extratoBancoId) ? '' : 'disabled'}>Conferir antes de importar</button>
       </form>
 
       ${state.extratoArquivo ? `<p class="vazio">Arquivo: <strong>${escapar(state.extratoArquivo.nome)}</strong></p>` : ''}
@@ -4383,6 +4402,18 @@ function bind() {
   root.querySelectorAll('[data-banco-categoria]').forEach((campo) =>
     campo.addEventListener('change', () => mexerEscolha(campo.dataset.bancoCategoria, 'categoria', campo.value)));
 
+  const seletorBanco = root.querySelector('#banco-do-extrato');
+  if (seletorBanco) {
+    seletorBanco.addEventListener('change', () => {
+      state.extratoBancoId = seletorBanco.value;
+      // Trocar de conta invalida a prévia: as regras e o histórico são outros.
+      state.extratoBanco = null;
+      state.extratoBancoEscolhas = {};
+      state.extratoBancoResultado = null;
+      render();
+    });
+  }
+
   const btnBancoImportar = root.querySelector('#btn-banco-importar');
   if (btnBancoImportar) btnBancoImportar.addEventListener('click', onImportarExtratoBanco);
 
@@ -5088,6 +5119,7 @@ async function onAnalisarExtratoBanco() {
       body: JSON.stringify({
         arquivo_base64: state.extratoArquivo.base64,
         nome_arquivo: state.extratoArquivo.nome,
+        banco_id: state.extratoBancoId,
       }),
     });
   } catch (err) {
@@ -5138,6 +5170,7 @@ async function onImportarExtratoBanco() {
       body: JSON.stringify({
         arquivo_base64: state.extratoArquivo.base64,
         nome_arquivo: state.extratoArquivo.nome,
+        banco_id: state.extratoBancoId,
         regras,
       }),
     });
@@ -5146,7 +5179,11 @@ async function onImportarExtratoBanco() {
     // lançado — a pessoa vê o efeito, não precisa acreditar.
     state.extratoBanco = await apiFetch('/conciliacao/extrato-banco/analisar', {
       method: 'POST',
-      body: JSON.stringify({ arquivo_base64: state.extratoArquivo.base64, nome_arquivo: state.extratoArquivo.nome }),
+      body: JSON.stringify({
+        arquivo_base64: state.extratoArquivo.base64,
+        nome_arquivo: state.extratoArquivo.nome,
+        banco_id: state.extratoBancoId,
+      }),
     });
     state.extratoBancoEscolhas = {};
   } catch (err) {
