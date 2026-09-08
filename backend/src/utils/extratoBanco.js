@@ -22,7 +22,7 @@ const COLUNAS = {
   lancamento: ['lancamento', 'historico', 'tipo', 'descricao do lancamento'],
   detalhes: [
     'detalhes', 'detalhe', 'complemento', 'detalhamento hist', 'detalhamento historico',
-    'descricao', 'destino', 'favorecido', 'beneficiario', 'contraparte',
+    'descricao', 'destino', 'favorecido', 'beneficiario', 'contraparte', 'razao social', 'nome',
   ],
   documento: ['n documento', 'no documento', 'numero documento', 'documento'],
   valor: ['valor', 'valor r', 'valor r$', 'vlr', 'vlr r'],
@@ -104,10 +104,14 @@ function lerValor(bruto, natureza) {
   const daColuna = String(natureza ?? '').trim().charAt(0).toUpperCase();
   const letra = ['C', 'D'].includes(daColuna) ? daColuna : (m[3] || '').toUpperCase();
   if (letra === 'C' || letra === 'D') return { valor: Math.abs(valor), saida: letra === 'D' };
-  if (m[1] === '-') return { valor: Math.abs(valor), saida: true };
-  // Positivo, sem letra e sem coluna de natureza: não dá para afirmar que saiu.
-  // Fica de fora — dizer que é saída aqui inventaria despesa.
-  return typeof bruto === 'number' && bruto < 0 ? { valor: Math.abs(valor), saida: true } : null;
+  if (m[1] === '-' || (typeof bruto === 'number' && bruto < 0)) {
+    return { valor: Math.abs(valor), saida: true };
+  }
+  // Positivo, sem letra e sem coluna de natureza: é entrada. Num extrato que
+  // marca a saída pelo sinal — Itaú, Stone, PagSeguro —, o que não tem sinal é
+  // crédito. Chamar isso de ilegível assustaria à toa: no Itaú são trinta e uma
+  // linhas de recebimento da Rede, e nenhuma delas é pagamento perdido.
+  return { valor: Math.abs(valor), saida: false };
 }
 
 // Quanto e para que lado. Cada banco conta de um jeito: coluna única com a letra
