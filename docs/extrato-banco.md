@@ -36,6 +36,30 @@ A chave de aprendizado tira o "Pagamento de" da frente, para não ser preciso
 ensinar a mesma coisa duas vezes; e a identidade da linha não usa a descrição,
 só data, valor e documento.
 
+## Agrupar o Pix: não
+
+O site do banco oferece agrupar os Pix. **Baixe sem agrupar.**
+
+O agrupamento vale também para os Pix ENVIADOS, que são saída. Dois Pix num dia
+viram uma linha só — e essa linha vem com o número do documento **zerado**.
+
+| 01/06/2026 | Sem agrupar | Agrupado |
+|---|---|---|
+| Linhas | R$ 93,68 e R$ 4.133,11 | R$ 4.226,79 |
+| Documento | 60101 e 60102 | 00000000000000000 |
+
+O total do mês bate nos dois (R$ 55.829,16 em junho), mas são 64 saídas contra
+57, e só 39 das identidades coincidem. Duas consequências:
+
+- **Misturar duplica.** Importar o mês agrupado e depois sem agrupar traria os
+  Pix de novo. Por isso a importação recusa a mistura: se o período já entrou de
+  um jeito, o outro é bloqueado com a explicação.
+- **O agrupado perde informação.** Dois Pix do mesmo dia para pessoas diferentes
+  viram um só, sem como separar nem classificar cada um.
+
+Sem agrupar, cada pagamento carrega o número de documento do próprio banco, que
+é a marca mais forte que existe contra lançar em dobro.
+
 ## Formato
 
 Planilha `.xlsx`, uma aba chamada **Extrato Conta**, cabeçalho na linha 1:

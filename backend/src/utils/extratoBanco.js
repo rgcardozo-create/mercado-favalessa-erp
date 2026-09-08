@@ -206,9 +206,19 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
     });
   }
 
+  // O site do banco oferece agrupar os Pix, e o agrupamento vale também para os
+  // Pix ENVIADOS, que são saída. Dois Pix de um dia viram uma linha só, com o
+  // número do documento zerado — mesmo dinheiro, linhas diferentes, identidades
+  // diferentes. Importar o mesmo mês de um jeito e depois do outro duplicaria.
+  //
+  // Por isso o modo do arquivo sai daqui: é com ele que a importação recusa a
+  // mistura.
+  const agrupado = saidas.some((s) => /agrupad/i.test(s.lancamento));
+
   return {
     reconhecido: true,
     mapa,
+    modo: agrupado ? 'agrupado' : 'detalhado',
     linha_cabecalho: cabecalho.indice,
     colunas: (todas[cabecalho.indice] || []).map((c, i) => ({ indice: i, titulo: String(c ?? '') })),
     saidas,
