@@ -1,4 +1,31 @@
-# Extrato bancário — o que o arquivo traz
+# Extrato bancário — o que os arquivos trazem
+
+## Quatro contas, quatro formatos
+
+O dono paga por mais de uma conta, e cada uma exporta de um jeito. O leitor
+precisa dar o mesmo resultado nas quatro. Junho/2026 em cada uma:
+
+| Conta | Saídas | Valor | Como diz que é saída | Nome do fornecedor |
+|---|---|---|---|---|
+| Banco do Brasil | 64 | R$ 55.829,16 | letra `C`/`D`, colada ou em coluna | só nos boletos |
+| PagSeguro | 192 | R$ 131.487,82 | colunas `Entradas`/`Saidas`, negativo | **sempre**, em `Descrição` |
+| Stone | 40 | R$ 89.239,38 | coluna `Movimentação` (Débito/Crédito) | em `Destino` |
+
+**É no PagSeguro que o dinheiro sai de verdade.** As saídas do Banco do Brasil e
+da Stone são quase todas varredura para lá — no BB são R$ 36 mil de Pix para a
+própria conta, na Stone são R$ 81 mil dos R$ 89 mil.
+
+O importador pergunta **de qual conta** é o extrato, e a resposta vem do cadastro
+de Bancos: conta nova é cadastro, não código. Cada conta tem as próprias regras
+e a própria identidade de linha — junho do BB e junho do PagSeguro são o mesmo
+período e dinheiro diferente.
+
+### Pagamento repetido no mesmo dia existe
+
+O PagSeguro tem dois de R$ 565,53 para Laticínios Conquista em 25/06, e não traz
+número de documento. A ordem dentro do arquivo separa os dois — é estável, o
+mesmo arquivo lido de novo dá a mesma ordem. Sem isso, um deles sumiria calado.
+
 
 Anotações do extrato de conta corrente de junho/2026 (Banco do Brasil), lido
 para planejar duas coisas ainda não construídas: importar as saídas como contas

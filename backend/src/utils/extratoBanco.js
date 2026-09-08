@@ -19,13 +19,20 @@ const { lerArquivo } = require('./lerPlanilha');
 // Os dois precisam funcionar: o dono baixa ora um, ora outro.
 const COLUNAS = {
   data: ['data', 'data do lancamento', 'data lancamento', 'dt'],
-  lancamento: ['lancamento', 'historico', 'descricao', 'descricao do lancamento'],
-  detalhes: ['detalhes', 'detalhe', 'complemento', 'detalhamento hist', 'detalhamento historico'],
+  lancamento: ['lancamento', 'historico', 'tipo', 'descricao do lancamento'],
+  detalhes: [
+    'detalhes', 'detalhe', 'complemento', 'detalhamento hist', 'detalhamento historico',
+    'descricao', 'destino', 'favorecido', 'beneficiario', 'contraparte',
+  ],
   documento: ['n documento', 'no documento', 'numero documento', 'documento'],
   valor: ['valor', 'valor r', 'valor r$', 'vlr', 'vlr r'],
-  // Opcional: existe só no formato cru. Quando existe, é ela que diz se o
-  // lançamento é crédito ou débito.
-  natureza: ['inf', 'natureza', 'd c', 'c d', 'tipo'],
+  // Diz se o lançamento é crédito ou débito, quando a coluna de valor não traz a
+  // letra colada. Existe no extrato cru do Banco do Brasil.
+  natureza: ['inf', 'natureza', 'd c', 'c d', 'movimentacao', 'movimento'],
+  // Outros bancos não usam uma coluna de valor só: separam entrada e saída em
+  // duas, com a saída em número negativo. É o caso do PagSeguro.
+  entrada: ['entradas', 'entrada', 'credito', 'creditos'],
+  saida: ['saidas', 'saida', 'debito', 'debitos'],
 };
 
 const semAcento = (t) =>
@@ -64,6 +71,20 @@ function chaveDe(lancamento, detalhes) {
   return limpo && !repete ? `${natureza} | ${limpo}` : natureza;
 }
 
+// Célula numérica vem como número e não tem ambiguidade. Só texto precisa de
+// interpretação — e aí vale a regra brasileira, com a vírgula decimal.
+function numeroDaCelula(bruto) {
+  if (typeof bruto === 'number') return Number.isFinite(bruto) ? bruto : null;
+  const t = String(bruto ?? '').trim();
+  if (!t) return null;
+  const negativo = /^-/.test(t);
+  const limpo = t.replace(/[^\d.,]/g, '');
+  if (!limpo) return null;
+  const n = Number(limpo.includes(',') ? limpo.replace(/\./g, '').replace(',', '.') : limpo);
+  if (!Number.isFinite(n)) return null;
+  return negativo ? -Math.abs(n) : n;
+}
+
 // Valor vem como texto: "1.067,79 C" no formato resumido, "1.067,79" no cru com
 // a letra numa coluna à parte. `natureza` é essa coluna, quando ela existe.
 //
@@ -71,14 +92,36 @@ function chaveDe(lancamento, detalhes) {
 // é transformar recebimento em despesa. Nesse caso devolve nulo e a linha fica
 // de fora, contada como inválida.
 function lerValor(bruto, natureza) {
-  const m = String(bruto ?? '').trim().match(/^([\d.,]+)\s*([CD])?$/i);
+  const texto = String(bruto ?? '').trim();
+  const m = texto.match(/^(-?)\s*([\d.,]+)\s*([CD])?$/i);
   if (!m) return null;
-  const valor = Number(m[1].replace(/\./g, '').replace(',', '.'));
-  if (!Number.isFinite(valor)) return null;
+  const valor = numeroDaCelula(m[2]);
+  if (valor === null || !Number.isFinite(valor)) return null;
 
-  const letra = (m[2] || String(natureza ?? '').trim().charAt(0) || '').toUpperCase();
-  if (letra !== 'C' && letra !== 'D') return null;
-  return { valor, saida: letra === 'D' };
+  // Ordem de confiança: a coluna de natureza, depois a letra colada no valor,
+  // depois o sinal. O sinal vem por último porque é o mais frágil — mas em
+  // extrato que só traz ele (a Stone é assim), é o que existe.
+  const daColuna = String(natureza ?? '').trim().charAt(0).toUpperCase();
+  const letra = ['C', 'D'].includes(daColuna) ? daColuna : (m[3] || '').toUpperCase();
+  if (letra === 'C' || letra === 'D') return { valor: Math.abs(valor), saida: letra === 'D' };
+  if (m[1] === '-') return { valor: Math.abs(valor), saida: true };
+  // Positivo, sem letra e sem coluna de natureza: não dá para afirmar que saiu.
+  // Fica de fora — dizer que é saída aqui inventaria despesa.
+  return typeof bruto === 'number' && bruto < 0 ? { valor: Math.abs(valor), saida: true } : null;
+}
+
+// Quanto e para que lado. Cada banco conta de um jeito: coluna única com a letra
+// colada, coluna única mais uma coluna de natureza, ou duas colunas separadas
+// para entrada e saída. Os três chegam aqui e saem iguais.
+function lerMovimento(linha, mapa) {
+  if (mapa.saida !== undefined || mapa.entrada !== undefined) {
+    const saiu = mapa.saida === undefined ? null : numeroDaCelula(linha[mapa.saida]);
+    if (saiu) return { valor: Math.abs(saiu), saida: true };
+    const entrou = mapa.entrada === undefined ? null : numeroDaCelula(linha[mapa.entrada]);
+    if (entrou) return { valor: Math.abs(entrou), saida: false };
+    return null;
+  }
+  return lerValor(linha[mapa.valor], mapa.natureza === undefined ? '' : linha[mapa.natureza]);
 }
 
 function lerData(bruto) {
@@ -86,8 +129,10 @@ function lerData(bruto) {
     const p = (n) => String(n).padStart(2, '0');
     return `${bruto.getFullYear()}-${p(bruto.getMonth() + 1)}-${p(bruto.getDate())}`;
   }
+  // A hora pode vir junto ("30/06/2026 21:00") e é descartada: o lançamento é do
+  // dia, e guardar a hora só criaria diferença entre extratos do mesmo dinheiro.
   const t = String(bruto ?? '').trim();
-  const br = t.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const br = t.match(/^(\d{2})\/(\d{2})\/(\d{4})\b/);
   if (br) return `${br[3]}-${br[2]}-${br[1]}`;
   const iso = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
   return iso ? iso[0] : null;
@@ -118,7 +163,7 @@ function formaDe(lancamento) {
 // E o resultado é um resumo de tamanho fixo, não o texto cortado. legado_id tem
 // 40 caracteres; um documento longo empurrava o resto para fora e duas linhas
 // diferentes podiam virar a mesma — uma delas sumiria calada.
-function impressaoDigital({ data, valor, documento, chave }) {
+function impressaoDigital({ data, valor, documento, chave, ocorrencia = 1, bancoId = 0 }) {
   const doc = String(documento || '').replace(/^0+/, '');
   // Com número de documento, ele basta: é o identificador que o próprio banco dá
   // à transação, e data+valor+documento não repete dentro de um extrato. A
@@ -128,7 +173,18 @@ function impressaoDigital({ data, valor, documento, chave }) {
   //
   // Sem documento não há o que fazer além de usar a descrição, e aí vale a pena:
   // duas saídas no mesmo dia pelo mesmo valor existem.
-  const conteudo = doc ? `${data}|${valor.toFixed(2)}|${doc}` : `${data}|${valor.toFixed(2)}||${chave}`;
+  // O banco entra na identidade: um pagamento de R$ 500 no mesmo dia, saindo do
+  // Banco do Brasil e da Stone, são dois pagamentos e não um.
+  const conta = `${bancoId || 0}`;
+  const base = doc
+    ? `${conta}|${data}|${valor.toFixed(2)}|${doc}`
+    : `${conta}|${data}|${valor.toFixed(2)}||${chave}`;
+  // Pagamento repetido no mesmo dia, para o mesmo lugar e pelo mesmo valor
+  // existe: o extrato do PagSeguro tem dois de R$ 565,53 para Laticínios
+  // Conquista em 25/06. Sem número de documento eles seriam a mesma linha e um
+  // sumiria calado. A ordem dentro do arquivo os separa, e é estável: o mesmo
+  // arquivo lido de novo dá a mesma ordem.
+  const conteudo = ocorrencia > 1 ? `${base}#${ocorrencia}` : base;
   return `banco:${crypto.createHash('sha1').update(conteudo).digest('hex').slice(0, 24)}`;
 }
 
@@ -151,13 +207,18 @@ function acharCabecalho(linhas) {
   return melhor;
 }
 
-async function lerExtratoBanco(buffer, nomeArquivo) {
+async function lerExtratoBanco(buffer, nomeArquivo, bancoId = 0) {
   const todas = await lerArquivo(buffer, nomeArquivo);
   if (!todas.length) throw new Error('Não foi possível ler nenhuma linha da planilha.');
 
   const cabecalho = acharCabecalho(todas);
-  // Sem data e sem valor não há extrato nenhum: é o mínimo para reconhecer.
-  if (cabecalho.mapa.data === undefined || cabecalho.mapa.valor === undefined) {
+  // O mínimo para reconhecer: uma data e algum jeito de saber o valor — seja uma
+  // coluna de valor, seja a dupla entrada/saída de quem separa as duas.
+  const temValor =
+    cabecalho.mapa.valor !== undefined ||
+    cabecalho.mapa.saida !== undefined ||
+    cabecalho.mapa.entrada !== undefined;
+  if (cabecalho.mapa.data === undefined || !temValor) {
     // Mostrar só a primeira linha não ajuda: nestes extratos ela é o título da
     // planilha, e o cabeçalho de verdade está mais abaixo. Vai a linha que mais
     // pareceu cabeçalho e as primeiras linhas, para dar o que olhar.
@@ -175,6 +236,9 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
   const mapa = cabecalho.mapa;
   const linhas = todas.slice(cabecalho.indice + 1);
   const saidas = [];
+  // Conta quantas vezes a mesma linha já apareceu, para separar repetição
+  // legítima de reimportação.
+  const jaVistas = new Map();
   // `rodape` separa o que nunca foi lançamento — o bloco de juros, IOF e resgate
   // automático que o banco põe no fim, e as linhas em branco. Contá-las como
   // "inválidas" faria parecer que se perdeu pagamento, quando não se perdeu nada.
@@ -185,7 +249,7 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
     if (EH_SALDO.test(lancamento)) { ignoradas.saldo += 1; continue; }
 
     const data = lerData(linha[mapa.data]);
-    const v = lerValor(linha[mapa.valor], mapa.natureza === undefined ? '' : linha[mapa.natureza]);
+    const v = lerMovimento(linha, mapa);
     if (!data && !v) { ignoradas.rodape += 1; continue; }
     if (!data || !v || !v.valor) { ignoradas.invalida += 1; continue; }
     if (!v.saida) { ignoradas.entrada += 1; continue; }
@@ -193,6 +257,10 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
     const detalhes = String(linha[mapa.detalhes] ?? '').trim();
     const documento = String(linha[mapa.documento] ?? '').trim();
     const chave = chaveDe(lancamento, detalhes);
+
+    const identidade = `${data}|${v.valor.toFixed(2)}|${documento.replace(/^0+/, '')}|${chave}`;
+    const ocorrencia = (jaVistas.get(identidade) || 0) + 1;
+    jaVistas.set(identidade, ocorrencia);
 
     saidas.push({
       data,
@@ -202,7 +270,7 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
       valor: v.valor,
       forma: formaDe(lancamento),
       chave,
-      impressao: impressaoDigital({ data, valor: v.valor, documento, chave }),
+      impressao: impressaoDigital({ data, valor: v.valor, documento, chave, ocorrencia, bancoId }),
     });
   }
 

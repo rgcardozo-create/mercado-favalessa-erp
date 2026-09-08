@@ -14,6 +14,17 @@ const { registrarAuditoria } = require('../utils/auditoria');
 const ACOES = ['lancar', 'ignorar'];
 const TIPOS = ['fornecedor', 'ceasa', 'fixa', 'imposto', 'operacional', 'despesa'];
 
+// De qual conta é o extrato. É obrigatório: sem saber o banco, a mesma descrição
+// em contas diferentes disputa a mesma regra, e a trava contra misturar formatos
+// olharia o período de todos juntos.
+async function bancoDoCorpo(req) {
+  const id = Number(req.body.banco_id);
+  if (!id) return { erro: 'Escolha de qual conta é este extrato.' };
+  const { rows } = await pool.query('SELECT id, nome FROM bancos WHERE id = $1', [id]);
+  if (!rows[0]) return { erro: 'Conta não encontrada no cadastro de Bancos.' };
+  return { banco: rows[0] };
+}
+
 function arquivoDoCorpo(req) {
   const base64 = req.body.arquivo_base64;
   if (!base64) return null;
@@ -21,7 +32,7 @@ function arquivoDoCorpo(req) {
 }
 
 // Junta as saídas por chave e pendura o que já se sabe de cada uma.
-async function montarGrupos(saidas) {
+async function montarGrupos(saidas, bancoId) {
   const chaves = [...new Set(saidas.map((s) => s.chave))];
   const impressoes = saidas.map((s) => s.impressao);
 
@@ -30,8 +41,8 @@ async function montarGrupos(saidas) {
         `SELECT r.*, f.nome AS fornecedor_nome
            FROM regras_extrato r
            LEFT JOIN fornecedores f ON f.id = r.fornecedor_id
-          WHERE r.chave = ANY($1::text[])`,
-        [chaves]
+          WHERE r.chave = ANY($1::text[]) AND COALESCE(r.banco_id, 0) = $2`,
+        [chaves, bancoId || 0]
       )
     : { rows: [] };
   const porChave = new Map(regras.map((r) => [r.chave, r]));
@@ -92,16 +103,19 @@ async function montarGrupos(saidas) {
 //
 // A saída não é adivinhar: é não deixar misturar. Se o período já foi importado
 // de um jeito, o outro é recusado, com o aviso do que fazer.
-async function conflitoDeModo(lido) {
+async function conflitoDeModo(lido, banco) {
   if (!lido.saidas.length) return null;
   const datas = lido.saidas.map((s) => s.data).sort();
+  // Só olha o que veio DESTA conta: junho do Banco do Brasil e junho do
+  // PagSeguro são o mesmo período e dinheiro diferente.
   const { rows } = await pool.query(
     `SELECT count(*) FILTER (WHERE observacoes ILIKE '%agrupad%')::int AS agrupadas,
             count(*) FILTER (WHERE observacoes NOT ILIKE '%agrupad%')::int AS detalhadas
        FROM contas
       WHERE legado_id LIKE 'banco:%'
+        AND observacoes ILIKE $3
         AND vencimento BETWEEN $1 AND $2`,
-    [datas[0], datas[datas.length - 1]]
+    [datas[0], datas[datas.length - 1], `%[${banco.nome}]%`]
   );
   const { agrupadas, detalhadas } = rows[0];
   if (!agrupadas && !detalhadas) return null;
@@ -126,18 +140,21 @@ async function conflitoDeModo(lido) {
 async function analisar(req, res) {
   const buffer = arquivoDoCorpo(req);
   if (!buffer) return res.status(400).json({ error: 'Envie o arquivo do extrato.' });
+  const { banco, erro } = await bancoDoCorpo(req);
+  if (erro) return res.status(400).json({ error: erro });
 
-  const lido = await lerExtratoBanco(buffer, req.body.nome_arquivo || 'extrato.xlsx');
+  const lido = await lerExtratoBanco(buffer, req.body.nome_arquivo || 'extrato.xlsx', banco.id);
   if (!lido.reconhecido) {
-    return res.json({ reconhecido: false, colunas: lido.colunas });
+    return res.json({ reconhecido: false, colunas: lido.colunas, amostra: lido.amostra });
   }
 
-  const grupos = await montarGrupos(lido.saidas);
+  const grupos = await montarGrupos(lido.saidas, banco.id);
   return res.json({
     reconhecido: true,
+    banco,
     colunas: lido.colunas,
     modo: lido.modo,
-    conflito: await conflitoDeModo(lido),
+    conflito: await conflitoDeModo(lido, banco),
     ignoradas: lido.ignoradas,
     total_saidas: lido.saidas.length,
     total_valor: lido.saidas.reduce((a, s) => a + s.valor, 0),
@@ -164,10 +181,13 @@ async function importar(req, res) {
     if (erro) return res.status(400).json({ error: erro });
   }
 
-  const lido = await lerExtratoBanco(buffer, req.body.nome_arquivo || 'extrato.xlsx');
+  const { banco, erro } = await bancoDoCorpo(req);
+  if (erro) return res.status(400).json({ error: erro });
+
+  const lido = await lerExtratoBanco(buffer, req.body.nome_arquivo || 'extrato.xlsx', banco.id);
   if (!lido.reconhecido) return res.status(400).json({ error: 'Não reconheci as colunas deste extrato.' });
 
-  const conflito = await conflitoDeModo(lido);
+  const conflito = await conflitoDeModo(lido, banco);
   if (conflito) return res.status(409).json({ error: conflito.mensagem, conflito });
 
   const porChave = new Map(regras.map((r) => [r.chave, r]));
@@ -181,15 +201,15 @@ async function importar(req, res) {
     // que o dono ensinou não se perde.
     for (const r of regras) {
       await cliente.query(
-        `INSERT INTO regras_extrato (chave, exemplo, acao, tipo, fornecedor_id, categoria, criado_por)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (chave) DO UPDATE
+        `INSERT INTO regras_extrato (chave, exemplo, acao, tipo, fornecedor_id, categoria, criado_por, banco_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (COALESCE(banco_id, 0), chave) DO UPDATE
             SET acao = EXCLUDED.acao, tipo = EXCLUDED.tipo,
                 fornecedor_id = EXCLUDED.fornecedor_id, categoria = EXCLUDED.categoria,
                 exemplo = COALESCE(EXCLUDED.exemplo, regras_extrato.exemplo),
                 atualizado_em = now()`,
         [r.chave, r.exemplo || null, r.acao, r.acao === 'lancar' ? r.tipo : null,
-         r.fornecedor_id || null, r.categoria || null, req.user.id]
+         r.fornecedor_id || null, r.categoria || null, req.user.id, banco.id]
       );
     }
 
@@ -212,7 +232,7 @@ async function importar(req, res) {
           (s.detalhes || s.lancamento).slice(0, 200),
           s.valor,
           s.data,
-          `Do extrato do banco — ${s.lancamento}`,
+          `Do extrato do banco [${banco.nome}] — ${s.lancamento}`,
           s.impressao,
           req.user.id,
         ]
@@ -233,8 +253,8 @@ async function importar(req, res) {
 
     if (regras.length) {
       await cliente.query(
-        'UPDATE regras_extrato SET vezes = vezes + 1 WHERE chave = ANY($1::text[])',
-        [regras.map((r) => r.chave)]
+        'UPDATE regras_extrato SET vezes = vezes + 1 WHERE chave = ANY($1::text[]) AND COALESCE(banco_id, 0) = $2',
+        [regras.map((r) => r.chave), banco.id]
       );
     }
 
@@ -259,10 +279,11 @@ async function importar(req, res) {
 
 async function listarRegras(req, res) {
   const { rows } = await pool.query(
-    `SELECT r.*, f.nome AS fornecedor_nome
+    `SELECT r.*, f.nome AS fornecedor_nome, b.nome AS banco_nome
        FROM regras_extrato r
        LEFT JOIN fornecedores f ON f.id = r.fornecedor_id
-      ORDER BY r.vezes DESC, r.chave`
+       LEFT JOIN bancos b ON b.id = r.banco_id
+      ORDER BY b.nome, r.vezes DESC, r.chave`
   );
   return res.json(rows);
 }

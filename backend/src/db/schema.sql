@@ -472,3 +472,19 @@ CREATE TABLE IF NOT EXISTS regras_extrato (
   criado_em      TIMESTAMPTZ NOT NULL DEFAULT now(),
   atualizado_em  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- De qual conta veio o extrato. Sem isso, importar junho do Banco do Brasil e
+-- junho do PagSeguro — mesmo período, dinheiro diferente — se confundiria: a
+-- trava que impede misturar formatos olharia para o período e barraria o banco
+-- errado, e a mesma descrição em dois bancos disputaria a mesma regra.
+--
+-- Aponta para o cadastro de Bancos que já existe, então acrescentar uma conta
+-- nova é cadastro, não código.
+ALTER TABLE regras_extrato ADD COLUMN IF NOT EXISTS banco_id INTEGER REFERENCES bancos(id);
+
+-- A regra passa a ser única por banco, não global: "Pix enviado | Favalessa" no
+-- Banco do Brasil e na Stone são coisas diferentes e podem ir para lugares
+-- diferentes.
+ALTER TABLE regras_extrato DROP CONSTRAINT IF EXISTS regras_extrato_chave_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_regras_extrato_banco_chave
+  ON regras_extrato (COALESCE(banco_id, 0), chave);
