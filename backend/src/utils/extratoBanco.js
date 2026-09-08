@@ -56,7 +56,12 @@ function chaveDe(lancamento, detalhes) {
     .trim()
     .toUpperCase()
     .replace(/^PAGAMENTO DE /, '');
-  return limpo ? `${natureza} | ${limpo}` : natureza;
+
+  // Quando o detalhe só repete a natureza, ele não acrescenta nada e ainda
+  // atrapalha: "BB Rende Fácil" vem ora com o detalhe "Rende Facil", ora sem
+  // detalhe nenhum, e viraria duas regras para a mesma coisa.
+  const repete = limpo && (natureza.includes(limpo) || limpo.includes(natureza));
+  return limpo && !repete ? `${natureza} | ${limpo}` : natureza;
 }
 
 // Valor vem como texto: "1.067,79 C" no formato resumido, "1.067,79" no cru com
@@ -170,7 +175,10 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
   const mapa = cabecalho.mapa;
   const linhas = todas.slice(cabecalho.indice + 1);
   const saidas = [];
-  const ignoradas = { saldo: 0, entrada: 0, invalida: 0 };
+  // `rodape` separa o que nunca foi lançamento — o bloco de juros, IOF e resgate
+  // automático que o banco põe no fim, e as linhas em branco. Contá-las como
+  // "inválidas" faria parecer que se perdeu pagamento, quando não se perdeu nada.
+  const ignoradas = { saldo: 0, entrada: 0, invalida: 0, rodape: 0 };
 
   for (const linha of linhas) {
     const lancamento = String(linha[mapa.lancamento] ?? '').trim();
@@ -178,6 +186,7 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
 
     const data = lerData(linha[mapa.data]);
     const v = lerValor(linha[mapa.valor], mapa.natureza === undefined ? '' : linha[mapa.natureza]);
+    if (!data && !v) { ignoradas.rodape += 1; continue; }
     if (!data || !v || !v.valor) { ignoradas.invalida += 1; continue; }
     if (!v.saida) { ignoradas.entrada += 1; continue; }
 
@@ -197,9 +206,19 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
     });
   }
 
+  // O site do banco oferece agrupar os Pix, e o agrupamento vale também para os
+  // Pix ENVIADOS, que são saída. Dois Pix de um dia viram uma linha só, com o
+  // número do documento zerado — mesmo dinheiro, linhas diferentes, identidades
+  // diferentes. Importar o mesmo mês de um jeito e depois do outro duplicaria.
+  //
+  // Por isso o modo do arquivo sai daqui: é com ele que a importação recusa a
+  // mistura.
+  const agrupado = saidas.some((s) => /agrupad/i.test(s.lancamento));
+
   return {
     reconhecido: true,
     mapa,
+    modo: agrupado ? 'agrupado' : 'detalhado',
     linha_cabecalho: cabecalho.indice,
     colunas: (todas[cabecalho.indice] || []).map((c, i) => ({ indice: i, titulo: String(c ?? '') })),
     saidas,

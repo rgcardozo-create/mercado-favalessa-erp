@@ -86,6 +86,43 @@ async function montarGrupos(saidas) {
   return [...grupos.values()].sort((a, b) => b.total - a.total);
 }
 
+// O extrato agrupado junta os Pix enviados do dia numa linha só, sem número de
+// documento. A mesma saída, então, tem uma identidade quando vem detalhada e
+// outra quando vem agrupada — e o sistema não tem como saber que são a mesma.
+//
+// A saída não é adivinhar: é não deixar misturar. Se o período já foi importado
+// de um jeito, o outro é recusado, com o aviso do que fazer.
+async function conflitoDeModo(lido) {
+  if (!lido.saidas.length) return null;
+  const datas = lido.saidas.map((s) => s.data).sort();
+  const { rows } = await pool.query(
+    `SELECT count(*) FILTER (WHERE observacoes ILIKE '%agrupad%')::int AS agrupadas,
+            count(*) FILTER (WHERE observacoes NOT ILIKE '%agrupad%')::int AS detalhadas
+       FROM contas
+      WHERE legado_id LIKE 'banco:%'
+        AND vencimento BETWEEN $1 AND $2`,
+    [datas[0], datas[datas.length - 1]]
+  );
+  const { agrupadas, detalhadas } = rows[0];
+  if (!agrupadas && !detalhadas) return null;
+
+  const jaImportado = agrupadas > 0 ? 'agrupado' : 'detalhado';
+  if (jaImportado === lido.modo) return null;
+
+  return {
+    modo_do_arquivo: lido.modo,
+    modo_ja_importado: jaImportado,
+    de: datas[0],
+    ate: datas[datas.length - 1],
+    mensagem:
+      `Este período já foi importado com o extrato ${jaImportado === 'agrupado' ? 'AGRUPADO' : 'SEM AGRUPAR'}, ` +
+      `e este arquivo está ${lido.modo === 'agrupado' ? 'AGRUPADO' : 'SEM AGRUPAR'}. ` +
+      'No agrupado o banco junta os Pix enviados do dia numa linha só, sem número de documento — ' +
+      'então o mesmo pagamento não é reconhecido entre os dois formatos e entraria em dobro. ' +
+      'Use sempre o mesmo formato, ou apague o que já foi importado deste período antes de trocar.',
+  };
+}
+
 async function analisar(req, res) {
   const buffer = arquivoDoCorpo(req);
   if (!buffer) return res.status(400).json({ error: 'Envie o arquivo do extrato.' });
@@ -99,6 +136,8 @@ async function analisar(req, res) {
   return res.json({
     reconhecido: true,
     colunas: lido.colunas,
+    modo: lido.modo,
+    conflito: await conflitoDeModo(lido),
     ignoradas: lido.ignoradas,
     total_saidas: lido.saidas.length,
     total_valor: lido.saidas.reduce((a, s) => a + s.valor, 0),
@@ -127,6 +166,9 @@ async function importar(req, res) {
 
   const lido = await lerExtratoBanco(buffer, req.body.nome_arquivo || 'extrato.xlsx');
   if (!lido.reconhecido) return res.status(400).json({ error: 'Não reconheci as colunas deste extrato.' });
+
+  const conflito = await conflitoDeModo(lido);
+  if (conflito) return res.status(409).json({ error: conflito.mensagem, conflito });
 
   const porChave = new Map(regras.map((r) => [r.chave, r]));
   const cliente = await pool.connect();

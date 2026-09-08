@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.42.1';
+const VERSAO = '1.43.0';
 
 const state = {
   sessao: getSessao(),
@@ -953,6 +953,16 @@ function previaExtratoBancoHTML() {
     </div>`;
   }
 
+  // O conflito de formato aparece ANTES da lista e trava o botão: deixar
+  // classificar tudo para só então recusar seria fazer trabalho à toa.
+  if (b.conflito) {
+    return `<div class="alerta erro">
+      <strong>Não dá para misturar os dois formatos neste período.</strong><br />
+      ${escapar(b.conflito.mensagem)}<br />
+      <small>Período do arquivo: ${dateBR(b.conflito.de)} a ${dateBR(b.conflito.ate)}.</small>
+    </div>`;
+  }
+
   const escolha = (g) => state.extratoBancoEscolhas[g.chave] || g.regra || {};
   const decididos = b.grupos.filter((g) => (escolha(g).acao || '') !== '');
   const aLancar = b.grupos.filter((g) => escolha(g).acao === 'lancar');
@@ -999,8 +1009,20 @@ function previaExtratoBancoHTML() {
   return `
     <p class="vazio">
       <strong>${b.total_saidas}</strong> saída(s) somando <strong>${brl(b.total_valor)}</strong>, em
-      <strong>${b.grupos.length}</strong> tipo(s) diferentes. Fora da conta ficaram
-      ${b.ignoradas.entrada} recebimento(s) e ${b.ignoradas.saldo} linha(s) de saldo.
+      <strong>${b.grupos.length}</strong> tipo(s) diferentes.
+      Extrato <strong>${b.modo === 'agrupado' ? 'agrupado' : 'sem agrupar'}</strong>.${
+        b.modo === 'agrupado'
+          ? ' <strong>Prefira baixar sem agrupar:</strong> no agrupado o banco junta os Pix enviados do dia numa linha só e sem número de documento, então dois pagamentos diferentes viram um e o sistema perde a única marca segura contra lançar em dobro.'
+          : ' É o formato recomendado — cada pagamento com o próprio número de documento.'
+      }
+      Fora da conta ficaram
+      ${b.ignoradas.entrada} recebimento(s), ${b.ignoradas.saldo} linha(s) de saldo${
+        b.ignoradas.rodape ? ` e ${b.ignoradas.rodape} do rodapé do extrato` : ''
+      }${
+        b.ignoradas.invalida
+          ? ` — e <strong>${b.ignoradas.invalida} linha(s) que não consegui ler</strong>, confira se elas importam`
+          : ''
+      }.
       Decida o que fizer sentido — o que ficar em "decidir" não é lançado e volta no próximo extrato.
     </p>
 
