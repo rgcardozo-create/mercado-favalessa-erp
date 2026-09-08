@@ -10,10 +10,20 @@ precisa dar o mesmo resultado nas quatro. Junho/2026 em cada uma:
 | Banco do Brasil | 64 | R$ 55.829,16 | letra `C`/`D`, colada ou em coluna | só nos boletos |
 | PagSeguro | 192 | R$ 131.487,82 | colunas `Entradas`/`Saidas`, negativo | **sempre**, em `Descrição` |
 | Stone | 40 | R$ 89.239,38 | coluna `Movimentação` (Débito/Crédito) | em `Destino` |
+| Itaú | 18 | R$ 7.418,33 | valor negativo em coluna única | em `Razão Social` |
 
-**É no PagSeguro que o dinheiro sai de verdade.** As saídas do Banco do Brasil e
-da Stone são quase todas varredura para lá — no BB são R$ 36 mil de Pix para a
-própria conta, na Stone são R$ 81 mil dos R$ 89 mil.
+O arquivo do Itaú o ExcelJS **não abre** — quebra no `lastModifiedBy` do XML.
+Quem o lê é o `lerXlsxCru`, o leitor de reserva escrito para o extrato da Stone.
+
+Valor positivo sem letra e sem coluna de natureza é **crédito**, não linha
+ilegível: num extrato que marca a saída pelo sinal, o que não tem sinal entrou.
+No Itaú são 31 recebimentos da Rede, e chamá-los de ilegíveis mandaria alguém
+procurar pagamento perdido que não existe.
+
+**É no PagSeguro que o dinheiro sai de verdade.** As saídas das outras três são
+quase todas varredura para lá — no BB, R$ 36 mil dos R$ 56 mil; na Stone, R$ 81
+mil dos R$ 89 mil; no Itaú, R$ 4,2 mil dos R$ 7,4 mil, e o resto é tarifa e
+aplicação automática.
 
 O importador pergunta **de qual conta** é o extrato, e a resposta vem do cadastro
 de Bancos: conta nova é cadastro, não código. Cada conta tem as próprias regras
