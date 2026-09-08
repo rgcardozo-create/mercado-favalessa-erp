@@ -1,5 +1,5 @@
 const fs = require('fs');
-const { lerExtratoBanco, chaveDe, lerValor, lerData, formaDe } = require('../src/utils/extratoBanco');
+const { lerExtratoBanco, chaveDe, lerValor, lerData, formaDe, impressaoDigital } = require('../src/utils/extratoBanco');
 const brl = (n) => 'R$ ' + Number(n).toLocaleString('pt-BR', { minimumFractionDigits: 2 });
 let falhas = 0;
 const ok = (rot, cond) => { if (!cond) falhas++; console.log(`  ${cond ? 'ok  ' : 'ERRO'} ${rot}`); };
@@ -10,6 +10,11 @@ const ok = (rot, cond) => { if (!cond) falhas++; console.log(`  ${cond ? 'ok  ' 
   ok('valor "4.133,11 D" é SAÍDA',   JSON.stringify(lerValor('4.133,11 D')) === '{"valor":4133.11,"saida":true}');
   ok('valor "0,00 C" lido',          lerValor('0,00 C').valor === 0);
   ok('valor lixo devolve null',      lerValor('abc') === null);
+  ok('valor sem letra e sem coluna de natureza é recusado', lerValor('1.067,79') === null);
+  ok('valor com a natureza em coluna à parte (formato cru)', JSON.stringify(lerValor('4.133,11', 'D')) === '{"valor":4133.11,"saida":true}');
+  ok('natureza C em coluna à parte',  lerValor('8,11', 'C').saida === false);
+  ok('"Pagamento de Impostos" e "Impostos" viram a mesma chave',
+     chaveDe('Pagamento de Impostos', 'DUA SEFAZ') === chaveDe('Impostos', 'DUA SEFAZ'));
   ok('data 15/06/2026',              lerData('15/06/2026') === '2026-06-15');
   ok('data como Date não escorrega', lerData(new Date(2026, 5, 15)) === '2026-06-15');
   ok('forma de Pix - Enviado',       formaDe('Pix - Enviado') === 'PIX');
@@ -19,6 +24,11 @@ const ok = (rot, cond) => { if (!cond) falhas++; console.log(`  ${cond ? 'ok  ' 
     chaveDe('Pix - Enviado', '01/06 21:07 Favalessa') === chaveDe('Pix - Enviado', '29/06 21:51 Favalessa'));
   console.log('  chave junta as tarifas:',
     chaveDe('Tarifa Pix Enviado', 'Tar. agrupadas - ocorrencia 29/05/2026') === chaveDe('Tarifa Pix Enviado', 'Tar. agrupadas - ocorrencia 03/06/2026'));
+  ok('mesmo pagamento com documento zerado à esquerda dá a mesma impressão',
+     impressaoDigital({ data: '2026-06-01', valor: 8.11, documento: '00000000001045969', chave: 'A' })
+     === impressaoDigital({ data: '2026-06-01', valor: 8.11, documento: '1045969', chave: 'B' }));
+  ok('impressão cabe nos 40 caracteres do legado_id',
+     impressaoDigital({ data: '2026-06-01', valor: 8.11, documento: '1045969', chave: 'X' }).length <= 40);
   console.log('  chave separa Pix enviado de recebido:',
     chaveDe('Pix - Enviado', 'Favalessa') !== chaveDe('Pix - Recebido', 'Favalessa'));
 

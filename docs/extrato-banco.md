@@ -7,6 +7,35 @@ pagas, e conferir os recebimentos dos parceiros contra o que foi vendido.
 O arquivo em si não entra no repositório — é movimentação bancária real. O que
 fica aqui é o formato e o que se aprendeu olhando os números.
 
+## Dois formatos, o mesmo banco
+
+O extrato baixado no **computador** e no **celular** não são iguais. O do celular
+vem resumido, com seis colunas; o do computador vem cru, com onze. O leitor
+precisa dar o mesmo resultado nos dois — o dono baixa ora de um jeito, ora de
+outro.
+
+| | Celular (resumido) | Computador (cru) |
+|---|---|---|
+| Colunas | 6 | 11 |
+| Cabeçalho | linha 1 | linha 3 |
+| Valor | `Valor` | `Valor R$` |
+| Crédito/débito | colado no valor (`1.067,79 C`) | coluna própria, `Inf.` |
+| Natureza | `Lançamento` | `Historico` |
+| Contraparte | `Detalhes` | `Detalhamento Hist.` |
+| Documento | `1045969` | `00000000001045969` |
+
+Duas diferenças mordem:
+
+O **número do documento** vem com zeros à esquerda num e sem no outro. A
+identidade da linha tira os zeros — senão o mesmo mês importado pelos dois
+caminhos duplicaria tudo.
+
+E o banco **nomeia o mesmo lançamento de dois jeitos**: `Pagamento de Impostos`
+no celular, `Impostos` no computador. Foi a única natureza divergente das dez.
+A chave de aprendizado tira o "Pagamento de" da frente, para não ser preciso
+ensinar a mesma coisa duas vezes; e a identidade da linha não usa a descrição,
+só data, valor e documento.
+
 ## Formato
 
 Planilha `.xlsx`, uma aba chamada **Extrato Conta**, cabeçalho na linha 1:

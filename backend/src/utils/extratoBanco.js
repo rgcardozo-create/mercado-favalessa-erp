@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { lerArquivo } = require('./lerPlanilha');
 
 // Leitura do extrato de conta corrente, para lançar o que SAIU.
@@ -12,12 +13,19 @@ const { lerArquivo } = require('./lerPlanilha');
 //    horário. Por isso a classificação não pode depender de adivinhar o nome —
 //    depende de o dono ensinar uma vez e o sistema lembrar.
 
+// O mesmo banco exporta em dois formatos. O resumido traz seis colunas, com o
+// C/D colado no valor ("1.067,79 C"). O cru traz onze, com a natureza numa
+// coluna à parte chamada "Inf." e a coluna de valor chamada "Valor R$".
+// Os dois precisam funcionar: o dono baixa ora um, ora outro.
 const COLUNAS = {
-  data: ['data', 'data do lancamento', 'dt'],
-  lancamento: ['lancamento', 'historico', 'descricao'],
-  detalhes: ['detalhes', 'detalhe', 'complemento'],
+  data: ['data', 'data do lancamento', 'data lancamento', 'dt'],
+  lancamento: ['lancamento', 'historico', 'descricao', 'descricao do lancamento'],
+  detalhes: ['detalhes', 'detalhe', 'complemento', 'detalhamento hist', 'detalhamento historico'],
   documento: ['n documento', 'no documento', 'numero documento', 'documento'],
-  valor: ['valor'],
+  valor: ['valor', 'valor r', 'valor r$', 'vlr', 'vlr r'],
+  // Opcional: existe só no formato cru. Quando existe, é ela que diz se o
+  // lançamento é crédito ou débito.
+  natureza: ['inf', 'natureza', 'd c', 'c d', 'tipo'],
 };
 
 const semAcento = (t) =>
@@ -40,17 +48,32 @@ function chaveDe(lancamento, detalhes) {
     .replace(/\s+/g, ' ')
     .trim()
     .toUpperCase();
-  const natureza = semAcento(lancamento).replace(/\s+/g, ' ').trim().toUpperCase();
+  // "Pagamento de Impostos" e "Impostos" são o mesmo lançamento com dois nomes,
+  // conforme o extrato venha do computador ou do celular. Tirar o "Pagamento de"
+  // junta os dois, para não ser preciso ensinar a mesma coisa duas vezes.
+  const natureza = semAcento(lancamento)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toUpperCase()
+    .replace(/^PAGAMENTO DE /, '');
   return limpo ? `${natureza} | ${limpo}` : natureza;
 }
 
-// Valor vem como texto, "1.067,79 C". A letra é o que importa.
-function lerValor(bruto) {
+// Valor vem como texto: "1.067,79 C" no formato resumido, "1.067,79" no cru com
+// a letra numa coluna à parte. `natureza` é essa coluna, quando ela existe.
+//
+// Sem letra em lugar nenhum não dá para saber se entrou ou saiu — e chutar aqui
+// é transformar recebimento em despesa. Nesse caso devolve nulo e a linha fica
+// de fora, contada como inválida.
+function lerValor(bruto, natureza) {
   const m = String(bruto ?? '').trim().match(/^([\d.,]+)\s*([CD])?$/i);
   if (!m) return null;
   const valor = Number(m[1].replace(/\./g, '').replace(',', '.'));
   if (!Number.isFinite(valor)) return null;
-  return { valor, saida: String(m[2] || '').toUpperCase() === 'D' };
+
+  const letra = (m[2] || String(natureza ?? '').trim().charAt(0) || '').toUpperCase();
+  if (letra !== 'C' && letra !== 'D') return null;
+  return { valor, saida: letra === 'D' };
 }
 
 function lerData(bruto) {
@@ -80,6 +103,30 @@ function formaDe(lancamento) {
   return 'Transferência';
 }
 
+// Identidade da linha no extrato — é ela que faz reimportar não duplicar.
+//
+// Dois cuidados aprendidos na marra. O número do documento vem com zeros à
+// esquerda num formato e sem eles no outro, então os zeros saem: o mesmo
+// pagamento baixado pelo computador e pelo celular tem que dar a mesma
+// identidade, senão importar o mês pelos dois caminhos duplicaria tudo.
+//
+// E o resultado é um resumo de tamanho fixo, não o texto cortado. legado_id tem
+// 40 caracteres; um documento longo empurrava o resto para fora e duas linhas
+// diferentes podiam virar a mesma — uma delas sumiria calada.
+function impressaoDigital({ data, valor, documento, chave }) {
+  const doc = String(documento || '').replace(/^0+/, '');
+  // Com número de documento, ele basta: é o identificador que o próprio banco dá
+  // à transação, e data+valor+documento não repete dentro de um extrato. A
+  // descrição fica DE FORA de propósito — o banco escreve o mesmo lançamento de
+  // um jeito no arquivo do computador e de outro no do celular ("Impostos" x
+  // "Pagamento de Impostos"), e incluí-la faria o mesmo pagamento parecer dois.
+  //
+  // Sem documento não há o que fazer além de usar a descrição, e aí vale a pena:
+  // duas saídas no mesmo dia pelo mesmo valor existem.
+  const conteudo = doc ? `${data}|${valor.toFixed(2)}|${doc}` : `${data}|${valor.toFixed(2)}||${chave}`;
+  return `banco:${crypto.createHash('sha1').update(conteudo).digest('hex').slice(0, 24)}`;
+}
+
 // O cabeçalho não está sempre na primeira linha: o extrato traz título e período
 // antes. Procuramos a linha que mais parece cabeçalho pelos nomes das colunas.
 function acharCabecalho(linhas) {
@@ -106,9 +153,17 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
   const cabecalho = acharCabecalho(todas);
   // Sem data e sem valor não há extrato nenhum: é o mínimo para reconhecer.
   if (cabecalho.mapa.data === undefined || cabecalho.mapa.valor === undefined) {
+    // Mostrar só a primeira linha não ajuda: nestes extratos ela é o título da
+    // planilha, e o cabeçalho de verdade está mais abaixo. Vai a linha que mais
+    // pareceu cabeçalho e as primeiras linhas, para dar o que olhar.
+    const candidata = cabecalho.indice >= 0 ? todas[cabecalho.indice] : todas[0];
     return {
       reconhecido: false,
-      colunas: (todas[0] || []).map((c, i) => ({ indice: i, titulo: String(c ?? '') })),
+      colunas: (candidata || []).map((c, i) => ({ indice: i, titulo: String(c ?? '') })),
+      amostra: todas
+        .slice(0, 8)
+        .map((l) => (l || []).map((c) => String(c ?? '').slice(0, 24)))
+        .filter((l) => l.some((c) => c !== '')),
     };
   }
 
@@ -122,12 +177,13 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
     if (EH_SALDO.test(lancamento)) { ignoradas.saldo += 1; continue; }
 
     const data = lerData(linha[mapa.data]);
-    const v = lerValor(linha[mapa.valor]);
+    const v = lerValor(linha[mapa.valor], mapa.natureza === undefined ? '' : linha[mapa.natureza]);
     if (!data || !v || !v.valor) { ignoradas.invalida += 1; continue; }
     if (!v.saida) { ignoradas.entrada += 1; continue; }
 
     const detalhes = String(linha[mapa.detalhes] ?? '').trim();
     const documento = String(linha[mapa.documento] ?? '').trim();
+    const chave = chaveDe(lancamento, detalhes);
 
     saidas.push({
       data,
@@ -136,10 +192,8 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
       documento,
       valor: v.valor,
       forma: formaDe(lancamento),
-      chave: chaveDe(lancamento, detalhes),
-      // Identidade da linha no extrato, para reimportar não duplicar. Entra o
-      // documento porque dois pagamentos iguais no mesmo dia existem.
-      impressao: `banco:${data}:${v.valor.toFixed(2)}:${documento}:${chaveDe(lancamento, detalhes)}`.slice(0, 40),
+      chave,
+      impressao: impressaoDigital({ data, valor: v.valor, documento, chave }),
     });
   }
 
@@ -153,4 +207,4 @@ async function lerExtratoBanco(buffer, nomeArquivo) {
   };
 }
 
-module.exports = { lerExtratoBanco, chaveDe, formaDe, lerValor, lerData };
+module.exports = { lerExtratoBanco, chaveDe, formaDe, lerValor, lerData, impressaoDigital };
