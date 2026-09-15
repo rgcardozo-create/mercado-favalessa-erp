@@ -488,3 +488,35 @@ ALTER TABLE regras_extrato ADD COLUMN IF NOT EXISTS banco_id INTEGER REFERENCES 
 ALTER TABLE regras_extrato DROP CONSTRAINT IF EXISTS regras_extrato_chave_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_regras_extrato_banco_chave
   ON regras_extrato (COALESCE(banco_id, 0), chave);
+
+-- Contas pessoais do dono. TABELA À PARTE, e não mais um tipo dentro de
+-- `contas`, de propósito.
+--
+-- A regra do SPEC.md é que dinheiro pessoal nunca entre em nenhum total da
+-- empresa. Como um tipo novo em `contas`, essa regra dependeria de toda consulta
+-- de painel, relatório, gerencial e conciliação lembrar de filtrar — e bastaria
+-- uma esquecer para a conta de luz da casa dele virar despesa do mercado, sem
+-- aviso nenhum. Em tabela separada, nenhuma consulta da empresa a alcança: o
+-- vazamento deixa de ser questão de disciplina e passa a ser impossível.
+--
+-- Só o Master enxerga (ver `soMaster` em db/telas.js). Não há fornecedor, banco
+-- nem conciliação aqui: é uma lista de contas a pagar da vida dele, e o que ela
+-- precisa fazer é não deixar ele esquecer.
+CREATE TABLE IF NOT EXISTS contas_pessoais (
+  id              SERIAL PRIMARY KEY,
+  descricao       VARCHAR(200) NOT NULL,
+  categoria       VARCHAR(60),
+  valor           NUMERIC(12,2) NOT NULL CHECK (valor >= 0),
+  vencimento      DATE NOT NULL,
+  pago_em         DATE,
+  forma_pagamento VARCHAR(40),
+  observacoes     TEXT,
+  parcela         SMALLINT,
+  total_parcelas  SMALLINT,
+  criado_por      INTEGER REFERENCES usuarios(id),
+  criado_em       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_contas_pessoais_vencimento ON contas_pessoais (vencimento);
+CREATE INDEX IF NOT EXISTS idx_contas_pessoais_aberto ON contas_pessoais (pago_em) WHERE pago_em IS NULL;
