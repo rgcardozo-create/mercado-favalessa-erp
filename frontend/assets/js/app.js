@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.45.1';
+const VERSAO = '1.46.0';
 
 const state = {
   sessao: getSessao(),
@@ -21,6 +21,8 @@ const state = {
   tipo: 'fornecedor',
   contas: [],
   fornecedores: [],
+  // Por fornecedor: { padrao, sugestoes } — a descrição que ele costuma escrever.
+  descricoesUsuais: {},
   // Listas do cadastro que a baixa usa: forma de pagamento e banco.
   formasPagamento: [],
   bancos: [],
@@ -321,14 +323,16 @@ async function carregarDados() {
       if (state.statusFiltro) params.set('status', state.statusFiltro);
       if (state.buscaContas.trim()) params.set('busca', state.buscaContas.trim());
       if (state.mesFiltro) params.set('mes', state.mesFiltro);
-      const [contas, fornecedores, formas, bancos] = await Promise.all([
+      const [contas, fornecedores, formas, bancos, descricoes] = await Promise.all([
         apiFetch(`/contas?${params}`),
         apiFetch('/fornecedores'),
         apiFetch('/cadastros/formas-pagamento'),
         apiFetch('/cadastros/bancos'),
+        apiFetch('/contas/descricoes'),
       ]);
       state.contas = contas;
       state.fornecedores = fornecedores;
+      state.descricoesUsuais = descricoes;
       // A marcação vale para a lista que estava na tela; recarregou, some.
       state.contasMarcadas = new Set();
       state.formasPagamento = formas;
@@ -3549,6 +3553,47 @@ function textoListaVazia() {
   return 'Nenhum lançamento cadastrado.';
 }
 
+// A descrição que o dono costuma escrever para cada fornecedor. Vem do que ele
+// já escreveu antes — "Comercial Resplendor" vira "Resplendor", "Rio de Janeiro
+// Indústria de Bebidas" vira "Coca-Cola" —, então acompanha o costume sozinha,
+// sem ninguém cadastrar nada. Fornecedor novo não tem histórico: fica em branco
+// e ele digita, como sempre fez.
+function descricaoUsual(fornecedorId) {
+  if (!fornecedorId) return { padrao: null, sugestoes: [] };
+  return state.descricoesUsuais[String(fornecedorId)] || { padrao: null, sugestoes: [] };
+}
+
+function sugestoesDescricaoHTML(fornecedorId) {
+  return descricaoUsual(fornecedorId)
+    .sugestoes.map((d) => `<option value="${escapar(d)}"></option>`)
+    .join('');
+}
+
+// Trocou o fornecedor: a tela sugere a descrição de sempre e troca a listinha.
+//
+// Só escreve por cima do que ela mesma escreveu. Se ele digitou alguma coisa, o
+// que ele digitou manda — palpite do sistema não apaga trabalho de ninguém.
+function ligarSugestaoDeDescricao(form) {
+  const selecaoFornecedor = form.querySelector('select[name="fornecedor_id"]');
+  const campoDescricao = form.querySelector('input[name="descricao"]');
+  if (!selecaoFornecedor || !campoDescricao) return;
+
+  const lista = form.querySelector('#sugestoes-descricao');
+
+  selecaoFornecedor.addEventListener('change', () => {
+    const { padrao } = descricaoUsual(selecaoFornecedor.value);
+
+    if (lista) lista.innerHTML = sugestoesDescricaoHTML(selecaoFornecedor.value);
+
+    const digitado = campoDescricao.value.trim();
+    const eraPalpite = digitado === (campoDescricao.dataset.palpite || '');
+    if (digitado && !eraPalpite) return;
+
+    campoDescricao.value = padrao || '';
+    campoDescricao.dataset.palpite = padrao || '';
+  });
+}
+
 function contasHTML() {
   const podeGerir = podeGerenciar();
   const ehCeasa = state.tipo === 'ceasa';
@@ -3622,7 +3667,12 @@ function contasHTML() {
               </label>`
             : ''
         }
-        <label>Descrição <input type="text" name="descricao" required value="${escapar(pendente.descricao || '')}" /></label>
+        <label>Descrição
+          <input type="text" name="descricao" required
+                 value="${escapar(pendente.descricao || '')}"
+                 ${ehFornecedor ? 'list="sugestoes-descricao" autocomplete="off"' : ''} />
+        </label>
+        ${ehFornecedor ? `<datalist id="sugestoes-descricao">${sugestoesDescricaoHTML(pendente.fornecedor_id)}</datalist>` : ''}
         ${ehDespesa ? `<label>Categoria <input type="text" name="categoria" placeholder="Manutenção, Outros..." value="${escapar(pendente.categoria || '')}" /></label>` : ''}
         <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${escapar(pendente.valor || '')}" /></label>
         <label>${ehDespesa ? 'Data' : 'Vencimento'} <input type="date" name="vencimento" required value="${escapar(pendente.vencimento || '')}" /></label>
@@ -3884,7 +3934,10 @@ function bind() {
   root.querySelectorAll('form.form-inline').forEach(ligarEnterQueAvanca);
 
   const formConta = root.querySelector('[data-action="nova-conta"]');
-  if (formConta) formConta.addEventListener('submit', onNovaConta);
+  if (formConta) {
+    formConta.addEventListener('submit', onNovaConta);
+    ligarSugestaoDeDescricao(formConta);
+  }
 
   root.querySelectorAll('[data-action="atencao"]').forEach((btn) => {
     btn.addEventListener('click', () => onMarcarAtencao(Number(btn.dataset.id), !btn.classList.contains('ativa')));

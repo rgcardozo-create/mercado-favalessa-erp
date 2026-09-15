@@ -103,6 +103,91 @@ async function listar(req, res) {
   return res.json(rows);
 }
 
+// Quantas vezes a mesma descrição precisa ter sido usada com aquele fornecedor
+// para virar "o padrão da casa". Uma vez só não é hábito: pode ter sido o número
+// de uma nota ("NF 4412"), e preencher isso sozinho colocaria um número errado
+// com cara de certo. Duas vezes é escolha repetida.
+const VEZES_PARA_VIRAR_PADRAO = 2;
+
+// Quantas descrições anteriores a tela oferece na listinha de cada fornecedor.
+const MAXIMO_DE_SUGESTOES = 6;
+
+// A descrição que o dono costuma escrever para cada fornecedor, tirada do que
+// ele já escreveu — não de um cadastro à parte. Cadastro à parte envelhece:
+// alguém preenche uma vez, o costume muda e a tela passa a sugerir o que
+// ninguém usa mais. Saindo do histórico, o hábito de hoje é o que aparece.
+//
+// Maiúscula e acento não separam: "Resplendor" e "resplendor" são a mesma
+// escolha; vale a grafia da vez mais recente.
+async function descricoesUsuais(req, res) {
+  const { rows } = await pool.query(
+    `WITH base AS (
+       SELECT fornecedor_id,
+              btrim(descricao) AS descricao,
+              lower(btrim(descricao)) AS chave,
+              vencimento,
+              id
+         FROM contas
+        WHERE fornecedor_id IS NOT NULL
+          AND btrim(descricao) <> ''
+     ),
+     grafias AS (
+       SELECT fornecedor_id, chave, descricao,
+              count(*) AS vezes_grafia,
+              max(vencimento) AS ultima_grafia,
+              max(id) AS ultimo_id
+         FROM base
+        GROUP BY fornecedor_id, chave, descricao
+     ),
+     -- Escrita a mesma palavra de jeitos diferentes ("Resplendor", "RESPLENDOR"),
+     -- vale a grafia mais usada; empatou, a mais recente. A regra do recurso é
+     -- "o que você mais usa" — valeria pouco acertar a palavra e errar o jeito
+     -- de escrever.
+     grafia_preferida AS (
+       SELECT DISTINCT ON (fornecedor_id, chave) fornecedor_id, chave, descricao
+         FROM grafias
+        ORDER BY fornecedor_id, chave, vezes_grafia DESC, ultima_grafia DESC, ultimo_id DESC
+     ),
+     usos AS (
+       SELECT b.fornecedor_id,
+              count(*)::int AS vezes,
+              max(g.descricao) AS descricao,
+              max(b.vencimento) AS ultima
+         FROM base b
+         JOIN grafia_preferida g
+           ON g.fornecedor_id = b.fornecedor_id AND g.chave = b.chave
+        GROUP BY b.fornecedor_id, b.chave
+     ),
+     ordenado AS (
+       SELECT fornecedor_id, descricao, vezes,
+              row_number() OVER (
+                PARTITION BY fornecedor_id
+                ORDER BY vezes DESC, ultima DESC, descricao
+              ) AS posicao
+         FROM usos
+     )
+     SELECT fornecedor_id, descricao, vezes
+       FROM ordenado
+      WHERE posicao <= $1
+      ORDER BY fornecedor_id, posicao`,
+    [MAXIMO_DE_SUGESTOES]
+  );
+
+  const porFornecedor = {};
+  for (const linha of rows) {
+    const chave = String(linha.fornecedor_id);
+    if (!porFornecedor[chave]) porFornecedor[chave] = { padrao: null, sugestoes: [] };
+    porFornecedor[chave].sugestoes.push(linha.descricao);
+    // A primeira da lista é a mais usada — só ela pode virar padrão, e só se
+    // repetiu o bastante.
+    if (porFornecedor[chave].sugestoes.length === 1 && linha.vezes >= VEZES_PARA_VIRAR_PADRAO) {
+      porFornecedor[chave].padrao = linha.descricao;
+    }
+  }
+
+  return res.json(porFornecedor);
+}
+
 async function obter(req, res) {
   const { id } = req.params;
   const { rows } = await pool.query(`${SELECT_CONTAS_COM_SALDO} WHERE c.id = $1`, [id]);
@@ -575,6 +660,7 @@ module.exports = {
   mover,
   marcarAtencao,
   listar,
+  descricoesUsuais,
   obter,
   criar,
   atualizar,
