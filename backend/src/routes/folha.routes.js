@@ -31,6 +31,7 @@ router.get('/compras-prazo/:id', asyncHandler(folha.comprasDoFuncionario));
 
 // Calculadora: não grava nada, só devolve a conta aberta.
 router.post('/calculo-horas', asyncHandler(folha.calculoHoras));
+router.post('/calculo-ferias', asyncHandler(folha.calculoFerias));
 
 // Percentuais da convenção coletiva.
 router.get('/parametros', asyncHandler(parametros.listar));
