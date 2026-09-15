@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.47.0';
+const VERSAO = '1.49.0';
 
 const state = {
   sessao: getSessao(),
@@ -121,6 +121,10 @@ const state = {
   calculoEntrada: {},
   calculoFerias: null,
   feriasEntrada: {},
+  calculoRescisao: null,
+  rescisaoEntrada: {},
+  // Sub-aba da Folha: 'folha' (lançamentos) ou 'calculos'.
+  folhaAba: 'folha',
   parametrosTrabalhistas: null,
   // Registro do Cadastros aberto para correção. O mesmo formulário cadastra e edita.
   cadastroEditando: null,
@@ -2525,6 +2529,45 @@ function calculadoraHorasHTML() {
   `;
 }
 
+// Somar dias a uma data ISO sem passar pelo fuso: `new Date('2026-10-01')` é
+// meia-noite em UTC e, no horário de Brasília, já é o dia anterior.
+function somarDiasISO(iso, n) {
+  if (!iso) return iso;
+  const [a, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(a, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+// Enquanto ele digita o início e a quantidade de dias, a tela já responde
+// quando as férias terminam e quando ele volta. Ter que apertar Calcular só
+// para descobrir a data de retorno é o tipo de ida e volta que faz a pessoa
+// pegar o celular e contar no calendário.
+function ligarPreviaDeFerias(form) {
+  const alvo = form.querySelector('#previa-ferias');
+  if (!alvo) return;
+  const campoInicio = form.querySelector('[name="inicio"]');
+  const campoDias = form.querySelector('[name="dias_gozo"]');
+  const campoAbono = form.querySelector('[name="dias_abono"]');
+
+  const mostrar = () => {
+    const inicio = campoInicio.value;
+    const dias = Number(campoDias.value) || 0;
+    const vendidos = Number(campoAbono.value) || 0;
+    if (!inicio || dias <= 0) {
+      alvo.textContent = '';
+      return;
+    }
+    const ultimo = somarDiasISO(inicio, dias - 1);
+    const volta = somarDiasISO(inicio, dias);
+    alvo.innerHTML =
+      `Fica <strong>${dias} dia(s)</strong>: de ${dateBR(inicio)} a ${dateBR(ultimo)}, ` +
+      `volta a trabalhar em <strong>${dateBR(volta)}</strong>.` +
+      (vendidos > 0 ? ` Mais ${vendidos} dia(s) vendido(s), que ele trabalha normalmente.` : '');
+  };
+
+  [campoInicio, campoDias, campoAbono].forEach((c) => c.addEventListener('input', mostrar));
+  mostrar();
+}
+
 function calculadoraFeriasHTML() {
   const c = state.calculoFerias;
   const d = state.feriasEntrada || {};
@@ -2554,8 +2597,9 @@ function calculadoraFeriasHTML() {
         </label>
         <label>Começa em <input type="date" name="inicio" required value="${guardado('inicio')}" /></label>
         <label>Faltas sem justificativa <input type="number" step="1" min="0" name="faltas" value="${guardado('faltas')}" /></label>
-        <label>Dias de descanso <input type="number" step="1" min="0" name="dias_gozo" placeholder="tudo a que tem direito" value="${guardado('dias_gozo')}" /></label>
-        <label>Dias vendidos (abono) <input type="number" step="1" min="0" name="dias_abono" value="${guardado('dias_abono')}" /></label>
+        <label>Quantos dias vai ficar <input type="number" step="1" min="0" name="dias_gozo" placeholder="30" value="${guardado('dias_gozo')}" /></label>
+        <label>Dias vendidos (abono) <input type="number" step="1" min="0" name="dias_abono" placeholder="0" value="${guardado('dias_abono')}" /></label>
+        <p class="vazio campo-largo" id="previa-ferias"></p>
         <label>Média de hora extra e adicionais <input type="number" step="0.01" min="0" name="media_variaveis" placeholder="R$ por mês" value="${guardado('media_variaveis')}" /></label>
         <label class="campo-marca campo-largo">
           <input type="checkbox" name="adiantar_13" ${d.adiantar_13 ? 'checked' : ''} />
@@ -2600,8 +2644,13 @@ function calculadoraFeriasHTML() {
               Direito a <strong>${c.dias_direito} dia(s)</strong>${
                 c.faltas ? ` (com ${c.faltas} falta(s))` : ''
               }: ${c.dias_gozo} de descanso${c.dias_abono ? ` e ${c.dias_abono} vendido(s)` : ''}.
-              Sai em ${dateBR(c.inicio)} e volta em <strong>${dateBR(c.retorno)}</strong>.
             </p>
+            <div class="alerta aviso">
+              Fica <strong>${c.dias_gozo} dia(s)</strong> de férias:
+              sai em <strong>${dateBR(c.inicio)}</strong>,
+              último dia <strong>${dateBR(somarDiasISO(c.inicio, c.dias_gozo - 1))}</strong>,
+              volta a trabalhar em <strong>${dateBR(c.retorno)}</strong>.
+            </div>
             <div class="alerta aviso">
               <strong>Pague até ${dateBR(c.pagar_ate)}</strong> — as férias têm que estar pagas dois dias
               antes de começarem (CLT, art. 145).
@@ -2641,6 +2690,166 @@ function calculadoraFeriasHTML() {
   `;
 }
 
+// Os motivos, com o rótulo que o dono reconhece. A ordem é a da vida real:
+// dispensa e pedido são o dia a dia; justa causa e acordo, exceção.
+const MOTIVOS_RESCISAO = [
+  ['sem_justa_causa', 'Dispensa sem justa causa'],
+  ['pedido', 'Pedido de demissão'],
+  ['acordo', 'Acordo entre as partes'],
+  ['justa_causa', 'Dispensa por justa causa'],
+  ['fim_experiencia', 'Fim do contrato de experiência'],
+];
+
+// O que o motivo escolhido tira do acerto. Dizer "não entrou 13º" é tão
+// importante quanto somar o que entrou: é o que deixa o dono conferir se
+// escolheu o motivo certo antes de pagar.
+function faltandoNaRescisaoHTML(c) {
+  const faltas = [];
+  if (!c.regra.decimo_terceiro) faltas.push('<strong>13º proporcional</strong>');
+  if (!c.regra.ferias_proporcionais) faltas.push('<strong>férias proporcionais</strong>');
+  if (!c.regra.multa_fgts) faltas.push('<strong>multa do FGTS</strong>');
+  if (!faltas.length) return '';
+  return `<div class="alerta aviso">
+    Neste motivo <em>não</em> entram: ${faltas.join(', ')}.
+    As <strong>férias já vencidas</strong> são devidas em qualquer motivo, justa causa inclusive.
+  </div>`;
+}
+
+function calculadoraRescisaoHTML() {
+  const c = state.calculoRescisao;
+  const d = state.rescisaoEntrada || {};
+  const guardado = (campo) => escapar(String(d[campo] === undefined ? '' : d[campo]));
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Calcular rescisão</h2>
+        ${c ? `<span class="grupo-total">${brl(c.total)}</span>` : ''}
+      </div>
+
+      <form data-action="calculo-rescisao" class="form-inline">
+        <label>Funcionário
+          <select name="funcionario_id" required>
+            <option value="">— escolha —</option>
+            ${state.funcionarios
+              .map(
+                (f) =>
+                  `<option value="${f.id}" ${c && c.funcionario.id === f.id ? 'selected' : ''}>${escapar(f.nome)}${
+                    f.salario_base ? '' : ' (sem salário no cadastro)'
+                  }</option>`
+              )
+              .join('')}
+          </select>
+        </label>
+        <label>Último dia <input type="date" name="saida" required value="${guardado('saida')}" /></label>
+        <label>Motivo
+          <select name="motivo" required>
+            ${MOTIVOS_RESCISAO.map(
+              ([valor, rotulo]) =>
+                `<option value="${valor}" ${d.motivo === valor ? 'selected' : ''}>${rotulo}</option>`
+            ).join('')}
+          </select>
+        </label>
+        <label>Férias vencidas não gozadas <input type="number" step="1" min="0" name="ferias_vencidas_dias" placeholder="dias" value="${guardado('ferias_vencidas_dias')}" /></label>
+        <label>Saldo do FGTS <input type="number" step="0.01" min="0" name="saldo_fgts" placeholder="R$, do extrato" value="${guardado('saldo_fgts')}" /></label>
+        <label>Média de hora extra e adicionais <input type="number" step="0.01" min="0" name="media_variaveis" placeholder="R$ por mês" value="${guardado('media_variaveis')}" /></label>
+        <label class="campo-marca campo-largo">
+          <input type="checkbox" name="aviso_cumprido" ${d.aviso_cumprido ? 'checked' : ''} />
+          O aviso prévio foi cumprido trabalhando
+        </label>
+        <button type="submit">Calcular</button>
+        <p class="vazio campo-largo">
+          <strong>Férias vencidas</strong> é o período inteiro a que ele já tinha direito e não tirou — 30 dias
+          por período. O sistema não guarda isso, então quem informa é você.
+          <strong>Saldo do FGTS</strong> sai do extrato da Caixa; sem ele a multa não é calculada, porque
+          chutar esse número é o erro mais caro desta tela.
+        </p>
+      </form>
+
+      ${
+        c
+          ? `<table class="tabela-contas">
+              <thead><tr><th>O quê</th><th>Conta</th><th>Valor</th></tr></thead>
+              <tbody>
+                ${c.proventos
+                  .map(
+                    (l) => `<tr>
+                      <td>${escapar(l.rotulo)}</td>
+                      <td><small>${escapar(l.detalhe)}</small></td>
+                      <td><strong>${brl(l.valor)}</strong></td>
+                    </tr>`
+                  )
+                  .join('')}
+                ${c.descontos
+                  .map(
+                    (l) => `<tr class="com-atencao">
+                      <td>${escapar(l.rotulo)}</td>
+                      <td><small>${escapar(l.detalhe)}</small></td>
+                      <td><strong>− ${brl(l.valor)}</strong></td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+              <tfoot>
+                ${
+                  c.total_descontos
+                    ? `<tr><td colspan="2">Proventos</td><td>${brl(c.total_proventos)}</td></tr>
+                       <tr><td colspan="2">Descontos</td><td>− ${brl(c.total_descontos)}</td></tr>`
+                    : ''
+                }
+                <tr><td colspan="2"><strong>Total bruto a pagar</strong></td><td><strong>${brl(c.total)}</strong></td></tr>
+              </tfoot>
+            </table>
+
+            <p class="vazio">
+              ${escapar(c.funcionario.nome)} &middot; ${escapar(c.motivo_rotulo)} &middot;
+              salário ${brl(c.funcionario.salario_base)}${
+                c.base !== c.funcionario.salario_base ? ` &middot; base ${brl(c.base)}` : ''
+              } &middot; último dia ${dateBR(c.saida)}.
+              ${
+                c.funcionario.data_admissao
+                  ? `Admitido em ${dateBR(c.funcionario.data_admissao)}.`
+                  : '<strong>Sem data de admissão no cadastro</strong> — o aviso prévio caiu no mínimo de 30 dias e as férias proporcionais não puderam ser calculadas.'
+              }
+              Aviso prévio de ${c.dias_aviso} dia(s)${
+                c.dias_projecao
+                  ? `, que projeta o contrato até ${dateBR(c.fim_contado)} para efeito de 13º e férias`
+                  : ''
+              }.
+            </p>
+
+            ${faltandoNaRescisaoHTML(c)}
+
+            ${
+              c.regra.multa_fgts && !c.regra.fgts_informado
+                ? `<div class="alerta erro">
+                    <strong>Falta a multa de ${c.regra.multa_fgts}% do FGTS.</strong> Este motivo dá direito a
+                    ela, mas o sistema não tem o saldo do fundo — pegue no extrato da Caixa e informe acima.
+                    O total abaixo está <strong>incompleto</strong> sem isso.
+                  </div>`
+                : ''
+            }
+
+            <div class="alerta aviso">
+              <strong>Valor bruto</strong>, sem INSS e sem imposto de renda. Não entram aqui o saque do FGTS
+              (o funcionário tira direto na Caixa) nem o seguro-desemprego. Use para saber quanto separar e
+              para conferir o acerto do contador; quem assina é ele.
+            </div>
+
+            ${
+              c.total > 0
+                ? `<div class="acoes-alerta">
+                    <button type="button" id="btn-lancar-rescisao">Lançar ${brl(c.total)} na folha como rescisão</button>
+                    <span class="vazio">Entra como lançamento à parte, com a conta inteira nas observações.</span>
+                  </div>`
+                : ''
+            }`
+          : ''
+      }
+    </section>
+  `;
+}
+
 function folhaHTML() {
   const cabecalho = cabecalhoHTML('Folha de pagamento');
 
@@ -2667,8 +2876,29 @@ function folhaHTML() {
   const e = lancamentos.find((l) => state.folhaEditando && l.id === state.folhaEditando.id) || null;
   const extras = state.extras || { extras: [], totais: { valor: 0, saldo: 0 } };
 
+  // Três calculadoras mais a folha inteira numa página só ficou longo demais: a
+  // lista de lançamentos, que é o que se olha todo dia, sumia lá embaixo. As
+  // sub-abas são as mesmas de Contas a pagar — o dono já sabe usar.
+  const aba = state.folhaAba === 'calculos' ? 'calculos' : 'folha';
+  const subAbas = `
+    <div class="sub-abas">
+      <button data-folha-aba="folha" class="${aba === 'folha' ? 'ativo' : ''}">Folha e lançamentos</button>
+      <button data-folha-aba="calculos" class="${aba === 'calculos' ? 'ativo' : ''}">Cálculos</button>
+    </div>`;
+
+  if (aba === 'calculos') {
+    return `
+      ${cabecalho}
+      ${subAbas}
+      ${calculadoraHorasHTML()}
+      ${calculadoraFeriasHTML()}
+      ${calculadoraRescisaoHTML()}
+    `;
+  }
+
   return `
     ${cabecalho}
+    ${subAbas}
 
     <div class="cartoes-resumo">
       <div class="cartao-resumo proximos">
@@ -2749,9 +2979,6 @@ function folhaHTML() {
       </form>
     </section>
 
-    ${calculadoraHorasHTML()}
-
-    ${calculadoraFeriasHTML()}
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
@@ -4350,6 +4577,15 @@ function bind() {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
 
+  // Trocar de sub-aba não recarrega nada: os dados da folha já estão em memória,
+  // e as calculadoras usam a mesma lista de funcionários.
+  root.querySelectorAll('[data-folha-aba]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.folhaAba = btn.dataset.folhaAba;
+      render();
+    });
+  });
+
   const formCalculo = root.querySelector('[data-action="calculo-horas"]');
   if (formCalculo) formCalculo.addEventListener('submit', onCalcularHoras);
 
@@ -4357,10 +4593,19 @@ function bind() {
   if (btnLancarCalculo) btnLancarCalculo.addEventListener('click', onLancarCalculo);
 
   const formFerias = root.querySelector('[data-action="calculo-ferias"]');
-  if (formFerias) formFerias.addEventListener('submit', onCalcularFerias);
+  if (formFerias) {
+    formFerias.addEventListener('submit', onCalcularFerias);
+    ligarPreviaDeFerias(formFerias);
+  }
 
   const btnLancarFerias = root.querySelector('#btn-lancar-ferias');
   if (btnLancarFerias) btnLancarFerias.addEventListener('click', onLancarFerias);
+
+  const formRescisao = root.querySelector('[data-action="calculo-rescisao"]');
+  if (formRescisao) formRescisao.addEventListener('submit', onCalcularRescisao);
+
+  const btnLancarRescisao = root.querySelector('#btn-lancar-rescisao');
+  if (btnLancarRescisao) btnLancarRescisao.addEventListener('click', onLancarRescisao);
 
   root.querySelectorAll('[data-marca-folha]').forEach((caixa) => {
     caixa.addEventListener('change', () => {
@@ -5011,6 +5256,74 @@ async function onCalcularFerias(ev) {
     state.erro = err.message;
   }
   render();
+}
+
+async function onCalcularRescisao(ev) {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  const corpo = {};
+  for (const [k, v] of fd.entries()) corpo[k] = v;
+  corpo.aviso_cumprido = form.querySelector('[name="aviso_cumprido"]').checked;
+  state.rescisaoEntrada = corpo;
+  try {
+    state.calculoRescisao = await apiFetch('/folha/calculo-rescisao', { method: 'POST', body: JSON.stringify(corpo) });
+    state.erro = null;
+  } catch (err) {
+    state.calculoRescisao = null;
+    state.erro = err.message;
+  }
+  render();
+}
+
+// Rescisão vira lançamento à parte na folha, como as férias. A conta inteira
+// vai nas observações: um acerto de contas é o tipo de número que se confere
+// meses depois, e sem as linhas ele vira um valor solto sem origem.
+async function onLancarRescisao() {
+  const c = state.calculoRescisao;
+  if (!c) return;
+
+  const linhas = [
+    ...c.proventos.map((l) => `${l.rotulo}: ${brl(l.valor)}`),
+    ...c.descontos.map((l) => `${l.rotulo}: − ${brl(l.valor)}`),
+  ].join('\n');
+  const descricao = `Rescisão — ${c.motivo_rotulo}, último dia ${dateBR(c.saida)}\n${linhas}`;
+
+  const faltaFgts = c.regra.multa_fgts && !c.regra.fgts_informado;
+  if (
+    !confirm(
+      `Lançar ${brl(c.total)} de rescisão para ${c.funcionario.nome}?\n\n` +
+        `Motivo: ${c.motivo_rotulo}.` +
+        (faltaFgts
+          ? `\n\nATENÇÃO: falta a multa de ${c.regra.multa_fgts}% do FGTS — o valor está incompleto.`
+          : '')
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await apiFetch('/folha', {
+      method: 'POST',
+      body: JSON.stringify({
+        funcionario_id: c.funcionario.id,
+        nome: c.funcionario.nome,
+        tipo: 'rescisao',
+        data_ref: c.saida,
+        salario: c.total,
+        observacoes: descricao,
+        abater_extras: false,
+        liquidar_prazo: false,
+      }),
+    });
+    state.calculoRescisao = null;
+    state.rescisaoEntrada = {};
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 // Férias viram um lançamento à parte na folha, com os dias registrados. Não é

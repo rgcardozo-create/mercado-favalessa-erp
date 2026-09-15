@@ -4,6 +4,7 @@ const { registrarAuditoria } = require('../utils/auditoria');
 const { assinarTokenFolha } = require('../middleware/folha');
 const { calcularHoras } = require('../utils/calculoHoras');
 const { calcularFerias, diasDeDireito } = require('../utils/calculoFerias');
+const { calcularRescisao, MOTIVOS } = require('../utils/calculoRescisao');
 const { lerParametros } = require('./parametrosController');
 
 // Líquido = salário + bonificação - compras - adiantamento - outras - descontos.
@@ -609,10 +610,78 @@ async function calculoFerias(req, res) {
   });
 }
 
+// Rescisão. Mesma régua: calcula, não grava, devolve o bruto.
+async function calculoRescisao(req, res) {
+  const id = Number(req.body.funcionario_id);
+  const saida = String(req.body.saida || '');
+  const motivo = String(req.body.motivo || '');
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(saida)) {
+    return res.status(400).json({ error: 'Informe a data de saída.' });
+  }
+  if (!MOTIVOS[motivo]) {
+    return res.status(400).json({ error: 'Escolha o motivo da saída.' });
+  }
+
+  const { rows } = await pool.query(
+    `SELECT id, nome, codigo, salario_base,
+            to_char(data_admissao, 'YYYY-MM-DD') AS data_admissao
+       FROM funcionarios WHERE id = $1`,
+    [id]
+  );
+  const funcionario = rows[0];
+  if (!funcionario) return res.status(404).json({ error: 'Funcionário não encontrado.' });
+
+  const salario = Number(funcionario.salario_base);
+  if (!salario) {
+    return res.status(400).json({
+      error: `${funcionario.nome} está sem salário base no cadastro. Sem ele não dá para calcular a rescisão.`,
+    });
+  }
+
+  if (funcionario.data_admissao && saida < funcionario.data_admissao) {
+    return res.status(400).json({
+      error: `A saída (${saida}) é anterior à admissão (${funcionario.data_admissao}). Confira as datas no cadastro.`,
+    });
+  }
+
+  const numero = (v, padrao = 0) => (v === undefined || v === '' ? padrao : Number(v));
+  const vencidas = numero(req.body.ferias_vencidas_dias);
+  if (vencidas < 0 || vencidas > 60) {
+    return res.status(400).json({
+      error: 'Dias de férias vencidas fora do possível: informe entre 0 e 60 (dois períodos).',
+    });
+  }
+
+  const resultado = calcularRescisao({
+    salarioBase: salario,
+    mediaVariaveis: numero(req.body.media_variaveis),
+    admissao: funcionario.data_admissao,
+    saida,
+    motivo,
+    avisoCumprido: req.body.aviso_cumprido === true || req.body.aviso_cumprido === 'on',
+    feriasVencidasDias: vencidas,
+    saldoFgts: req.body.saldo_fgts === undefined || req.body.saldo_fgts === '' ? null : Number(req.body.saldo_fgts),
+  });
+
+  return res.json({
+    funcionario: {
+      id: funcionario.id,
+      nome: funcionario.nome,
+      codigo: funcionario.codigo,
+      salario_base: salario,
+      data_admissao: funcionario.data_admissao,
+    },
+    saida,
+    ...resultado,
+  });
+}
+
 module.exports = {
   desbloquear,
   calculoHoras,
   calculoFerias,
+  calculoRescisao,
   pendencias,
   comprasDoFuncionario,
   listar,
