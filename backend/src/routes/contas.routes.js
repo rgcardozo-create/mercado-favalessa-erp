@@ -10,6 +10,8 @@ router.use(exigirTela('contas'));
 
 // Cadastro de boleto: qualquer perfil autenticado pode cadastrar (Master, Gerente ou Loja).
 router.get('/', asyncHandler(contasController.listar));
+// Antes do /:id, senão "descricoes" seria lido como id de conta.
+router.get('/descricoes', asyncHandler(contasController.descricoesUsuais));
 router.get('/:id', asyncHandler(contasController.obter));
 router.post('/', authorize('master', 'gerente', 'loja'), asyncHandler(contasController.criar));
 // Antes do /:id para "mover" não ser lido como id de conta.
