@@ -4,9 +4,10 @@ const { GRUPO_FORMA } = require('../db/conciliacaoQuery');
 
 // Relatório consolidado por período. Três regras do SPEC.md moldam este arquivo:
 //
-//  1. Contas pessoais nunca entram em nenhum total da empresa. (Foram retiradas do
-//     escopo do sistema pelo usuário, então nem existem no banco — mas a regra
-//     continua valendo para qualquer coisa que venha a ser adicionada.)
+//  1. Contas pessoais nunca entram em nenhum total da empresa. Elas vivem na
+//     tabela `contas_pessoais`, que nenhuma consulta deste arquivo toca — a
+//     separação é física justamente para a regra não depender de ninguém lembrar
+//     de filtrar.
 //  2. Nome de funcionário só aparece com a Folha destravada. Trancada, a folha vira
 //     uma linha genérica "Folha de pagamento": o valor entra nos totais, os nomes não.
 //  3. Extras (adiantamentos/vales) ficam FORA das despesas — já são descontados na

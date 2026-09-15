@@ -71,6 +71,15 @@ async function exportarBackup(req, res) {
     dados[t] = rows;
   }
 
+  // Contas pessoais entram no backup. A rota já é só do Master, e deixá-las de
+  // fora significaria que, perdido o banco, o dono perde justamente a lista que
+  // ele criou para não esquecer de pagar. Mais um motivo para o arquivo de
+  // backup nunca sair do computador dele.
+  {
+    const { rows } = await pool.query('SELECT * FROM contas_pessoais');
+    dados.contas_pessoais = rows;
+  }
+
   if (req.folhaDestravada) {
     for (const t of ['folha', 'folha_pagamentos', 'extras', 'extras_baixas']) {
       const { rows } = await pool.query(`SELECT * FROM ${t}`);
@@ -84,6 +93,7 @@ async function exportarBackup(req, res) {
       gerado_em: new Date().toISOString(),
       gerado_por: req.user.nome,
       folha_incluida: Boolean(req.folhaDestravada),
+      pessoais_incluidas: true,
     },
     dados,
   });

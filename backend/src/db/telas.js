@@ -4,9 +4,10 @@
 // barrar rota de tela não liberada, e o frontend usa para montar as caixas de
 // marcação da Administração. Tela nova entra aqui e aparece nos dois lugares.
 //
-// `soMaster` marca o que não se concede a ninguém: a Folha tem salário e a
-// Administração cria usuários. Nenhuma caixa de marcação libera essas duas —
-// quem não é master não as enxerga nem alcança.
+// `soMaster` marca o que não se concede a ninguém: a Folha tem salário, as
+// contas Pessoais são a vida particular do dono e a Administração cria usuários.
+// Nenhuma caixa de marcação libera essas três — quem não é master não as enxerga
+// nem alcança.
 const TELAS = [
   { chave: 'painel', rotulo: 'Painel do dia' },
   { chave: 'contas', rotulo: 'Contas a pagar' },
@@ -17,6 +18,7 @@ const TELAS = [
   { chave: 'gerencial', rotulo: 'Gerencial' },
   { chave: 'relatorios', rotulo: 'Relatórios' },
   { chave: 'folha', rotulo: 'Folha', soMaster: true },
+  { chave: 'pessoais', rotulo: 'Pessoais', soMaster: true },
   { chave: 'admin', rotulo: 'Administração', soMaster: true },
 ];
 

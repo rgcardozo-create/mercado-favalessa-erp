@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.49.0';
+const VERSAO = '1.50.0';
 
 const state = {
   sessao: getSessao(),
@@ -125,6 +125,13 @@ const state = {
   rescisaoEntrada: {},
   // Sub-aba da Folha: 'folha' (lançamentos) ou 'calculos'.
   folhaAba: 'folha',
+  pessoaisPendencias: null,
+  // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
+  // não esquecer de pagar, não para consultar histórico.
+  pessoais: null,
+  statusPessoais: 'vencidas',
+  buscaPessoais: '',
+  pessoalEditando: null,
   parametrosTrabalhistas: null,
   // Registro do Cadastros aberto para correção. O mesmo formulário cadastra e edita.
   cadastroEditando: null,
@@ -181,6 +188,7 @@ const TELAS = [
   { chave: 'gerencial', rotulo: 'Gerencial' },
   { chave: 'relatorios', rotulo: 'Relatórios' },
   { chave: 'folha', rotulo: 'Folha', soMaster: true },
+  { chave: 'pessoais', rotulo: 'Pessoais', soMaster: true },
   { chave: 'admin', rotulo: 'Administração', soMaster: true },
 ];
 
@@ -195,6 +203,13 @@ function podeVerTela(chave) {
 
 function podeVerFolha() {
   return state.sessao && state.sessao.usuario.role === 'master';
+}
+
+// Contas pessoais e Folha param na mesma porta: só o dono. Fica em função à
+// parte porque são coisas diferentes com a mesma regra hoje — e se um dia uma
+// delas mudar, só uma muda.
+function ehMaster() {
+  return !!state.sessao && state.sessao.usuario.role === 'master';
 }
 
 // A senha da folha era o Master digitando a própria senha duas vezes por dia. A
@@ -256,6 +271,10 @@ async function carregarDados() {
       // A contagem de pendências da folha não exige a senha adicional: é só um
       // aviso, sem nome nem valor. Só o Master enxerga.
       state.folhaPendencias = podeVerFolha() ? await apiFetch('/folha/pendencias') : null;
+      // Contas pessoais vencidas no painel: só a QUANTIDADE, nunca a descrição
+      // nem o valor. O painel fica aberto no balcão, e o que o dono deve na vida
+      // dele não é assunto de quem está do outro lado do balcão.
+      state.pessoaisPendencias = ehMaster() ? await apiFetch('/pessoais/pendencias') : null;
       state.formasPagamento = formasPainel;
       state.bancos = bancosPainel;
     } else if (state.tab === 'conciliacao') {
@@ -308,6 +327,11 @@ async function carregarDados() {
         state.folha = null;
         state.extras = null;
       }
+    } else if (state.tab === 'pessoais') {
+      const params = new URLSearchParams();
+      if (state.statusPessoais) params.set('status', state.statusPessoais);
+      if (state.buscaPessoais.trim()) params.set('busca', state.buscaPessoais.trim());
+      state.pessoais = await apiFetch(`/pessoais?${params}`);
     } else if (state.tab === 'gerencial') {
       const ano = state.anoGerencial || todayISO().slice(0, 4);
       state.gerencial = await apiFetch(`/relatorios/gerencial?ano=${ano}`);
@@ -813,6 +837,7 @@ function painelHTML() {
 
     ${faixaVendasHTML()}
     ${avisoFolhaHTML()}
+    ${avisoPessoaisHTML()}
 
     <div class="colunas-painel">
       ${blocoPainelHTML({
@@ -1308,6 +1333,26 @@ function avisoFolhaHTML() {
         <small>${p.desde ? `A mais antiga é de ${mes}/${ano}.` : ''} Abra a folha para conferir.</small>
       </div>
       <button data-tab="folha">Abrir folha</button>
+    </section>
+  `;
+}
+
+// Aviso de conta pessoal vencida. Mostra a QUANTIDADE e mais nada: sem
+// descrição, sem valor. O painel é a tela que fica aberta no balcão, e o que o
+// dono deve na vida particular dele não é assunto de quem passa por ali. O
+// lembrete que ele pediu cabe inteiro num número.
+function avisoPessoaisHTML() {
+  const p = state.pessoaisPendencias;
+  if (!p || !p.quantidade) return '';
+
+  const uma = p.quantidade === 1;
+  return `
+    <section class="faixa-vendas pendente">
+      <div>
+        <strong>${p.quantidade} ${uma ? 'conta pessoal vencida' : 'contas pessoais vencidas'}</strong>
+        <small>Abra a aba Pessoais para ver ${uma ? 'qual' : 'quais'}. Nada disso entra nas contas do mercado.</small>
+      </div>
+      <button data-tab="pessoais">Abrir</button>
     </section>
   `;
 }
@@ -4192,6 +4237,123 @@ function listaContasHTML({ ehFornecedor, ehDespesa, podeGerir }) {
     .join('');
 }
 
+const FILTROS_PESSOAIS = [
+  ['vencidas', 'Vencidas e de hoje'],
+  ['a_vencer', 'A vencer'],
+  ['aberto', 'Todas em aberto'],
+  ['pagas', 'Pagas'],
+  ['', 'Tudo'],
+];
+
+// Contas pessoais do dono. Tela do Master e de mais ninguém.
+//
+// Separada da empresa de verdade: sai de outra tabela, por outra rota, e nenhum
+// valor daqui entra em painel, relatório ou gerencial. A tela abre no que está
+// vencido porque o problema que ela resolve é esquecer de pagar, não consultar
+// histórico.
+function pessoaisHTML() {
+  const dados = state.pessoais || { contas: [], totais: { em_aberto: 0, vencido: 0, qtd_vencida: 0 } };
+  const { contas, totais } = dados;
+  const e = contas.find((c) => state.pessoalEditando && c.id === state.pessoalEditando) || null;
+
+  return `
+    ${cabecalhoHTML('Contas pessoais')}
+
+    <div class="alerta aviso">
+      Esta tela é <strong>só sua</strong> e é <strong>separada da empresa</strong>. Nada daqui entra no
+      painel, nos relatórios nem no gerencial do mercado — é outra tabela, de outro lugar. Gerente e loja
+      não veem esta aba e não alcançam estes dados nem sabendo o endereço.
+    </div>
+
+    <div class="cartoes-resumo">
+      <div class="cartao-resumo vencidas">
+        <span class="rotulo">Vencido</span><strong>${brl(totais.vencido)}</strong>
+      </div>
+      <div class="cartao-resumo proximos">
+        <span class="rotulo">Em aberto</span><strong>${brl(totais.em_aberto)}</strong>
+      </div>
+      <div class="cartao-resumo hoje">
+        <span class="rotulo">Contas vencidas</span><strong>${totais.qtd_vencida}</strong>
+      </div>
+    </div>
+
+    <section class="cartoes-form">
+      <form data-action="${e ? 'editar-pessoal' : 'nova-pessoal'}" class="form-inline" ${e ? `data-id="${e.id}"` : ''}>
+        <h2>${e ? 'Corrigir conta' : 'Nova conta pessoal'}</h2>
+        <label>Descrição <input type="text" name="descricao" required value="${e ? escapar(e.descricao) : ''}" placeholder="Luz da casa, escola, financiamento..." /></label>
+        <label>Categoria <input type="text" name="categoria" value="${e ? escapar(e.categoria || '') : ''}" placeholder="opcional" /></label>
+        <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${e ? e.valor : ''}" /></label>
+        <label>Vencimento <input type="date" name="vencimento" required value="${e ? e.vencimento : ''}" /></label>
+        ${
+          e
+            ? ''
+            : `<label>Parcelas <input type="number" step="1" min="1" max="60" name="parcelas" value="1" /></label>`
+        }
+        <label class="campo-largo">Observação <input type="text" name="observacoes" value="${e ? escapar(e.observacoes || '') : ''}" placeholder="opcional" /></label>
+        <button type="submit">${e ? 'Salvar' : 'Cadastrar'}</button>
+        ${e ? '<button type="button" id="btn-cancelar-pessoal" class="secundario">Cancelar</button>' : ''}
+        <p class="vazio campo-largo">
+          ${
+            e
+              ? 'Corrigindo uma conta já cadastrada. Para lançar outra, cancele primeiro.'
+              : 'Com mais de uma parcela, o valor informado é o <strong>de cada parcela</strong>, e o sistema cria todas de uma vez, mês a mês a partir do vencimento.'
+          }
+        </p>
+      </form>
+    </section>
+
+    <div class="filtros">
+      ${FILTROS_PESSOAIS.map(
+        ([valor, rotulo]) =>
+          `<button data-status-pessoal="${valor}" class="${state.statusPessoais === valor ? 'ativo' : ''}">${rotulo}</button>`
+      ).join('')}
+      <form class="busca" data-action="busca-pessoais">
+        <input type="search" id="busca-pessoais" name="busca" placeholder="Buscar descrição ou categoria…"
+               value="${escapar(state.buscaPessoais)}" autocomplete="off" />
+        ${state.buscaPessoais ? '<button type="button" id="btn-limpar-busca-pessoal" class="secundario">Limpar</button>' : ''}
+      </form>
+      <span class="resumo-lista">${contas.length} conta(s)</span>
+    </div>
+
+    ${state.carregando ? '<p>Carregando…</p>' : ''}
+
+    <table class="tabela-contas">
+      <thead>
+        <tr><th>Descrição</th><th>Categoria</th><th>Vencimento</th><th>Pago em</th><th>Valor</th><th>Situação</th><th>Ações</th></tr>
+      </thead>
+      <tbody>
+        ${
+          contas.length
+            ? contas
+                .map(
+                  (c) => `<tr class="${c.vencida ? 'com-atencao' : ''}">
+                    <td>${escapar(c.descricao)}${
+                      c.total_parcelas > 1 ? ` <small class="parcela">${c.parcela}/${c.total_parcelas}</small>` : ''
+                    }${c.observacoes ? `<br><small>${escapar(c.observacoes)}</small>` : ''}</td>
+                    <td>${escapar(c.categoria || '—')}</td>
+                    <td>${dateBR(c.vencimento)}</td>
+                    <td>${c.pago_em ? dateBR(c.pago_em) : '—'}</td>
+                    <td><strong>${brl(c.valor)}</strong></td>
+                    <td>${badgeStatus({ quitado: c.quitado, vencimento: c.vencimento })}</td>
+                    <td>
+                      ${
+                        c.quitado
+                          ? `<button data-desfazer-pessoal="${c.id}" class="secundario">Desfazer baixa</button>`
+                          : `<button data-pagar-pessoal="${c.id}">Paguei</button>`
+                      }
+                      <button data-editar-pessoal="${c.id}" class="secundario">Editar</button>
+                      <button data-excluir-pessoal="${c.id}" class="perigo">Excluir</button>
+                    </td>
+                  </tr>`
+                )
+                .join('')
+            : '<tr><td colspan="7">Nenhuma conta neste recorte.</td></tr>'
+        }
+      </tbody>
+    </table>
+  `;
+}
+
 const MONTAR_TELA = {
   painel: () => painelHTML(),
   contas: () => contasHTML(),
@@ -4202,6 +4364,7 @@ const MONTAR_TELA = {
   gerencial: () => gerencialHTML(),
   relatorios: () => relatoriosHTML(),
   folha: () => folhaHTML(),
+  pessoais: () => pessoaisHTML(),
   admin: () => adminHTML(),
 };
 
@@ -4576,6 +4739,63 @@ function bind() {
   root.querySelectorAll('[data-action="excluir-folha"]').forEach((btn) => {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
+
+  const formNovaPessoal = root.querySelector('[data-action="nova-pessoal"]');
+  if (formNovaPessoal) formNovaPessoal.addEventListener('submit', onNovaPessoal);
+
+  const formEditarPessoal = root.querySelector('[data-action="editar-pessoal"]');
+  if (formEditarPessoal) formEditarPessoal.addEventListener('submit', onEditarPessoal);
+
+  root.querySelectorAll('[data-pagar-pessoal]').forEach((b) =>
+    b.addEventListener('click', () => onPagarPessoal(Number(b.dataset.pagarPessoal)))
+  );
+  root.querySelectorAll('[data-desfazer-pessoal]').forEach((b) =>
+    b.addEventListener('click', () => onDesfazerPessoal(Number(b.dataset.desfazerPessoal)))
+  );
+  root.querySelectorAll('[data-excluir-pessoal]').forEach((b) =>
+    b.addEventListener('click', () => onExcluirPessoal(Number(b.dataset.excluirPessoal)))
+  );
+  root.querySelectorAll('[data-editar-pessoal]').forEach((b) =>
+    b.addEventListener('click', () => {
+      state.pessoalEditando = Number(b.dataset.editarPessoal);
+      render();
+      const f = root.querySelector('[data-action="editar-pessoal"]');
+      if (f) f.scrollIntoView({ block: 'center' });
+    })
+  );
+
+  const btnCancelarPessoal = root.querySelector('#btn-cancelar-pessoal');
+  if (btnCancelarPessoal) {
+    btnCancelarPessoal.addEventListener('click', () => {
+      state.pessoalEditando = null;
+      render();
+    });
+  }
+
+  root.querySelectorAll('[data-status-pessoal]').forEach((b) =>
+    b.addEventListener('click', () => {
+      state.statusPessoais = b.dataset.statusPessoal;
+      state.pessoalEditando = null;
+      carregarDados();
+    })
+  );
+
+  const formBuscaPessoais = root.querySelector('[data-action="busca-pessoais"]');
+  if (formBuscaPessoais) {
+    formBuscaPessoais.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      state.buscaPessoais = new FormData(ev.target).get('busca') || '';
+      carregarDados();
+    });
+  }
+
+  const btnLimparBuscaPessoal = root.querySelector('#btn-limpar-busca-pessoal');
+  if (btnLimparBuscaPessoal) {
+    btnLimparBuscaPessoal.addEventListener('click', () => {
+      state.buscaPessoais = '';
+      carregarDados();
+    });
+  }
 
   // Trocar de sub-aba não recarrega nada: os dados da folha já estão em memória,
   // e as calculadoras usam a mesma lista de funcionários.
@@ -5256,6 +5476,91 @@ async function onCalcularFerias(ev) {
     state.erro = err.message;
   }
   render();
+}
+
+// ── Contas pessoais ──────────────────────────────────────────────────────────
+
+async function onNovaPessoal(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch('/pessoais', {
+      method: 'POST',
+      body: JSON.stringify({
+        descricao: fd.get('descricao'),
+        categoria: fd.get('categoria') || null,
+        valor: fd.get('valor'),
+        vencimento: fd.get('vencimento'),
+        observacoes: fd.get('observacoes') || null,
+        parcelas: fd.get('parcelas') || 1,
+      }),
+    });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onEditarPessoal(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch(`/pessoais/${ev.target.dataset.id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        descricao: fd.get('descricao'),
+        categoria: fd.get('categoria') || null,
+        valor: fd.get('valor'),
+        vencimento: fd.get('vencimento'),
+        observacoes: fd.get('observacoes') || null,
+      }),
+    });
+    state.pessoalEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+// Sem data no corpo, o backend marca hoje — que é o caso de quase sempre: ele
+// acabou de pagar e está dando baixa.
+async function onPagarPessoal(id) {
+  try {
+    await apiFetch(`/pessoais/${id}/pagar`, { method: 'POST', body: JSON.stringify({}) });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onDesfazerPessoal(id) {
+  try {
+    await apiFetch(`/pessoais/${id}/pagar`, { method: 'DELETE' });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onExcluirPessoal(id) {
+  if (!confirm('Excluir esta conta pessoal? Não dá para desfazer.')) return;
+  try {
+    await apiFetch(`/pessoais/${id}`, { method: 'DELETE' });
+    state.pessoalEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 async function onCalcularRescisao(ev) {

@@ -18,7 +18,11 @@ const { SELECT_CONTAS_COM_SALDO, HOJE_SP } = require('../db/contasQuery');
 //
 // Contas pessoais e extras de funcionários não aparecem aqui e nunca podem aparecer:
 // pessoais nunca entram em nenhum total da empresa, e extras (adiantamentos/vales) já
-// são descontados na folha. Por isso ficam fora da tabela `contas` (SPEC.md, regras 1 e 3).
+// são descontados na folha. Por isso ficam fora da tabela `contas` (SPEC.md, regras 1 e 3)
+// — as pessoais em `contas_pessoais`, que este arquivo não consulta.
+//
+// O painel mostra apenas a CONTAGEM de contas pessoais vencidas, servida por
+// outra rota. Sem descrição e sem valor: esta é a tela que fica aberta no balcão.
 
 // Recortes possíveis para os boletos de fornecedor.
 const FILTROS = {
