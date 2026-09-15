@@ -3,6 +3,7 @@ const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 const { assinarTokenFolha } = require('../middleware/folha');
 const { calcularHoras } = require('../utils/calculoHoras');
+const { calcularFerias, diasDeDireito } = require('../utils/calculoFerias');
 const { lerParametros } = require('./parametrosController');
 
 // Líquido = salário + bonificação - compras - adiantamento - outras - descontos.
@@ -523,9 +524,95 @@ async function calculoHoras(req, res) {
   });
 }
 
+// Férias, pela mesma régua da calculadora de hora extra: calcula e não grava.
+// O número que sai é bruto — INSS e imposto de renda dependem do mês inteiro e
+// quem fecha isso é o contador.
+async function calculoFerias(req, res) {
+  const id = Number(req.body.funcionario_id);
+  const inicio = String(req.body.inicio || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(inicio)) {
+    return res.status(400).json({ error: 'Informe a data de início das férias.' });
+  }
+
+  const { rows } = await pool.query(
+    `SELECT id, nome, codigo, salario_base,
+            to_char(data_admissao, 'YYYY-MM-DD') AS data_admissao
+       FROM funcionarios WHERE id = $1`,
+    [id]
+  );
+  const funcionario = rows[0];
+  if (!funcionario) return res.status(404).json({ error: 'Funcionário não encontrado.' });
+
+  const salario = Number(funcionario.salario_base);
+  if (!salario) {
+    return res.status(400).json({
+      error: `${funcionario.nome} está sem salário base no cadastro. Sem ele não dá para calcular as férias.`,
+    });
+  }
+
+  const numero = (v, padrao = 0) => (v === undefined || v === '' ? padrao : Number(v));
+  const faltas = numero(req.body.faltas);
+  const direito = diasDeDireito(faltas);
+
+  if (direito === 0) {
+    return res.status(400).json({
+      error: `Com ${faltas} faltas sem justificativa no período, a CLT (art. 130) não dá direito a férias. Confira o número de faltas.`,
+    });
+  }
+
+  // Sem dias informados, vale o direito inteiro — é o caso comum.
+  const gozo = numero(req.body.dias_gozo, direito);
+  const abono = numero(req.body.dias_abono);
+
+  // O abono é a venda de até um terço das férias (art. 143). Deixar passar
+  // disso devolveria um valor que o funcionário não pode receber assim.
+  const maximoAbono = Math.floor(direito / 3);
+  if (abono > maximoAbono) {
+    return res.status(400).json({
+      error: `O abono é de no máximo um terço das férias: com ${direito} dias de direito, dá para vender até ${maximoAbono} dia(s).`,
+    });
+  }
+
+  if (gozo + abono > direito) {
+    return res.status(400).json({
+      error: `${gozo} dia(s) de descanso e ${abono} vendido(s) passam dos ${direito} dias de direito.`,
+    });
+  }
+
+  if (gozo < 0 || abono < 0) {
+    return res.status(400).json({ error: 'Os dias não podem ser negativos.' });
+  }
+
+  const resultado = calcularFerias({
+    salarioBase: salario,
+    mediaVariaveis: numero(req.body.media_variaveis),
+    admissao: funcionario.data_admissao,
+    inicio,
+    faltas,
+    diasGozo: gozo,
+    diasAbono: abono,
+    adiantar13: req.body.adiantar_13 === true || req.body.adiantar_13 === 'on',
+    pagarEmDobro: req.body.pagar_em_dobro === true || req.body.pagar_em_dobro === 'on',
+  });
+
+  return res.json({
+    funcionario: {
+      id: funcionario.id,
+      nome: funcionario.nome,
+      codigo: funcionario.codigo,
+      salario_base: salario,
+      data_admissao: funcionario.data_admissao,
+    },
+    inicio,
+    faltas,
+    ...resultado,
+  });
+}
+
 module.exports = {
   desbloquear,
   calculoHoras,
+  calculoFerias,
   pendencias,
   comprasDoFuncionario,
   listar,

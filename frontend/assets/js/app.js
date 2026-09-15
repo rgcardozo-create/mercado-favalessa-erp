@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.46.0';
+const VERSAO = '1.47.0';
 
 const state = {
   sessao: getSessao(),
@@ -119,6 +119,8 @@ const state = {
   // os campos não se apagarem quando a conta volta.
   calculoHoras: null,
   calculoEntrada: {},
+  calculoFerias: null,
+  feriasEntrada: {},
   parametrosTrabalhistas: null,
   // Registro do Cadastros aberto para correção. O mesmo formulário cadastra e edita.
   cadastroEditando: null,
@@ -2523,6 +2525,122 @@ function calculadoraHorasHTML() {
   `;
 }
 
+function calculadoraFeriasHTML() {
+  const c = state.calculoFerias;
+  const d = state.feriasEntrada || {};
+  const guardado = (campo) => escapar(String(d[campo] === undefined ? '' : d[campo]));
+  const p = c && c.periodo_aquisitivo;
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Calcular férias</h2>
+        ${c ? `<span class="grupo-total">${brl(c.total)}</span>` : ''}
+      </div>
+
+      <form data-action="calculo-ferias" class="form-inline">
+        <label>Funcionário
+          <select name="funcionario_id" required>
+            <option value="">— escolha —</option>
+            ${state.funcionarios
+              .map(
+                (f) =>
+                  `<option value="${f.id}" ${c && c.funcionario.id === f.id ? 'selected' : ''}>${escapar(f.nome)}${
+                    f.salario_base ? '' : ' (sem salário no cadastro)'
+                  }</option>`
+              )
+              .join('')}
+          </select>
+        </label>
+        <label>Começa em <input type="date" name="inicio" required value="${guardado('inicio')}" /></label>
+        <label>Faltas sem justificativa <input type="number" step="1" min="0" name="faltas" value="${guardado('faltas')}" /></label>
+        <label>Dias de descanso <input type="number" step="1" min="0" name="dias_gozo" placeholder="tudo a que tem direito" value="${guardado('dias_gozo')}" /></label>
+        <label>Dias vendidos (abono) <input type="number" step="1" min="0" name="dias_abono" value="${guardado('dias_abono')}" /></label>
+        <label>Média de hora extra e adicionais <input type="number" step="0.01" min="0" name="media_variaveis" placeholder="R$ por mês" value="${guardado('media_variaveis')}" /></label>
+        <label class="campo-marca campo-largo">
+          <input type="checkbox" name="adiantar_13" ${d.adiantar_13 ? 'checked' : ''} />
+          Adiantar metade do 13º junto
+        </label>
+        <label class="campo-marca campo-largo">
+          <input type="checkbox" name="pagar_em_dobro" ${d.pagar_em_dobro ? 'checked' : ''} />
+          Férias vencidas — pagar em dobro (art. 137)
+        </label>
+        <button type="submit">Calcular</button>
+        <p class="vazio campo-largo">
+          <strong>Faltas</strong> são as sem justificativa dentro do período aquisitivo, e mexem nos dias de
+          direito (CLT, art. 130): até 5 mantém os 30 dias; de 6 a 14 caem para 24; de 15 a 23, para 18.
+          <strong>Média de hora extra</strong> entra na base das férias (art. 142) — quem paga extra todo mês
+          e calcula só pelo salário paga a menos.
+          <strong>Dias vendidos</strong> é o abono: até um terço das férias.
+        </p>
+      </form>
+
+      ${
+        c
+          ? `<table class="tabela-contas">
+              <thead><tr><th>O quê</th><th>Conta</th><th>Valor</th></tr></thead>
+              <tbody>
+                ${c.linhas
+                  .map(
+                    (l) => `<tr>
+                      <td>${escapar(l.rotulo)}</td>
+                      <td><small>${escapar(l.detalhe)}</small></td>
+                      <td><strong>${brl(l.valor)}</strong></td>
+                    </tr>`
+                  )
+                  .join('')}
+              </tbody>
+              <tfoot>
+                <tr><td colspan="2"><strong>Total bruto</strong></td><td><strong>${brl(c.total)}</strong></td></tr>
+              </tfoot>
+            </table>
+            <p class="vazio">
+              ${escapar(c.funcionario.nome)} &middot; salário ${brl(c.funcionario.salario_base)} &middot;
+              base das férias ${brl(c.base)} &middot; dia ${brl(c.valor_dia)}.
+              Direito a <strong>${c.dias_direito} dia(s)</strong>${
+                c.faltas ? ` (com ${c.faltas} falta(s))` : ''
+              }: ${c.dias_gozo} de descanso${c.dias_abono ? ` e ${c.dias_abono} vendido(s)` : ''}.
+              Sai em ${dateBR(c.inicio)} e volta em <strong>${dateBR(c.retorno)}</strong>.
+            </p>
+            <div class="alerta aviso">
+              <strong>Pague até ${dateBR(c.pagar_ate)}</strong> — as férias têm que estar pagas dois dias
+              antes de começarem (CLT, art. 145).
+            </div>
+            ${
+              p
+                ? `<p class="vazio">
+                    Período aquisitivo: ${dateBR(p.de)} a ${dateBR(p.ate)}.
+                    ${
+                      p.completo
+                        ? `Precisa ser concedido até <strong>${dateBR(p.concessivo_ate)}</strong>; depois disso, a lei manda pagar em dobro.`
+                        : '<strong>Ainda não fechou.</strong> O direito a férias nasce depois de 12 meses de casa — confira a data de admissão no cadastro.'
+                    }
+                  </p>`
+                : `<p class="vazio">
+                    ${escapar(c.funcionario.nome)} está sem data de admissão no cadastro, então não dá para
+                    conferir o período aquisitivo nem o prazo de conceder. A conta acima não depende disso.
+                  </p>`
+            }
+            <div class="alerta aviso">
+              <strong>Valor bruto</strong>, sem INSS e sem imposto de renda — os dois dependem do total do
+              mês inteiro. Use para saber quanto separar e para conferir a folha do contador; quem fecha o
+              número é ele. E o sistema não guarda quais férias já foram tiradas: se houver período
+              atrasado de anos anteriores, ele não tem como avisar sozinho.
+            </div>
+            ${
+              c.total > 0
+                ? `<div class="acoes-alerta">
+                    <button type="button" id="btn-lancar-ferias">Lançar ${brl(c.total)} na folha como férias</button>
+                    <span class="vazio">Entra como lançamento à parte. O salário do mês precisa ser ajustado por você: estes dias já estão pagos aqui.</span>
+                  </div>`
+                : ''
+            }`
+          : ''
+      }
+    </section>
+  `;
+}
+
 function folhaHTML() {
   const cabecalho = cabecalhoHTML('Folha de pagamento');
 
@@ -2632,6 +2750,8 @@ function folhaHTML() {
     </section>
 
     ${calculadoraHorasHTML()}
+
+    ${calculadoraFeriasHTML()}
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
@@ -4236,6 +4356,12 @@ function bind() {
   const btnLancarCalculo = root.querySelector('#btn-lancar-calculo');
   if (btnLancarCalculo) btnLancarCalculo.addEventListener('click', onLancarCalculo);
 
+  const formFerias = root.querySelector('[data-action="calculo-ferias"]');
+  if (formFerias) formFerias.addEventListener('submit', onCalcularFerias);
+
+  const btnLancarFerias = root.querySelector('#btn-lancar-ferias');
+  if (btnLancarFerias) btnLancarFerias.addEventListener('click', onLancarFerias);
+
   root.querySelectorAll('[data-marca-folha]').forEach((caixa) => {
     caixa.addEventListener('change', () => {
       const id = Number(caixa.dataset.marcaFolha);
@@ -4865,6 +4991,73 @@ async function onCalcularHoras(ev) {
     state.erro = err.message;
   }
   render();
+}
+
+async function onCalcularFerias(ev) {
+  ev.preventDefault();
+  const form = ev.target;
+  const fd = new FormData(form);
+  const corpo = {};
+  for (const [k, v] of fd.entries()) corpo[k] = v;
+  // Caixa desmarcada não aparece no FormData: sem isto, desmarcar não teria efeito.
+  corpo.adiantar_13 = form.querySelector('[name="adiantar_13"]').checked;
+  corpo.pagar_em_dobro = form.querySelector('[name="pagar_em_dobro"]').checked;
+  state.feriasEntrada = corpo;
+  try {
+    state.calculoFerias = await apiFetch('/folha/calculo-ferias', { method: 'POST', body: JSON.stringify(corpo) });
+    state.erro = null;
+  } catch (err) {
+    state.calculoFerias = null;
+    state.erro = err.message;
+  }
+  render();
+}
+
+// Férias viram um lançamento à parte na folha, com os dias registrados. Não é
+// serviço extra (aquilo é dinheiro a mais pelo trabalho a mais); férias é o
+// pagamento do período de descanso, e por isso vai para a folha mesmo.
+//
+// De propósito não mexe em vale nem em fiado: quem decide descontar é o dono,
+// no lançamento normal do mês.
+async function onLancarFerias() {
+  const c = state.calculoFerias;
+  if (!c) return;
+  const descricao =
+    `Férias — ${c.dias_gozo} dia(s) a partir de ${dateBR(c.inicio)}, volta em ${dateBR(c.retorno)}` +
+    (c.dias_abono ? ` · ${c.dias_abono} dia(s) vendido(s)` : '') +
+    `\n${c.linhas.map((l) => `${l.rotulo}: ${brl(l.valor)}`).join('\n')}`;
+
+  if (
+    !confirm(
+      `Lançar ${brl(c.total)} de férias para ${c.funcionario.nome}?\n\n` +
+        'Entra como lançamento separado. Lembre de ajustar o salário do mês: estes dias já ficam pagos aqui.'
+    )
+  ) {
+    return;
+  }
+
+  try {
+    await apiFetch('/folha', {
+      method: 'POST',
+      body: JSON.stringify({
+        funcionario_id: c.funcionario.id,
+        nome: c.funcionario.nome,
+        tipo: 'ferias',
+        data_ref: c.inicio,
+        salario: c.total,
+        observacoes: descricao,
+        abater_extras: false,
+        liquidar_prazo: false,
+      }),
+    });
+    state.calculoFerias = null;
+    state.feriasEntrada = {};
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 // O cálculo vira lançamento pelo caminho que já existe: serviço extra pago é

@@ -10,7 +10,10 @@ const ok = (rot, cond) => { if (!cond) falhas++; console.log(`  ${cond ? 'ok  ' 
   ok('valor "4.133,11 D" é SAÍDA',   JSON.stringify(lerValor('4.133,11 D')) === '{"valor":4133.11,"saida":true}');
   ok('valor "0,00 C" lido',          lerValor('0,00 C').valor === 0);
   ok('valor lixo devolve null',      lerValor('abc') === null);
-  ok('valor sem letra e sem coluna de natureza é recusado', lerValor('1.067,79') === null);
+  // Mudou no PR #58: valor positivo sem indicador nenhum é crédito, não lixo.
+  // Extrato do Itaú traz assim, e recusar fazia 31 entradas virarem "ilegível".
+  ok('valor sem letra e sem coluna de natureza é crédito',
+     JSON.stringify(lerValor('1.067,79')) === '{"valor":1067.79,"saida":false}');
   ok('valor com a natureza em coluna à parte (formato cru)', JSON.stringify(lerValor('4.133,11', 'D')) === '{"valor":4133.11,"saida":true}');
   ok('natureza C em coluna à parte',  lerValor('8,11', 'C').saida === false);
   ok('"Pagamento de Impostos" e "Impostos" viram a mesma chave',
