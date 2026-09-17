@@ -94,7 +94,7 @@ async function resumo(req, res) {
 
   const regras = await lerRegras();
 
-  const [porBandeira, porDia] = await Promise.all([
+  const [porBandeira, porDia, combinacoes] = await Promise.all([
     pool
       .query(
         `SELECT adquirente::text AS adquirente,
@@ -125,6 +125,24 @@ async function resumo(req, res) {
         [de, ate]
       )
       .then((r) => r.rows.map(numeros).map((l) => compararComCombinado(l, regras))),
+
+    // As combinações que existem de verdade nos extratos dele, do histórico
+    // inteiro e não só do período.
+    //
+    // A tela usa isto para montar as listas de bandeira e forma. Sem elas o
+    // campo era texto livre, e digitar "Master" onde o extrato diz "Mastercard"
+    // criava uma regra que nunca casava com nada — a taxa ficava sem conferência
+    // e a tela não tinha como perceber. Escolher de uma lista tirada do próprio
+    // dado acaba com a classe inteira desse erro.
+    pool
+      .query(
+        `SELECT DISTINCT adquirente::text AS adquirente,
+                COALESCE(NULLIF(btrim(bandeira), ''), '') AS bandeira,
+                COALESCE(NULLIF(btrim(forma), ''), '') AS forma
+           FROM conciliacao_transacoes
+          ORDER BY 1, 2, 3`
+      )
+      .then((r) => r.rows),
   ]);
 
   // Cartões de um lado, tickets do outro. Cada ticket é uma empresa diferente,
@@ -170,6 +188,7 @@ async function resumo(req, res) {
   return res.json({
     periodo: { de, ate },
     regras,
+    combinacoes,
     cartoes: { linhas: bandeiras.cartoes, totais: somar(bandeiras.cartoes), por_dia: dias.cartoes },
     tickets: { linhas: bandeiras.tickets, totais: somar(bandeiras.tickets), por_dia: dias.tickets },
   });
