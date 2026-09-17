@@ -15,6 +15,7 @@ const folhaRoutes = require('./routes/folha.routes');
 const relatoriosRoutes = require('./routes/relatorios.routes');
 const adminRoutes = require('./routes/admin.routes');
 const pessoaisRoutes = require('./routes/pessoais.routes');
+const recebimentosRoutes = require('./routes/recebimentos.routes');
 
 const app = express();
 
@@ -67,6 +68,7 @@ app.use('/api/folha', folhaRoutes);
 app.use('/api/relatorios', relatoriosRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/pessoais', pessoaisRoutes);
+app.use('/api/recebimentos', recebimentosRoutes);
 
 // Em produção o próprio backend serve o frontend, então a interface e a API
 // ficam no mesmo domínio — o `/api` do frontend resolve sozinho, sem proxy nem
