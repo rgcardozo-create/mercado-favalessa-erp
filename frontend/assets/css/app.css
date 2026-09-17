@@ -641,3 +641,10 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
   border-top: 2px solid var(--azul);
 }
 .tabela-lote .separador-mes small { font-weight: 400; color: #667085; margin-left: 8px; }
+
+/* Tabela dentro de uma linha aberta: a de fora já ocupa a tela, e a de dentro
+   com a mesma altura de linha empurrava o resto da lista para longe. */
+.tabela-compacta th, .tabela-compacta td { padding: 3px 8px; font-size: 12px; }
+.tabela-compacta th { font-size: 10px; }
+.tabela-compacta button { padding: 2px 7px; font-size: 11px; }
+.linha-baixa .vazio { margin: 4px 0 6px; }

@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.55.0';
+const VERSAO = '1.56.0';
 
 const state = {
   sessao: getSessao(),
@@ -140,6 +140,8 @@ const state = {
   // Lançamentos de dinheiro do PDV, para poder corrigir e excluir.
   dinheiroPDV: [],
   dinheiroEditando: null,
+  // Baixa aberta na linha do cliente da venda a prazo.
+  baixaPrazoId: null,
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -2504,7 +2506,8 @@ function vendaPrazoHTML() {
             comSaldo.length
               ? comSaldo
                   .map(
-                    (c) => `<tr class="${state.extratoPrazo && state.extratoPrazo.id === c.id ? 'marcada' : ''}">
+                    (c) => `
+                    <tr class="${state.extratoPrazo && state.extratoPrazo.id === c.id ? 'marcada' : ''}">
                       <td>${c.codigo || '—'}</td>
                       <td>${c.nome}</td>
                       <td>${brl(c.total_compras)}</td>
@@ -2512,8 +2515,15 @@ function vendaPrazoHTML() {
                       <td><strong>${brl(c.saldo)}</strong></td>
                       <td>${c.movimentos}</td>
                       <td>${c.ultimo_movimento ? dateBR(c.ultimo_movimento) : '—'}</td>
-                      <td><button data-extrato-cliente="${c.id}" class="secundario">Ver compras</button></td>
-                    </tr>`
+                      <td class="acoes"><div class="acoes-linha">
+                        <button data-extrato-cliente="${c.id}" class="secundario">${
+                          state.extratoPrazo && state.extratoPrazo.id === c.id ? 'Fechar' : 'Ver compras'
+                        }</button>
+                        ${c.saldo > 0 ? `<button data-baixa-prazo="${c.id}">Dar baixa</button>` : ''}
+                      </div></td>
+                    </tr>
+                    ${formBaixaPrazoHTML(c)}
+                    ${extratoClienteHTML(c)}`
                   )
                   .join('')
               : '<tr><td colspan="8">Nenhum movimento lançado.</td></tr>'
@@ -2521,33 +2531,60 @@ function vendaPrazoHTML() {
         </tbody>
       </table>
     </section>
-
-    ${extratoClienteHTML()}
   `;
 }
 
-// O caderno de um cliente, compra por compra. Existia no backend desde sempre e
-// a tela nunca tinha chamado: dava para ver o saldo, não de onde ele veio — e
-// quando o cliente pergunta "isso aí é de quê?", saldo não responde.
-function extratoClienteHTML() {
+// A baixa acontece na linha do cliente, não num formulário lá em cima.
+//
+// Com trezentos nomes na lista, "escolha o cliente no topo" quer dizer rolar
+// para cima, achar a pessoa de novo numa caixa de seleção e torcer para ser a
+// mesma. É o mesmo motivo pelo qual Contas a pagar já dá baixa na linha.
+function formBaixaPrazoHTML(c) {
+  if (state.baixaPrazoId !== c.id) return '';
+
+  return `
+    <tr class="linha-baixa"><td colspan="8">
+      <form data-action="baixa-prazo" data-id="${c.id}" class="form-inline">
+        <label>Quanto pagou
+          <input type="number" step="0.01" min="0" name="valor" required value="${Number(c.saldo).toFixed(2)}" />
+        </label>
+        <label>Como pagou
+          <select name="forma_pagamento">
+            <option value="">— não informado —</option>
+            ${FORMAS_RECEBIMENTO.map((f) => `<option value="${escapar(f)}">${escapar(f)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
+        <button type="submit">Registrar pagamento</button>
+        <button type="button" class="secundario" data-baixa-prazo="${c.id}">Cancelar</button>
+        <p class="vazio campo-largo">
+          Já vem com o saldo inteiro de <strong>${brl(c.saldo)}</strong>. Pagou só uma parte? Troque o
+          valor — o resto continua no caderno.
+        </p>
+      </form>
+    </td></tr>
+  `;
+}
+
+// O caderno do cliente, compra por compra, aberto na linha dele.
+//
+// Existia no backend desde sempre e a tela nunca tinha chamado: dava para ver o
+// saldo, não de onde ele veio — e quando o cliente pergunta "isso aí é de quê?",
+// saldo não responde.
+function extratoClienteHTML(c) {
   const e = state.extratoPrazo;
-  if (!e) return '';
+  if (!e || e.id !== c.id) return '';
 
   const movimentos = e.movimentos || [];
   let acumulado = 0;
 
   return `
-    <section class="grupo-painel">
-      <div class="grupo-cabecalho">
-        <h2>${escapar(e.nome)}${e.codigo ? ` &middot; código ${escapar(e.codigo)}` : ''}</h2>
-        <span class="grupo-total">saldo ${brl(e.saldo)}</span>
-        <button id="btn-fechar-extrato" class="secundario">Fechar</button>
-      </div>
+    <tr class="linha-baixa"><td colspan="8">
       <p class="vazio">
-        ${movimentos.length} movimento(s) &middot; comprou ${brl(e.total_compras)} &middot;
-        pagou ${brl(e.total_pago)}.
+        <strong>${movimentos.length} movimento(s)</strong> &middot; comprou ${brl(e.total_compras)} &middot;
+        pagou ${brl(e.total_pago)} &middot; saldo <strong>${brl(e.saldo)}</strong>.
       </p>
-      <table class="tabela-contas">
+      <table class="tabela-contas tabela-compacta">
         <thead>
           <tr><th>Data</th><th>O quê</th><th>Como pagou</th><th>Valor</th><th>Saldo depois</th><th></th></tr>
         </thead>
@@ -2577,7 +2614,7 @@ function extratoClienteHTML() {
           }
         </tbody>
       </table>
-    </section>
+    </td></tr>
   `;
 }
 
@@ -5493,13 +5530,16 @@ function bind() {
     b.addEventListener('click', () => onExcluirMovPrazo(Number(b.dataset.excluirMov)))
   );
 
-  const btnFecharExtrato = root.querySelector('#btn-fechar-extrato');
-  if (btnFecharExtrato) {
-    btnFecharExtrato.addEventListener('click', () => {
-      state.extratoPrazo = null;
+  root.querySelectorAll('[data-baixa-prazo]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const id = Number(b.dataset.baixaPrazo);
+      state.baixaPrazoId = state.baixaPrazoId === id ? null : id;
       render();
-    });
-  }
+    })
+  );
+
+  const formBaixaPrazo = root.querySelector('[data-action="baixa-prazo"]');
+  if (formBaixaPrazo) formBaixaPrazo.addEventListener('submit', onBaixaPrazo);
 
   const formPrazo = root.querySelector('[data-action="novo-mov-prazo"]');
   if (formPrazo) {
@@ -6225,6 +6265,13 @@ async function onExcluirDinheiro(id) {
 }
 
 async function onAbrirExtratoCliente(id) {
+  // Clicar de novo fecha: o mesmo botão que abriu é o que a pessoa procura para
+  // sair, e um segundo botão só para fechar seria um a mais na linha.
+  if (state.extratoPrazo && state.extratoPrazo.id === id) {
+    state.extratoPrazo = null;
+    render();
+    return;
+  }
   try {
     state.extratoPrazo = await apiFetch(`/venda-prazo/clientes/${id}`);
     state.erro = null;
@@ -6233,6 +6280,36 @@ async function onAbrirExtratoCliente(id) {
     state.erro = err.message;
   }
   render();
+}
+
+// Registrar o pagamento do caderno pela linha do cliente.
+async function onBaixaPrazo(ev) {
+  ev.preventDefault();
+  const id = Number(ev.target.dataset.id);
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch('/venda-prazo/movimentos', {
+      method: 'POST',
+      body: JSON.stringify({
+        cliente_id: id,
+        tipo: 'pagamento',
+        valor: fd.get('valor'),
+        data: fd.get('data'),
+        forma_pagamento: fd.get('forma_pagamento') || null,
+      }),
+    });
+    state.baixaPrazoId = null;
+    state.erro = null;
+    // O caderno aberto é recarregado junto: senão ele seguiria mostrando o saldo
+    // de antes do pagamento que a pessoa acabou de registrar.
+    if (state.extratoPrazo && state.extratoPrazo.id === id) {
+      state.extratoPrazo = await apiFetch(`/venda-prazo/clientes/${id}`);
+    }
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 async function onExcluirMovPrazo(id) {
