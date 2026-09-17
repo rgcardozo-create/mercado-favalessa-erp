@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.50.0';
+const VERSAO = '1.51.0';
 
 const state = {
   sessao: getSessao(),
@@ -126,6 +126,11 @@ const state = {
   // Sub-aba da Folha: 'folha' (lançamentos) ou 'calculos'.
   folhaAba: 'folha',
   pessoaisPendencias: null,
+  // Análise das taxas das adquirentes. Nasce no mês passado fechado.
+  conciliacaoAba: 'conferencia',
+  taxas: null,
+  taxasPeriodo: mesPassado(),
+  taxasSituacoes: [],
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -286,6 +291,7 @@ async function carregarDados() {
       state.conciliacao = conc;
       state.fornecedores = fornecedoresConc;
       state.bancos = bancosConc;
+      if (state.conciliacaoAba === 'taxas') state.taxas = await buscarTaxas();
     } else if (state.tab === 'acumulado') {
       const [acumulados, resumo, diaADia] = await Promise.all([
         apiFetch('/acumulados'),
@@ -1239,6 +1245,154 @@ function rotuloAdquirente(tipo) {
   return a ? a.rotulo : tipo;
 }
 
+// Mês passado, que é o recorte com que ele quis começar: o mês fechado é o
+// primeiro que dá para analisar sem o viés do mês pela metade.
+function mesPassado() {
+  const hoje = todayISO();
+  const [a, m] = hoje.split('-').map(Number);
+  const ini = new Date(Date.UTC(a, m - 2, 1));
+  const fim = new Date(Date.UTC(a, m - 1, 0));
+  return { de: ini.toISOString().slice(0, 10), ate: fim.toISOString().slice(0, 10) };
+}
+
+function pct(v) {
+  if (v === null || v === undefined) return '<small class="vazio">sem taxa no extrato</small>';
+  return `<strong>${v.toFixed(2).replace('.', ',')}%</strong>`;
+}
+
+// Análise das taxas das adquirentes. De cada R$ 100 vendidos naquela bandeira,
+// quanto ficou pelo caminho.
+function taxasHTML() {
+  const t = state.taxas;
+  const p = state.taxasPeriodo;
+
+  const formulario = `
+    <section class="cartoes-form">
+      <form data-action="periodo-taxas" class="form-inline">
+        <h2>Período</h2>
+        <label>De <input type="date" name="de" required value="${escapar(p.de)}" /></label>
+        <label>Até <input type="date" name="ate" required value="${escapar(p.ate)}" /></label>
+        <button type="submit">Analisar</button>
+        <p class="vazio campo-largo">
+          Sai dos extratos já importados — não precisa mandar arquivo de novo. Começa no mês passado
+          fechado, que é o primeiro recorte que dá para comparar sem o viés de mês pela metade.
+        </p>
+      </form>
+    </section>`;
+
+  if (!t) return formulario + (state.carregando ? '<p>Carregando…</p>' : '');
+
+  const g = t.geral;
+  // "Sobrou" é o que interessa de verdade: o líquido dividido pelo bruto. É o
+  // número que responde "de cada 100 que passei na maquininha, quanto entrou".
+  const sobrou = g.bruto > 0 ? (g.liquido / g.bruto) * 100 : null;
+
+  const avisoSemTaxa = g.transacoes_sem_taxa
+    ? `<div class="alerta aviso">
+        <strong>${g.transacoes_sem_taxa} transação(ões)</strong>, somando
+        <strong>${brl(g.bruto_sem_taxa)}</strong>, vieram <strong>sem a taxa no arquivo</strong>.
+        Elas entram no volume, mas <em>ficam de fora das porcentagens</em> — taxa zero num cartão não é
+        "não paguei nada", é "o extrato não disse". Contar como zero faria a bandeira parecer mais
+        barata do que é.
+      </div>`
+    : '';
+
+  const situacoes = t.status.length > 1
+    ? `<div class="filtros">
+        <span class="resumo-lista">Situações no período:</span>
+        ${t.status
+          .map((s) => {
+            const ativa = t.situacoes.includes(s.status);
+            const sozinha = t.situacoes.length === 1 && ativa;
+            return `<button data-situacao-taxa="${escapar(s.status)}" class="${sozinha ? 'ativo' : ''}">
+              ${escapar(s.status)} · ${s.transacoes} · ${brl(s.bruto)}
+            </button>`;
+          })
+          .join('')}
+        ${t.situacoes.length ? '<button data-situacao-taxa="" class="secundario">Ver todas</button>' : ''}
+      </div>
+      ${
+        t.situacoes.length
+          ? `<p class="vazio">Mostrando só <strong>${t.situacoes.map(escapar).join(', ')}</strong>.</p>`
+          : '<p class="vazio">Mostrando <strong>todas as situações</strong>. Cancelada e negada somam no volume — clique numa situação acima para isolar.</p>'
+      }`
+    : '';
+
+  // A mesma tabela serve aos dois recortes; só muda o que a primeira coluna
+  // nomeia — a adquirente no resumo, a bandeira no detalhe.
+  const tabela = (linhas, comAdquirente) => `
+    <table class="tabela-contas">
+      <thead>
+        <tr>
+          ${comAdquirente ? '<th>Adquirente</th>' : ''}
+          <th>${comAdquirente ? 'Bandeira' : 'Adquirente'}</th><th>Forma</th><th>Transações</th>
+          <th>Vendido (bruto)</th><th>Taxa</th><th>Recebido (líquido)</th><th>Taxa %</th><th>Por venda</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${
+          linhas.length
+            ? linhas
+                .map(
+                  (l) => `<tr class="${l.percentual === null ? 'com-atencao' : ''}">
+                    ${comAdquirente ? `<td>${escapar(l.adquirente)}</td>` : ''}
+                    <td>${escapar(l.bandeira || '—')}</td>
+                    <td>${escapar(l.forma || '—')}</td>
+                    <td>${l.transacoes}</td>
+                    <td>${brl(l.bruto)}</td>
+                    <td>${brl(l.tarifa)}</td>
+                    <td><strong>${brl(l.liquido)}</strong></td>
+                    <td>${pct(l.percentual)}</td>
+                    <td>${l.custo_medio === null ? '—' : brl(l.custo_medio)}</td>
+                  </tr>`
+                )
+                .join('')
+            : '<tr><td colspan="9">Nenhuma transação neste período. Importe os extratos primeiro.</td></tr>'
+        }
+      </tbody>
+    </table>`;
+
+  return `
+    ${formulario}
+
+    <div class="cartoes-resumo">
+      <div class="cartao-resumo proximos">
+        <span class="rotulo">Vendido no cartão</span><strong>${brl(g.bruto)}</strong>
+        <small>${g.transacoes} transação(ões)</small>
+      </div>
+      <div class="cartao-resumo vencidas">
+        <span class="rotulo">Ficou de taxa</span><strong>${brl(g.tarifa)}</strong>
+        <small>${g.percentual === null ? 'sem taxa informada' : `${g.percentual.toFixed(2).replace('.', ',')}% do que tem taxa`}</small>
+      </div>
+      <div class="cartao-resumo hoje">
+        <span class="rotulo">Você recebeu</span><strong>${brl(g.liquido)}</strong>
+        <small>${sobrou === null ? '' : `sobrou ${sobrou.toFixed(2).replace('.', ',')}% do que vendeu`}</small>
+      </div>
+    </div>
+
+    ${avisoSemTaxa}
+    ${situacoes}
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Por adquirente</h2></div>
+      ${tabela(
+        t.por_adquirente.map((l) => ({ ...l, bandeira: l.adquirente, forma: 'todas' })),
+        false
+      )}
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Por bandeira e forma</h2></div>
+      ${tabela(t.detalhe, true)}
+      <p class="vazio">
+        <strong>Taxa %</strong> é quanto a adquirente ficou de cada R$ 100 vendidos naquela linha.
+        <strong>Por venda</strong> é o mesmo custo em reais, dividido pelo número de transações — é onde
+        aparece a taxa fixa, que pesa muito na venda pequena e quase nada na grande.
+      </p>
+    </section>
+  `;
+}
+
 function conciliacaoHTML() {
   const cabecalho = cabecalhoHTML('Conciliação');
   if (!state.conciliacao) {
@@ -1246,8 +1400,23 @@ function conciliacaoHTML() {
   }
 
   const c = state.conciliacao;
+
+  // Conferir os extratos e analisar as taxas são duas perguntas diferentes: uma
+  // é "bate?", a outra é "quanto custa?". Cada uma na sua aba.
+  const aba = state.conciliacaoAba === 'taxas' ? 'taxas' : 'conferencia';
+  const subAbas = `
+    <div class="sub-abas">
+      <button data-conc-aba="conferencia" class="${aba === 'conferencia' ? 'ativo' : ''}">Conferência</button>
+      <button data-conc-aba="taxas" class="${aba === 'taxas' ? 'ativo' : ''}">Taxas por bandeira</button>
+    </div>`;
+
+  if (aba === 'taxas') {
+    return `${cabecalho}${subAbas}${taxasHTML()}`;
+  }
+
   return `
     ${cabecalho}
+    ${subAbas}
     ${podeGerenciar() ? importarExtratoHTML() : ''}
 
     <div class="cartoes-resumo">
@@ -4740,6 +4909,35 @@ function bind() {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
 
+  root.querySelectorAll('[data-conc-aba]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      state.conciliacaoAba = btn.dataset.concAba;
+      if (state.conciliacaoAba === 'taxas' && !state.taxas) recarregarTaxas();
+      else render();
+    });
+  });
+
+  const formPeriodoTaxas = root.querySelector('[data-action="periodo-taxas"]');
+  if (formPeriodoTaxas) {
+    formPeriodoTaxas.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      state.taxasPeriodo = { de: fd.get('de'), ate: fd.get('ate') };
+      recarregarTaxas();
+    });
+  }
+
+  // Clicar numa situação isola ela; clicar de novo, ou em "Ver todas", volta ao
+  // conjunto inteiro. Nunca some com nada sem ele ter pedido.
+  root.querySelectorAll('[data-situacao-taxa]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const alvo = btn.dataset.situacaoTaxa;
+      const jaSozinha = state.taxasSituacoes.length === 1 && state.taxasSituacoes[0] === alvo;
+      state.taxasSituacoes = !alvo || jaSozinha ? [] : [alvo];
+      recarregarTaxas();
+    });
+  });
+
   const formNovaPessoal = root.querySelector('[data-action="nova-pessoal"]');
   if (formNovaPessoal) formNovaPessoal.addEventListener('submit', onNovaPessoal);
 
@@ -5475,6 +5673,29 @@ async function onCalcularFerias(ev) {
     state.calculoFerias = null;
     state.erro = err.message;
   }
+  render();
+}
+
+// ── Taxas das adquirentes ────────────────────────────────────────────────────
+
+async function buscarTaxas() {
+  const p = state.taxasPeriodo;
+  const params = new URLSearchParams({ de: p.de, ate: p.ate });
+  if (state.taxasSituacoes.length) params.set('situacoes', state.taxasSituacoes.join(','));
+  return apiFetch(`/conciliacao/taxas?${params}`);
+}
+
+async function recarregarTaxas() {
+  state.carregando = true;
+  render();
+  try {
+    state.taxas = await buscarTaxas();
+    state.erro = null;
+  } catch (err) {
+    state.taxas = null;
+    state.erro = err.message;
+  }
+  state.carregando = false;
   render();
 }
 

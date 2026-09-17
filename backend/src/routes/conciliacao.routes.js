@@ -1,5 +1,6 @@
 const express = require('express');
 const asyncHandler = require('../utils/asyncHandler');
+const { taxas } = require('../controllers/taxasController');
 const { authenticate, authorize, exigirTela } = require('../middleware/auth');
 const {
   resumo,
@@ -34,6 +35,9 @@ router.use(exigirTela('conciliacao'));
 
 router.get('/', asyncHandler(resumo));
 router.get('/transacoes', asyncHandler(listarTransacoes));
+
+// Análise das taxas das adquirentes por bandeira. Só lê; não grava nada.
+router.get('/taxas', asyncHandler(taxas));
 
 // Carregar extrato altera os números de faturamento, então fica com Master e
 // Gerente — não entra no login compartilhado da loja.
