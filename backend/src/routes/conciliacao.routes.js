@@ -9,6 +9,11 @@ const {
   importarExtrato,
   analisarVendasCaixa,
   importarVendasCaixa,
+  listarDinheiro,
+  criarDinheiro,
+  atualizarDinheiro,
+  deletarDinheiro,
+  deletarTransacao,
 } = require('../controllers/conciliacaoController');
 const banco = require('../controllers/extratoBancoController');
 
@@ -35,6 +40,19 @@ router.use(exigirTela('conciliacao'));
 
 router.get('/', asyncHandler(resumo));
 router.get('/transacoes', asyncHandler(listarTransacoes));
+
+// Dinheiro do PDV na mão: cadastrar, corrigir e excluir. Até aqui a Conciliação
+// só sabia receber arquivo, e o que entrava errado ficava errado para sempre.
+// Quem está no caixa lança; corrigir e excluir ficam com Master e Gerente,
+// porque mexem em número de faturamento já fechado.
+router.get('/dinheiro', asyncHandler(listarDinheiro));
+router.post('/dinheiro', asyncHandler(criarDinheiro));
+router.put('/dinheiro/:id', authorize('master', 'gerente'), asyncHandler(atualizarDinheiro));
+router.delete('/dinheiro/:id', authorize('master', 'gerente'), asyncHandler(deletarDinheiro));
+
+// Transação de cartão que entrou errada. Reimportar o arquivo certo depois traz
+// a linha de volta — a importação é idempotente, então isto não é caminho sem volta.
+router.delete('/transacoes/:id', authorize('master', 'gerente'), asyncHandler(deletarTransacao));
 
 // Análise das taxas das adquirentes por bandeira. Só lê; não grava nada.
 router.get('/taxas', asyncHandler(taxas));

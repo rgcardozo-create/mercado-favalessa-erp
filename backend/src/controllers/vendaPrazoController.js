@@ -45,8 +45,12 @@ async function extratoCliente(req, res) {
     return res.status(404).json({ error: 'Cliente não encontrado.' });
   }
 
+  // DATE vira texto aqui: devolver o objeto Date faz o dia voltar um quando o
+  // servidor está em UTC e a loja, em São Paulo.
   const { rows: movimentos } = await pool.query(
-    'SELECT * FROM mov_prazo WHERE cliente_id = $1 ORDER BY data, id',
+    `SELECT id, cliente_id, tipo::text AS tipo, valor,
+            to_char(data, 'YYYY-MM-DD') AS data, observacoes, forma_pagamento
+       FROM mov_prazo WHERE cliente_id = $1 ORDER BY data, id`,
     [id]
   );
 
@@ -62,6 +66,9 @@ async function extratoCliente(req, res) {
 
 async function criarMovimento(req, res) {
   const { cliente_id, tipo, valor, data, observacoes } = req.body;
+  // Como o cliente pagou. Só faz sentido no pagamento: a compra fiada é, por
+  // definição, a que ainda não foi paga por forma nenhuma.
+  const forma = tipo === 'pagamento' ? String(req.body.forma_pagamento || '').trim() || null : null;
 
   if (!cliente_id || valor === undefined || !data) {
     return res.status(400).json({ error: 'cliente_id, valor e data são obrigatórios.' });
@@ -74,9 +81,11 @@ async function criarMovimento(req, res) {
   }
 
   const { rows } = await pool.query(
-    `INSERT INTO mov_prazo (cliente_id, tipo, valor, data, observacoes, criado_por)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [cliente_id, tipo || 'compra', valor, data, observacoes || null, req.user.id]
+    `INSERT INTO mov_prazo (cliente_id, tipo, valor, data, observacoes, forma_pagamento, criado_por)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     RETURNING id, cliente_id, tipo::text AS tipo, valor,
+               to_char(data, 'YYYY-MM-DD') AS data, observacoes, forma_pagamento`,
+    [cliente_id, tipo || 'compra', valor, data, observacoes || null, forma, req.user.id]
   );
 
   await registrarAuditoria({

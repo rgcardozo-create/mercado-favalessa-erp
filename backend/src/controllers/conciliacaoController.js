@@ -515,6 +515,129 @@ async function importarVendasCaixa(req, res) {
   });
 }
 
+// ── Dinheiro do PDV, na mão ──────────────────────────────────────────────────
+//
+// Até aqui a Conciliação só sabia receber arquivo: o que entrava por importação
+// não tinha como ser corrigido nem apagado pela tela. Na prática isso quer dizer
+// que um dia digitado errado no relatório do caixa ficava errado para sempre, e
+// um dia que faltou não tinha como ser lançado.
+//
+// Cadastrar, corrigir e excluir à mão não substitui a importação — completa. O
+// arquivo continua trazendo o grosso; a mão resolve o caso que o arquivo não
+// cobriu.
+
+function validarDinheiro(corpo) {
+  const data = String(corpo.data || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return { erro: 'Informe a data.' };
+
+  const valor = Number(corpo.valor || 0);
+  const vendaPrazo = Number(corpo.venda_prazo || 0);
+  if (!Number.isFinite(valor) || valor < 0) return { erro: 'Valor do dinheiro inválido.' };
+  if (!Number.isFinite(vendaPrazo) || vendaPrazo < 0) return { erro: 'Valor da venda a prazo inválido.' };
+  if (valor === 0 && vendaPrazo === 0) return { erro: 'Informe ao menos um valor: dinheiro ou venda a prazo.' };
+
+  return {
+    data,
+    pdv: String(corpo.pdv || '').trim() || null,
+    valor,
+    venda_prazo: vendaPrazo,
+  };
+}
+
+async function listarDinheiro(req, res) {
+  const { de, ate } = periodoDaQuery(req.query);
+  const params = [];
+  const condicoes = filtroPeriodo(de, ate, params);
+  const where = condicoes.length ? `WHERE ${condicoes.join(' AND ')}` : '';
+
+  const { rows } = await pool.query(
+    `SELECT id, to_char(data, 'YYYY-MM-DD') AS data, pdv, valor, venda_prazo,
+            (impressao_digital IS NOT NULL) AS importado
+       FROM conciliacao_dinheiro ${where}
+      ORDER BY data DESC, pdv NULLS LAST, id DESC
+      LIMIT 500`,
+    params
+  );
+  return res.json(rows.map((r) => ({ ...r, valor: Number(r.valor), venda_prazo: Number(r.venda_prazo) })));
+}
+
+async function criarDinheiro(req, res) {
+  const d = validarDinheiro(req.body);
+  if (d.erro) return res.status(400).json({ error: d.erro });
+
+  // Sem impressão digital: lançamento à mão não vem de arquivo nenhum, e dar uma
+  // impressão a ele faria a próxima importação achar que já tinha importado este.
+  const { rows } = await pool.query(
+    `INSERT INTO conciliacao_dinheiro (data, pdv, valor, venda_prazo)
+     VALUES ($1, $2, $3, $4) RETURNING id`,
+    [d.data, d.pdv, d.valor, d.venda_prazo]
+  );
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'create',
+    entidade: 'conciliacao_dinheiro',
+    entidadeId: rows[0].id,
+    dados: d,
+  });
+
+  return res.status(201).json({ id: rows[0].id });
+}
+
+async function atualizarDinheiro(req, res) {
+  const d = validarDinheiro(req.body);
+  if (d.erro) return res.status(400).json({ error: d.erro });
+
+  const { rows } = await pool.query(
+    `UPDATE conciliacao_dinheiro
+        SET data = $2, pdv = $3, valor = $4, venda_prazo = $5
+      WHERE id = $1 RETURNING id`,
+    [req.params.id, d.data, d.pdv, d.valor, d.venda_prazo]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'update',
+    entidade: 'conciliacao_dinheiro',
+    entidadeId: Number(req.params.id),
+    dados: d,
+  });
+
+  return res.json({ id: rows[0].id });
+}
+
+async function deletarDinheiro(req, res) {
+  const { rowCount } = await pool.query('DELETE FROM conciliacao_dinheiro WHERE id = $1', [req.params.id]);
+  if (!rowCount) return res.status(404).json({ error: 'Lançamento não encontrado.' });
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'delete',
+    entidade: 'conciliacao_dinheiro',
+    entidadeId: Number(req.params.id),
+  });
+
+  return res.status(204).send();
+}
+
+// Apagar uma transação de cartão que entrou errada. A importação é idempotente
+// pela impressão digital, então reimportar o arquivo certo depois traz a linha
+// de volta — não é uma via de mão única.
+async function deletarTransacao(req, res) {
+  const { rowCount } = await pool.query('DELETE FROM conciliacao_transacoes WHERE id = $1', [req.params.id]);
+  if (!rowCount) return res.status(404).json({ error: 'Transação não encontrada.' });
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'delete',
+    entidade: 'conciliacao_transacoes',
+    entidadeId: Number(req.params.id),
+  });
+
+  return res.status(204).send();
+}
+
 module.exports = {
   analisarVendasCaixa,
   importarVendasCaixa,
@@ -522,5 +645,10 @@ module.exports = {
   listarTransacoes,
   analisarExtratoEnviado,
   importarExtrato,
+  listarDinheiro,
+  criarDinheiro,
+  atualizarDinheiro,
+  deletarDinheiro,
+  deletarTransacao,
   ADQUIRENTES,
 };
