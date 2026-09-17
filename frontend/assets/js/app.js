@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.53.0';
+const VERSAO = '1.54.0';
 
 const state = {
   sessao: getSessao(),
@@ -399,7 +399,8 @@ function loginHTML() {
         <p class="subtitulo">Entre com seu usuário e senha</p>
         ${state.loginErro ? `<div class="alerta erro">${state.loginErro}</div>` : ''}
         <label>Email</label>
-        <input type="email" name="email" required autocomplete="username" />
+        <input type="email" name="email" required autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false" />
         <label>Senha</label>
         <input type="password" name="senha" required autocomplete="current-password" />
         <button type="submit">Entrar</button>
@@ -3959,7 +3960,10 @@ function usuariosHTML() {
       <form data-action="form-usuario" class="form-inline ${editando && editando.id ? 'em-edicao' : ''}">
         <h2>${editando && editando.id ? `Editando ${escapar(editando.nome)}` : 'Novo acesso'}</h2>
         <label>Nome <input type="text" name="nome" required value="${escapar((editando && editando.nome) || '')}" /></label>
-        <label>E-mail <input type="email" name="email" required value="${escapar((editando && editando.email) || '')}" /></label>
+        <label>E-mail
+          <input type="email" name="email" required value="${escapar((editando && editando.email) || '')}"
+                 autocapitalize="none" autocorrect="off" spellcheck="false" />
+        </label>
         <label>Perfil
           <select name="role" id="perfil-usuario">
             ${PERFIS_UI.map(
@@ -4943,6 +4947,45 @@ function telaHTML() {
   return MONTAR_TELA[abaInicial()]();
 }
 
+// Tudo em MAIÚSCULAS no que se digita de informação.
+//
+// O motivo não é estética: três pessoas lançando a mesma coisa escrevem
+// "adilson", "Adilson" e "ADILSON", e a lista fica com cara de três
+// fornecedores. Forçar na digitação resolve na origem, sem depender de ninguém
+// lembrar.
+//
+// Fora da regra, e não por descuido:
+//
+//  - E-mail e senha. E-mail é identificador e o sistema guarda minúsculo; senha
+//    é literal, e trocar a caixa de uma letra é errar a senha.
+//  - Chave PIX. Chave aleatória diferencia maiúscula de minúscula, e chave que é
+//    e-mail idem — maiusculizar quebraria o pagamento, calado.
+//  - Busca. Não é dado guardado, e a busca já ignora caixa e acento.
+const CAMPOS_SEM_MAIUSCULA = new Set(['email', 'senha', 'pix', 'busca']);
+
+function ligarMaiusculas(raiz) {
+  raiz.querySelectorAll('input[type="text"], textarea').forEach((campo) => {
+    if (CAMPOS_SEM_MAIUSCULA.has(campo.name)) return;
+
+    campo.addEventListener('input', () => {
+      const virado = campo.value.toUpperCase();
+      if (virado === campo.value) return;
+      // Guardar e devolver o cursor: trocar o value sozinho joga o cursor para o
+      // fim, e corrigir uma letra no meio da palavra viraria uma briga com o
+      // campo. toUpperCase não muda o tamanho do texto em português, então as
+      // posições continuam valendo.
+      const ini = campo.selectionStart;
+      const fim = campo.selectionEnd;
+      campo.value = virado;
+      try {
+        campo.setSelectionRange(ini, fim);
+      } catch (err) {
+        /* campo que não aceita seleção: o texto já foi trocado, que é o que importa */
+      }
+    });
+  });
+}
+
 function render() {
   root.innerHTML = telaHTML();
   bind();
@@ -5009,6 +5052,8 @@ function bind() {
   // clicar em cada campo é o que faz o lançamento demorar. No último campo o
   // foco cai no botão, e aí o Enter cadastra.
   root.querySelectorAll('form.form-inline').forEach(ligarEnterQueAvanca);
+
+  ligarMaiusculas(root);
 
   const formConta = root.querySelector('[data-action="nova-conta"]');
   if (formConta) {
