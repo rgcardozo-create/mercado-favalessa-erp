@@ -3,15 +3,28 @@ const jwt = require('jsonwebtoken');
 const pool = require('../db/pool');
 const { telasDoUsuario } = require('../db/telas');
 
+// E-mail não diferencia maiúscula de minúscula, e o cadastro já guarda tudo em
+// minúsculas. O login precisa comparar do mesmo jeito, senão quem digita
+// "Marta@..." nunca entra numa conta salva como "marta@...".
+//
+// Isso não é hipótese: o teclado do celular capitaliza a primeira letra sozinho.
+// E o pior é que a recusa vem como "Email ou senha inválidos" — a pessoa jura
+// que a senha está certa, e está mesmo. O espaço que o toque no campo às vezes
+// deixa no fim dava exatamente o mesmo resultado.
+const normalizarEmail = (valor) => String(valor || '').trim().toLowerCase();
+
 async function login(req, res) {
   const { email, senha } = req.body;
   if (!email || !senha) {
     return res.status(400).json({ error: 'Informe email e senha.' });
   }
 
+  // lower() dos dois lados: pega também os acessos antigos que porventura
+  // tenham sido gravados com maiúscula antes desta correção.
   const { rows } = await pool.query(
-    'SELECT id, nome, email, senha_hash, role::text AS role, ativo, telas FROM usuarios WHERE email = $1',
-    [email]
+    `SELECT id, nome, email, senha_hash, role::text AS role, ativo, telas
+       FROM usuarios WHERE lower(email) = $1 ORDER BY id`,
+    [normalizarEmail(email)]
   );
   const usuario = rows[0];
 

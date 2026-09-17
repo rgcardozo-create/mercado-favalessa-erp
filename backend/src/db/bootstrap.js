@@ -33,7 +33,9 @@ async function semearUsuarios() {
       `INSERT INTO usuarios (nome, email, senha_hash, role)
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (email) DO UPDATE SET senha_hash = EXCLUDED.senha_hash, role = EXCLUDED.role`,
-      [u.nome, u.email, hash, u.role]
+      // Minúsculas aqui também: se a variável do Railway vier com maiúscula, o
+      // acesso nasceria impossível de usar pelo login, que compara normalizado.
+      [u.nome, String(u.email).trim().toLowerCase(), hash, u.role]
     );
     criados.push(u.role);
   }

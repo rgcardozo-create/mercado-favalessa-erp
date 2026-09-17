@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.52.0';
+const VERSAO = '1.54.0';
 
 const state = {
   sessao: getSessao(),
@@ -399,7 +399,8 @@ function loginHTML() {
         <p class="subtitulo">Entre com seu usuário e senha</p>
         ${state.loginErro ? `<div class="alerta erro">${state.loginErro}</div>` : ''}
         <label>Email</label>
-        <input type="email" name="email" required autocomplete="username" />
+        <input type="email" name="email" required autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false" />
         <label>Senha</label>
         <input type="password" name="senha" required autocomplete="current-password" />
         <button type="submit">Entrar</button>
@@ -3959,7 +3960,10 @@ function usuariosHTML() {
       <form data-action="form-usuario" class="form-inline ${editando && editando.id ? 'em-edicao' : ''}">
         <h2>${editando && editando.id ? `Editando ${escapar(editando.nome)}` : 'Novo acesso'}</h2>
         <label>Nome <input type="text" name="nome" required value="${escapar((editando && editando.nome) || '')}" /></label>
-        <label>E-mail <input type="email" name="email" required value="${escapar((editando && editando.email) || '')}" /></label>
+        <label>E-mail
+          <input type="email" name="email" required value="${escapar((editando && editando.email) || '')}"
+                 autocapitalize="none" autocorrect="off" spellcheck="false" />
+        </label>
         <label>Perfil
           <select name="role" id="perfil-usuario">
             ${PERFIS_UI.map(
@@ -4685,26 +4689,62 @@ function diaADiaRecebimentosHTML(r) {
     </section>`;
 }
 
-function taxasCombinadasHTML(regras) {
+// As bandeiras e formas saem do que existe nos extratos dele, e não de texto
+// digitado. Escrever "Master" onde o extrato diz "Mastercard" criava uma regra
+// que nunca casava com nada: a taxa ficava sem conferência e a tela não tinha
+// como perceber. Escolher de uma lista tirada do próprio dado acaba com a classe
+// inteira desse erro.
+function opcoesBandeira(combinacoes, adquirente) {
+  const nomes = [...new Set(combinacoes.filter((c) => c.adquirente === adquirente && c.bandeira).map((c) => c.bandeira))];
+  return nomes.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function opcoesForma(combinacoes, adquirente, bandeira) {
+  const nomes = [
+    ...new Set(
+      combinacoes
+        .filter((c) => c.adquirente === adquirente && (!bandeira || c.bandeira === bandeira) && c.forma)
+        .map((c) => c.forma)
+    ),
+  ];
+  return nomes.sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function taxasCombinadasHTML(regras, combinacoes) {
+  const adquirentes = ADQUIRENTES_RECEB.filter(([v]) => combinacoes.some((c) => c.adquirente === v));
+  const lista = adquirentes.length ? adquirentes : ADQUIRENTES_RECEB;
+  const primeira = lista[0][0];
+
   return `
     <section class="cartoes-form">
       <form data-action="nova-taxa-combinada" class="form-inline">
         <h2>Taxa combinada</h2>
         <label>Adquirente
           <select name="adquirente" required>
-            ${ADQUIRENTES_RECEB.map(([v, r]) => `<option value="${v}">${r}</option>`).join('')}
+            ${lista.map(([v, r]) => `<option value="${v}">${r}</option>`).join('')}
           </select>
         </label>
-        <label>Bandeira / empresa <input type="text" name="bandeira" placeholder="Visa, Elo, VR… (vazio = todas)" /></label>
-        <label>Forma <input type="text" name="forma" placeholder="Crédito, Débito… (vazio = todas)" /></label>
+        <label>Bandeira / empresa
+          <select name="bandeira">
+            <option value="">— todas —</option>
+            ${opcoesBandeira(combinacoes, primeira).map((b) => `<option value="${escapar(b)}">${escapar(b)}</option>`).join('')}
+          </select>
+        </label>
+        <label>Forma
+          <select name="forma">
+            <option value="">— todas —</option>
+            ${opcoesForma(combinacoes, primeira, '').map((f) => `<option value="${escapar(f)}">${escapar(f)}</option>`).join('')}
+          </select>
+        </label>
         <label>Percentual <input type="number" step="0.0001" min="0" max="100" name="percentual" required placeholder="3,19" /></label>
         <label class="campo-largo">Observação <input type="text" name="observacoes" placeholder="opcional — ex.: negociado em jan/26 com o gerente" /></label>
-        <button type="submit">Salvar</button>
+        <button type="submit">Salvar e conferir</button>
+        <p class="vazio campo-largo" id="alcance-taxa"></p>
         <p class="vazio campo-largo">
-          O que eles <strong>prometeram</strong> cobrar. Deixar bandeira e forma em branco vale para tudo daquela
-          adquirente; preencher só a forma vale para todas as bandeiras naquela forma. Quando houver mais de
-          uma regra servindo, <strong>a mais específica ganha</strong>. Cadastrar a mesma combinação de novo
-          corrige a anterior, em vez de criar duas.
+          O que eles <strong>prometeram</strong> cobrar. As listas mostram só o que existe nos seus extratos —
+          se uma bandeira não aparece, é porque não houve venda nela. <strong>Todas</strong> vale como curinga,
+          e quando mais de uma regra serve, <strong>a mais específica ganha</strong>. Salvar a mesma combinação
+          de novo corrige a anterior, em vez de criar duas.
         </p>
       </form>
     </section>
@@ -4730,6 +4770,89 @@ function taxasCombinadasHTML(regras) {
           </table>`
         : '<p class="vazio">Nenhuma taxa combinada cadastrada ainda. Sem elas, a coluna <strong>Diferença</strong> fica em branco — o extrato diz o que foi cobrado, mas só você sabe o que foi prometido.</p>'
     }`;
+}
+
+// Cascata das listas da taxa combinada, e a prévia do que a regra vai pegar.
+//
+// A prévia existe porque salvar às cegas é o que fazia a regra errada passar
+// despercebida: ele escolhia uma combinação, salvava, e se não casasse com nada
+// a tela simplesmente não mudava — indistinguível de "está tudo certo". Agora,
+// antes de salvar, ela diz quantas linhas a regra alcança e o que está sendo
+// cobrado nelas hoje.
+function ligarCascataTaxa(form) {
+  const r = state.recebimentos;
+  if (!r) return;
+
+  const combinacoes = r.combinacoes || [];
+  const linhas = [...r.cartoes.linhas, ...r.tickets.linhas];
+
+  const selAdq = form.querySelector('[name="adquirente"]');
+  const selBandeira = form.querySelector('[name="bandeira"]');
+  const selForma = form.querySelector('[name="forma"]');
+  const campoPct = form.querySelector('[name="percentual"]');
+  const alvo = form.querySelector('#alcance-taxa');
+  if (!selAdq || !selBandeira || !selForma) return;
+
+  const encher = (select, valores) => {
+    const antes = select.value;
+    select.innerHTML =
+      '<option value="">— todas —</option>' +
+      valores.map((v) => `<option value="${escapar(v)}">${escapar(v)}</option>`).join('');
+    // Mantém a escolha quando ela ainda existe na lista nova.
+    select.value = valores.includes(antes) ? antes : '';
+  };
+
+  const mostrarAlcance = () => {
+    if (!alvo) return;
+    const adq = selAdq.value;
+    const band = selBandeira.value;
+    const forma = selForma.value;
+
+    const atingidas = linhas.filter(
+      (l) => l.adquirente === adq && (!band || l.bandeira === band) && (!forma || l.forma === forma)
+    );
+
+    if (!atingidas.length) {
+      alvo.innerHTML =
+        '<strong>Nenhuma linha do período combina com isso.</strong> A regra fica salva, mas só passa a valer quando houver venda nessa combinação.';
+      return;
+    }
+
+    const pctNovo = Number(String(campoPct.value).replace(',', '.'));
+    const temPct = Number.isFinite(pctNovo) && campoPct.value !== '';
+
+    const detalhe = atingidas
+      .map((l) => {
+        const cobrado = l.percentual === null ? 'sem taxa no extrato' : `${l.percentual.toFixed(2).replace('.', ',')}%`;
+        if (!temPct || l.percentual === null || l.bruto_com_taxa <= 0) {
+          return `${escapar(l.bandeira)} ${escapar(l.forma)}: ${cobrado}`;
+        }
+        // Arredonda igual ao servidor, senão a prévia diz 19,49 e a tabela, depois
+        // de salvar, diz 19,48 — um centavo de diferença parece defeito.
+        const esperado = Number(((l.bruto_com_taxa * pctNovo) / 100).toFixed(2));
+        const dif = l.tarifa_com_taxa - esperado;
+        const palavra = Math.abs(dif) < 0.01 ? 'bate' : dif > 0 ? `pagou ${brl(dif)} a mais` : `pagou ${brl(-dif)} a menos`;
+        return `${escapar(l.bandeira)} ${escapar(l.forma)}: cobrado ${cobrado} — ${palavra}`;
+      })
+      .join(' &middot; ');
+
+    alvo.innerHTML = `Vai valer para <strong>${atingidas.length} linha(s)</strong> do período: ${detalhe}`;
+  };
+
+  selAdq.addEventListener('change', () => {
+    encher(selBandeira, opcoesBandeira(combinacoes, selAdq.value));
+    encher(selForma, opcoesForma(combinacoes, selAdq.value, selBandeira.value));
+    mostrarAlcance();
+  });
+
+  selBandeira.addEventListener('change', () => {
+    encher(selForma, opcoesForma(combinacoes, selAdq.value, selBandeira.value));
+    mostrarAlcance();
+  });
+
+  selForma.addEventListener('change', mostrarAlcance);
+  campoPct.addEventListener('input', mostrarAlcance);
+  mostrarAlcance();
 }
 
 function recebimentosHTML() {
@@ -4790,7 +4913,7 @@ function recebimentosHTML() {
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho"><h2>Taxas combinadas</h2></div>
-      ${taxasCombinadasHTML(r.regras)}
+      ${taxasCombinadasHTML(r.regras, r.combinacoes || [])}
     </section>
 
     <div class="alerta aviso">
@@ -4822,6 +4945,45 @@ function telaHTML() {
   // caso de quem tinha acesso e perdeu enquanto estava com o sistema aberto.
   if (podeVerTela(state.tab) && MONTAR_TELA[state.tab]) return MONTAR_TELA[state.tab]();
   return MONTAR_TELA[abaInicial()]();
+}
+
+// Tudo em MAIÚSCULAS no que se digita de informação.
+//
+// O motivo não é estética: três pessoas lançando a mesma coisa escrevem
+// "adilson", "Adilson" e "ADILSON", e a lista fica com cara de três
+// fornecedores. Forçar na digitação resolve na origem, sem depender de ninguém
+// lembrar.
+//
+// Fora da regra, e não por descuido:
+//
+//  - E-mail e senha. E-mail é identificador e o sistema guarda minúsculo; senha
+//    é literal, e trocar a caixa de uma letra é errar a senha.
+//  - Chave PIX. Chave aleatória diferencia maiúscula de minúscula, e chave que é
+//    e-mail idem — maiusculizar quebraria o pagamento, calado.
+//  - Busca. Não é dado guardado, e a busca já ignora caixa e acento.
+const CAMPOS_SEM_MAIUSCULA = new Set(['email', 'senha', 'pix', 'busca']);
+
+function ligarMaiusculas(raiz) {
+  raiz.querySelectorAll('input[type="text"], textarea').forEach((campo) => {
+    if (CAMPOS_SEM_MAIUSCULA.has(campo.name)) return;
+
+    campo.addEventListener('input', () => {
+      const virado = campo.value.toUpperCase();
+      if (virado === campo.value) return;
+      // Guardar e devolver o cursor: trocar o value sozinho joga o cursor para o
+      // fim, e corrigir uma letra no meio da palavra viraria uma briga com o
+      // campo. toUpperCase não muda o tamanho do texto em português, então as
+      // posições continuam valendo.
+      const ini = campo.selectionStart;
+      const fim = campo.selectionEnd;
+      campo.value = virado;
+      try {
+        campo.setSelectionRange(ini, fim);
+      } catch (err) {
+        /* campo que não aceita seleção: o texto já foi trocado, que é o que importa */
+      }
+    });
+  });
 }
 
 function render() {
@@ -4890,6 +5052,8 @@ function bind() {
   // clicar em cada campo é o que faz o lançamento demorar. No último campo o
   // foco cai no botão, e aí o Enter cadastra.
   root.querySelectorAll('form.form-inline').forEach(ligarEnterQueAvanca);
+
+  ligarMaiusculas(root);
 
   const formConta = root.querySelector('[data-action="nova-conta"]');
   if (formConta) {
@@ -5209,7 +5373,10 @@ function bind() {
   }
 
   const formTaxaCombinada = root.querySelector('[data-action="nova-taxa-combinada"]');
-  if (formTaxaCombinada) formTaxaCombinada.addEventListener('submit', onSalvarTaxaCombinada);
+  if (formTaxaCombinada) {
+    formTaxaCombinada.addEventListener('submit', onSalvarTaxaCombinada);
+    ligarCascataTaxa(formTaxaCombinada);
+  }
 
   root.querySelectorAll('[data-excluir-taxa]').forEach((b) =>
     b.addEventListener('click', () => onExcluirTaxaCombinada(Number(b.dataset.excluirTaxa)))
