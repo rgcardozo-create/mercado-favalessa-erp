@@ -520,3 +520,35 @@ CREATE TABLE IF NOT EXISTS contas_pessoais (
 
 CREATE INDEX IF NOT EXISTS idx_contas_pessoais_vencimento ON contas_pessoais (vencimento);
 CREATE INDEX IF NOT EXISTS idx_contas_pessoais_aberto ON contas_pessoais (pago_em) WHERE pago_em IS NULL;
+
+-- A taxa que a adquirente PROMETEU cobrar, por bandeira e forma.
+--
+-- O extrato diz o que foi cobrado; só o dono sabe o que foi combinado. Sem
+-- guardar o combinado em algum lugar, "conferir se a taxa é a que eles falaram"
+-- depende de ele lembrar de cor o percentual de cada bandeira de cada
+-- adquirente — que é justamente o que ninguém faz.
+--
+-- `bandeira` e `forma` nulos valem como curinga: uma regra só da adquirente
+-- pega tudo dela, e uma regra com bandeira pega todas as formas daquela
+-- bandeira. Na hora de comparar, a mais específica ganha.
+--
+-- Não há vigência por data: guarda a taxa de hoje. Quando o contrato mudar, ele
+-- edita — e o histórico do que foi cobrado continua no extrato, que é o registro
+-- que importa.
+CREATE TABLE IF NOT EXISTS taxas_contratadas (
+  id            SERIAL PRIMARY KEY,
+  adquirente    adquirente_tipo NOT NULL,
+  bandeira      VARCHAR(60),
+  forma         VARCHAR(60),
+  percentual    NUMERIC(6,4) NOT NULL CHECK (percentual >= 0 AND percentual <= 100),
+  observacoes   TEXT,
+  criado_por    INTEGER REFERENCES usuarios(id),
+  criado_em     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  atualizado_em TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Uma regra por combinação. COALESCE no índice porque NULL não conflita com
+-- NULL em UNIQUE, e sem isso daria para cadastrar a mesma regra curinga duas
+-- vezes e nunca saber qual das duas está valendo.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_taxas_contratadas_chave
+  ON taxas_contratadas (adquirente, COALESCE(bandeira, ''), COALESCE(forma, ''));

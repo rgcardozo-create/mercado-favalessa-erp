@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.51.0';
+const VERSAO = '1.52.0';
 
 const state = {
   sessao: getSessao(),
@@ -131,6 +131,10 @@ const state = {
   taxas: null,
   taxasPeriodo: mesPassado(),
   taxasSituacoes: [],
+  // Recebimentos: o destrinchado do que cada adquirente vai depositar.
+  recebimentos: null,
+  recebimentosPeriodo: mesPassado(),
+  recebimentosDia: null,
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -188,6 +192,7 @@ const TELAS = [
   { chave: 'contas', rotulo: 'Contas a pagar' },
   { chave: 'venda-prazo', rotulo: 'Venda a prazo' },
   { chave: 'conciliacao', rotulo: 'Conciliação' },
+  { chave: 'recebimentos', rotulo: 'Recebimentos' },
   { chave: 'acumulado', rotulo: 'Acumulado' },
   { chave: 'cadastros', rotulo: 'Cadastros' },
   { chave: 'gerencial', rotulo: 'Gerencial' },
@@ -333,6 +338,9 @@ async function carregarDados() {
         state.folha = null;
         state.extras = null;
       }
+    } else if (state.tab === 'recebimentos') {
+      const p = state.recebimentosPeriodo;
+      state.recebimentos = await apiFetch(`/recebimentos?de=${p.de}&ate=${p.ate}`);
     } else if (state.tab === 'pessoais') {
       const params = new URLSearchParams();
       if (state.statusPessoais) params.set('status', state.statusPessoais);
@@ -4523,11 +4531,282 @@ function pessoaisHTML() {
   `;
 }
 
+const ADQUIRENTES_RECEB = [
+  ['cielo', 'Cielo'],
+  ['stone', 'Stone'],
+  ['itau', 'Itaú'],
+  ['tickets', 'Tickets (VR, Alelo, Comprocard…)'],
+];
+
+const pctTexto = (v) => (v === null || v === undefined ? null : `${v.toFixed(2).replace('.', ',')}%`);
+
+// A diferença entre a taxa combinada e a cobrada. Verde quando cobraram menos,
+// vermelho quando cobraram mais — e traço quando não dá para saber, que é o
+// caso de não haver taxa no extrato ou não haver combinado cadastrado.
+function diferencaHTML(l) {
+  if (l.combinado === null) return '<small class="vazio">sem combinado</small>';
+  if (l.diferenca_pct === null) return '<small class="vazio">sem taxa no extrato</small>';
+  if (Math.abs(l.diferenca_valor) < 0.01) return '<span class="badge quitado">bate</span>';
+
+  const acima = l.diferenca_valor > 0;
+  return `<span class="badge ${acima ? 'vencida' : 'quitado'}">
+    ${acima ? '+' : '−'}${Math.abs(l.diferenca_pct).toFixed(2).replace('.', ',')} p.p.
+  </span><br><small>${acima ? 'pagou' : 'economizou'} ${brl(Math.abs(l.diferenca_valor))}</small>`;
+}
+
+// Nos cartões a adquirente precisa aparecer: a mesma bandeira passa em mais de
+// uma maquininha, e "Mastercard Crédito 3,28%" sem dizer de quem não serve para
+// nada — é justamente a comparação entre elas que interessa. Nos tickets, a
+// empresa É a bandeira, então a coluna seria repetição.
+function tabelaRecebimentos(linhas, rotuloPrimeira, comAdquirente) {
+  return `
+    <table class="tabela-contas">
+      <thead>
+        <tr>
+          ${comAdquirente ? '<th>Adquirente</th>' : ''}
+          <th>${rotuloPrimeira}</th><th>Forma</th><th>Transações</th>
+          <th>Vendeu</th><th>Taxa</th><th>Vai receber</th>
+          <th>Cobrado</th><th>Combinado</th><th>Diferença</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${
+          linhas.length
+            ? linhas
+                .map(
+                  (l) => `<tr class="${l.combinado !== null && l.diferenca_valor > 0.01 ? 'com-atencao' : ''}">
+                    ${comAdquirente ? `<td>${escapar(l.adquirente)}</td>` : ''}
+                    <td>${escapar(l.bandeira)}</td>
+                    <td>${escapar(l.forma)}</td>
+                    <td>${l.transacoes}</td>
+                    <td>${brl(l.bruto)}</td>
+                    <td>${brl(l.tarifa)}</td>
+                    <td><strong>${brl(l.liquido)}</strong></td>
+                    <td>${pctTexto(l.percentual) || '<small class="vazio">sem taxa</small>'}</td>
+                    <td>${pctTexto(l.combinado) || '<small class="vazio">—</small>'}</td>
+                    <td>${diferencaHTML(l)}</td>
+                  </tr>`
+                )
+                .join('')
+            : `<tr><td colspan="${comAdquirente ? 10 : 9}">Nada neste período.</td></tr>`
+        }
+      </tbody>
+    </table>`;
+}
+
+function blocoRecebimentos(titulo, bloco, explicacao) {
+  const t = bloco.totais;
+  if (!bloco.linhas.length) {
+    return `<section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>${titulo}</h2></div>
+      <p class="vazio">Nada neste período.</p>
+    </section>`;
+  }
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>${titulo}</h2>
+        <span class="grupo-total">vai receber ${brl(t.liquido)}</span>
+      </div>
+
+      <div class="cartoes-resumo">
+        <div class="cartao-resumo proximos">
+          <span class="rotulo">Vendeu</span><strong>${brl(t.bruto)}</strong>
+          <small>${t.transacoes} transação(ões)</small>
+        </div>
+        <div class="cartao-resumo vencidas">
+          <span class="rotulo">Taxa</span><strong>${brl(t.tarifa)}</strong>
+          <small>${pctTexto(t.percentual) || 'sem taxa no extrato'}</small>
+        </div>
+        <div class="cartao-resumo hoje">
+          <span class="rotulo">Vai receber</span><strong>${brl(t.liquido)}</strong>
+        </div>
+        <div class="cartao-resumo ${t.diferenca_valor > 0.01 ? 'vencidas' : 'proximos'}">
+          <span class="rotulo">Contra o combinado</span>
+          <strong>${t.diferenca_valor > 0 ? '+' : ''}${brl(t.diferenca_valor)}</strong>
+          <small>${
+            t.sem_regra ? `${t.sem_regra} linha(s) sem combinado cadastrado` : 'todas as linhas conferidas'
+          }</small>
+        </div>
+      </div>
+
+      <p class="vazio">${explicacao}</p>
+      ${tabelaRecebimentos(bloco.linhas, titulo === 'Tickets' ? 'Empresa' : 'Bandeira', titulo !== 'Tickets')}
+    </section>`;
+}
+
+// O dia a dia: "ontem, no Elo, você vendeu tanto". Abre no dia mais recente que
+// existe no período — que é a pergunta que se faz de manhã.
+function diaADiaRecebimentosHTML(r) {
+  const todos = [...r.cartoes.por_dia, ...r.tickets.por_dia];
+  if (!todos.length) return '';
+
+  const dias = [...new Set(todos.map((l) => l.data))].sort().reverse();
+  const dia = dias.includes(state.recebimentosDia) ? state.recebimentosDia : dias[0];
+  const doDia = todos.filter((l) => l.data === dia);
+
+  const soma = (campo) => doDia.reduce((a, l) => a + l[campo], 0);
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Dia a dia</h2>
+        <select id="dia-recebimentos">
+          ${dias.map((d) => `<option value="${d}" ${d === dia ? 'selected' : ''}>${dateBR(d)}</option>`).join('')}
+        </select>
+        <span class="grupo-total">${brl(soma('liquido'))}</span>
+      </div>
+      <p class="vazio">
+        Em <strong>${dateBR(dia)}</strong> você vendeu <strong>${brl(soma('bruto'))}</strong>,
+        ficaram <strong>${brl(soma('tarifa'))}</strong> de taxa, e vai receber
+        <strong>${brl(soma('liquido'))}</strong>.
+      </p>
+      <table class="tabela-contas">
+        <thead>
+          <tr><th>Adquirente</th><th>Bandeira</th><th>Forma</th><th>Transações</th><th>Vendeu</th><th>Taxa</th><th>Vai receber</th></tr>
+        </thead>
+        <tbody>
+          ${doDia
+            .map(
+              (l) => `<tr>
+                <td>${escapar(l.adquirente)}</td>
+                <td>${escapar(l.bandeira)}</td>
+                <td>${escapar(l.forma)}</td>
+                <td>${l.transacoes}</td>
+                <td>${brl(l.bruto)}</td>
+                <td>${brl(l.tarifa)}</td>
+                <td><strong>${brl(l.liquido)}</strong></td>
+              </tr>`
+            )
+            .join('')}
+        </tbody>
+      </table>
+    </section>`;
+}
+
+function taxasCombinadasHTML(regras) {
+  return `
+    <section class="cartoes-form">
+      <form data-action="nova-taxa-combinada" class="form-inline">
+        <h2>Taxa combinada</h2>
+        <label>Adquirente
+          <select name="adquirente" required>
+            ${ADQUIRENTES_RECEB.map(([v, r]) => `<option value="${v}">${r}</option>`).join('')}
+          </select>
+        </label>
+        <label>Bandeira / empresa <input type="text" name="bandeira" placeholder="Visa, Elo, VR… (vazio = todas)" /></label>
+        <label>Forma <input type="text" name="forma" placeholder="Crédito, Débito… (vazio = todas)" /></label>
+        <label>Percentual <input type="number" step="0.0001" min="0" max="100" name="percentual" required placeholder="3,19" /></label>
+        <label class="campo-largo">Observação <input type="text" name="observacoes" placeholder="opcional — ex.: negociado em jan/26 com o gerente" /></label>
+        <button type="submit">Salvar</button>
+        <p class="vazio campo-largo">
+          O que eles <strong>prometeram</strong> cobrar. Deixar bandeira e forma em branco vale para tudo daquela
+          adquirente; preencher só a forma vale para todas as bandeiras naquela forma. Quando houver mais de
+          uma regra servindo, <strong>a mais específica ganha</strong>. Cadastrar a mesma combinação de novo
+          corrige a anterior, em vez de criar duas.
+        </p>
+      </form>
+    </section>
+
+    ${
+      regras.length
+        ? `<table class="tabela-contas">
+            <thead><tr><th>Adquirente</th><th>Bandeira</th><th>Forma</th><th>Combinado</th><th>Observação</th><th></th></tr></thead>
+            <tbody>
+              ${regras
+                .map(
+                  (r) => `<tr>
+                    <td>${escapar(r.adquirente)}</td>
+                    <td>${escapar(r.bandeira || 'todas')}</td>
+                    <td>${escapar(r.forma || 'todas')}</td>
+                    <td><strong>${pctTexto(r.percentual)}</strong></td>
+                    <td><small>${escapar(r.observacoes || '')}</small></td>
+                    <td><button data-excluir-taxa="${r.id}" class="perigo">Excluir</button></td>
+                  </tr>`
+                )
+                .join('')}
+            </tbody>
+          </table>`
+        : '<p class="vazio">Nenhuma taxa combinada cadastrada ainda. Sem elas, a coluna <strong>Diferença</strong> fica em branco — o extrato diz o que foi cobrado, mas só você sabe o que foi prometido.</p>'
+    }`;
+}
+
+function recebimentosHTML() {
+  const r = state.recebimentos;
+  const p = state.recebimentosPeriodo;
+
+  const formulario = `
+    <section class="cartoes-form">
+      <form data-action="periodo-recebimentos" class="form-inline">
+        <h2>Período</h2>
+        <label>De <input type="date" name="de" required value="${escapar(p.de)}" /></label>
+        <label>Até <input type="date" name="ate" required value="${escapar(p.ate)}" /></label>
+        <button type="submit">Ver</button>
+        <p class="vazio campo-largo">
+          Sai dos extratos já importados na Conciliação. <strong>Cartões e tickets ficam separados</strong>:
+          a Cielo é uma empresa, e VR, Alelo e Comprocard são outras, cada uma com o seu contrato e o seu
+          depósito.
+        </p>
+      </form>
+    </section>`;
+
+  if (!r) {
+    return `${cabecalhoHTML('Recebimentos')}${formulario}${state.carregando ? '<p>Carregando…</p>' : ''}`;
+  }
+
+  const totalReceber = r.cartoes.totais.liquido + r.tickets.totais.liquido;
+  const totalDiferenca = r.cartoes.totais.diferenca_valor + r.tickets.totais.diferenca_valor;
+
+  return `
+    ${cabecalhoHTML('Recebimentos')}
+    ${formulario}
+
+    <div class="cartoes-resumo">
+      <div class="cartao-resumo hoje">
+        <span class="rotulo">Total a receber no período</span><strong>${brl(totalReceber)}</strong>
+        <small>cartões + tickets</small>
+      </div>
+      <div class="cartao-resumo ${totalDiferenca > 0.01 ? 'vencidas' : 'proximos'}">
+        <span class="rotulo">Pago além do combinado</span>
+        <strong>${totalDiferenca > 0 ? '+' : ''}${brl(totalDiferenca)}</strong>
+        <small>onde há taxa combinada cadastrada</small>
+      </div>
+    </div>
+
+    ${blocoRecebimentos(
+      'Cartões',
+      r.cartoes,
+      'Cada linha é uma bandeira numa forma de pagamento. <strong>Cobrado</strong> é o que o extrato mostra; <strong>combinado</strong> é o que você cadastrou embaixo. A diferença em reais é o que você leva para a conversa com a adquirente.'
+    )}
+
+    ${blocoRecebimentos(
+      'Tickets',
+      r.tickets,
+      'Cada linha aqui é <strong>uma empresa diferente</strong> — VR, Alelo, Comprocard, cada uma com contrato e depósito próprios. Somá-las esconderia justamente a conta que você precisa fazer com cada uma.'
+    )}
+
+    ${diaADiaRecebimentosHTML(r)}
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Taxas combinadas</h2></div>
+      ${taxasCombinadasHTML(r.regras)}
+    </section>
+
+    <div class="alerta aviso">
+      Isto é o que <strong>deveria</strong> entrar, segundo o extrato da adquirente. Conferir contra o que
+      realmente caiu na conta é o passo seguinte, e ainda não está feito — quando estiver, o extrato do banco
+      entra aqui do lado.
+    </div>
+  `;
+}
+
 const MONTAR_TELA = {
   painel: () => painelHTML(),
   contas: () => contasHTML(),
   'venda-prazo': () => vendaPrazoHTML(),
   conciliacao: () => conciliacaoHTML(),
+  recebimentos: () => recebimentosHTML(),
   acumulado: () => acumuladoHTML(),
   cadastros: () => cadastrosHTML(),
   gerencial: () => gerencialHTML(),
@@ -4908,6 +5187,33 @@ function bind() {
   root.querySelectorAll('[data-action="excluir-folha"]').forEach((btn) => {
     btn.addEventListener('click', () => onExcluirFolha(Number(btn.dataset.id)));
   });
+
+  const formPeriodoReceb = root.querySelector('[data-action="periodo-recebimentos"]');
+  if (formPeriodoReceb) {
+    formPeriodoReceb.addEventListener('submit', (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      state.recebimentosPeriodo = { de: fd.get('de'), ate: fd.get('ate') };
+      // O dia escolhido some junto com o período: ele pode não existir no novo.
+      state.recebimentosDia = null;
+      carregarDados();
+    });
+  }
+
+  const seletorDia = root.querySelector('#dia-recebimentos');
+  if (seletorDia) {
+    seletorDia.addEventListener('change', () => {
+      state.recebimentosDia = seletorDia.value;
+      render();
+    });
+  }
+
+  const formTaxaCombinada = root.querySelector('[data-action="nova-taxa-combinada"]');
+  if (formTaxaCombinada) formTaxaCombinada.addEventListener('submit', onSalvarTaxaCombinada);
+
+  root.querySelectorAll('[data-excluir-taxa]').forEach((b) =>
+    b.addEventListener('click', () => onExcluirTaxaCombinada(Number(b.dataset.excluirTaxa)))
+  );
 
   root.querySelectorAll('[data-conc-aba]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -5674,6 +5980,42 @@ async function onCalcularFerias(ev) {
     state.erro = err.message;
   }
   render();
+}
+
+// ── Recebimentos ─────────────────────────────────────────────────────────────
+
+async function onSalvarTaxaCombinada(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch('/recebimentos/taxas-combinadas', {
+      method: 'POST',
+      body: JSON.stringify({
+        adquirente: fd.get('adquirente'),
+        bandeira: fd.get('bandeira') || null,
+        forma: fd.get('forma') || null,
+        percentual: fd.get('percentual'),
+        observacoes: fd.get('observacoes') || null,
+      }),
+    });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onExcluirTaxaCombinada(id) {
+  if (!confirm('Excluir esta taxa combinada? A coluna Diferença das linhas que ela cobria fica em branco.')) return;
+  try {
+    await apiFetch(`/recebimentos/taxas-combinadas/${id}`, { method: 'DELETE' });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 // ── Taxas das adquirentes ────────────────────────────────────────────────────

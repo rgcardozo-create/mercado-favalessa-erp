@@ -13,6 +13,7 @@ const TELAS = [
   { chave: 'contas', rotulo: 'Contas a pagar' },
   { chave: 'venda-prazo', rotulo: 'Venda a prazo' },
   { chave: 'conciliacao', rotulo: 'Conciliação' },
+  { chave: 'recebimentos', rotulo: 'Recebimentos' },
   { chave: 'acumulado', rotulo: 'Acumulado' },
   { chave: 'cadastros', rotulo: 'Cadastros' },
   { chave: 'gerencial', rotulo: 'Gerencial' },
