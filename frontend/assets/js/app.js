@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.54.0';
+const VERSAO = '1.55.0';
 
 const state = {
   sessao: getSessao(),
@@ -135,6 +135,11 @@ const state = {
   recebimentos: null,
   recebimentosPeriodo: mesPassado(),
   recebimentosDia: null,
+  // Caderno aberto de um cliente da venda a prazo.
+  extratoPrazo: null,
+  // Lançamentos de dinheiro do PDV, para poder corrigir e excluir.
+  dinheiroPDV: [],
+  dinheiroEditando: null,
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -296,6 +301,7 @@ async function carregarDados() {
       state.conciliacao = conc;
       state.fornecedores = fornecedoresConc;
       state.bancos = bancosConc;
+      state.dinheiroPDV = await apiFetch('/conciliacao/dinheiro');
       if (state.conciliacaoAba === 'taxas') state.taxas = await buscarTaxas();
     } else if (state.tab === 'acumulado') {
       const [acumulados, resumo, diaADia] = await Promise.all([
@@ -1494,6 +1500,73 @@ function conciliacaoHTML() {
           : '<p class="vazio">Nenhum lançamento do PDV.</p>'
       }
     </section>
+
+    ${lancamentosDinheiroHTML()}
+  `;
+}
+
+// Cadastrar, corrigir e excluir o dinheiro do PDV na mão.
+//
+// Até aqui a Conciliação só sabia receber arquivo: o que entrava errado ficava
+// errado para sempre, e o dia que o relatório não cobriu não tinha como ser
+// lançado. Isto não substitui a importação — o arquivo continua trazendo o
+// grosso; a mão resolve o que ele não cobriu.
+function lancamentosDinheiroHTML() {
+  const lista = state.dinheiroPDV || [];
+  const e = lista.find((l) => l.id === state.dinheiroEditando) || null;
+  const podeGerir = podeGerenciar();
+
+  return `
+    <section class="cartoes-form">
+      <form data-action="${e ? 'editar-dinheiro' : 'novo-dinheiro'}" class="form-inline" ${e ? `data-id="${e.id}"` : ''}>
+        <h2>${e ? `Corrigir lançamento de ${dateBR(e.data)}` : 'Lançar dinheiro do caixa'}</h2>
+        <label>Data <input type="date" name="data" required value="${e ? e.data : todayISO()}" /></label>
+        <label>PDV <input type="text" name="pdv" placeholder="101" value="${e ? escapar(e.pdv || '') : ''}" /></label>
+        <label>Dinheiro <input type="number" step="0.01" min="0" name="valor" value="${e ? e.valor : ''}" /></label>
+        <label>Venda a prazo <input type="number" step="0.01" min="0" name="venda_prazo" value="${e ? e.venda_prazo : ''}" /></label>
+        <button type="submit">${e ? 'Salvar' : 'Lançar'}</button>
+        ${e ? '<button type="button" id="btn-cancelar-dinheiro" class="secundario">Cancelar</button>' : ''}
+        <p class="vazio campo-largo">
+          Para o dia que o relatório do caixa não cobriu, ou para corrigir um valor que veio errado.
+          Pelo menos um dos dois valores precisa ser preenchido.
+        </p>
+      </form>
+    </section>
+
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Lançamentos do caixa</h2>
+        <span class="grupo-total">${lista.length} no período</span>
+      </div>
+      <table class="tabela-contas">
+        <thead>
+          <tr><th>Data</th><th>PDV</th><th>Dinheiro</th><th>Venda a prazo</th><th>Origem</th><th>Ações</th></tr>
+        </thead>
+        <tbody>
+          ${
+            lista.length
+              ? lista
+                  .map(
+                    (l) => `<tr class="${state.dinheiroEditando === l.id ? 'marcada' : ''}">
+                      <td>${dateBR(l.data)}</td>
+                      <td>${escapar(l.pdv || '—')}</td>
+                      <td>${brl(l.valor)}</td>
+                      <td>${l.venda_prazo ? brl(l.venda_prazo) : '—'}</td>
+                      <td><small>${l.importado ? 'do arquivo' : 'na mão'}</small></td>
+                      <td>${
+                        podeGerir
+                          ? `<button data-editar-dinheiro="${l.id}" class="secundario">Editar</button>
+                             <button data-excluir-dinheiro="${l.id}" class="perigo">Excluir</button>`
+                          : '<small class="vazio">só Master ou Gerente</small>'
+                      }</td>
+                    </tr>`
+                  )
+                  .join('')
+              : '<tr><td colspan="6">Nenhum lançamento do caixa neste período.</td></tr>'
+          }
+        </tbody>
+      </table>
+    </section>
   `;
 }
 
@@ -2401,26 +2474,37 @@ function vendaPrazoHTML() {
         </label>
         <label>Tipo
           <select name="tipo">
-            <option value="compra">Compra (fiado)</option>
+            <option value="compra">Compra</option>
             <option value="pagamento">Pagamento do cliente</option>
           </select>
         </label>
         <label>Valor <input type="number" step="0.01" min="0" name="valor" required /></label>
         <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
+        <label id="campo-forma-prazo" class="escondido">Como pagou
+          <select name="forma_pagamento">
+            <option value="">— não informado —</option>
+            ${FORMAS_RECEBIMENTO.map((f) => `<option value="${escapar(f)}">${escapar(f)}</option>`).join('')}
+          </select>
+        </label>
         <button type="submit">Lançar</button>
+        <p class="vazio campo-largo">
+          <strong>Compra</strong> é o que o cliente levou e ficou devendo. <strong>Pagamento</strong> é
+          quando ele acerta — aí aparece o campo de como pagou, que é o que permite cruzar depois com o
+          extrato do banco ou da maquininha.
+        </p>
       </form>
     </section>
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho"><h2>Clientes</h2></div>
       <table class="tabela-contas">
-        <thead><tr><th>Código</th><th>Cliente</th><th>Compras</th><th>Pago</th><th>Saldo</th><th>Movs</th><th>Último</th></tr></thead>
+        <thead><tr><th>Código</th><th>Cliente</th><th>Compras</th><th>Pago</th><th>Saldo</th><th>Movs</th><th>Último</th><th></th></tr></thead>
         <tbody>
           ${
             comSaldo.length
               ? comSaldo
                   .map(
-                    (c) => `<tr>
+                    (c) => `<tr class="${state.extratoPrazo && state.extratoPrazo.id === c.id ? 'marcada' : ''}">
                       <td>${c.codigo || '—'}</td>
                       <td>${c.nome}</td>
                       <td>${brl(c.total_compras)}</td>
@@ -2428,10 +2512,68 @@ function vendaPrazoHTML() {
                       <td><strong>${brl(c.saldo)}</strong></td>
                       <td>${c.movimentos}</td>
                       <td>${c.ultimo_movimento ? dateBR(c.ultimo_movimento) : '—'}</td>
+                      <td><button data-extrato-cliente="${c.id}" class="secundario">Ver compras</button></td>
                     </tr>`
                   )
                   .join('')
-              : '<tr><td colspan="7">Nenhum movimento lançado.</td></tr>'
+              : '<tr><td colspan="8">Nenhum movimento lançado.</td></tr>'
+          }
+        </tbody>
+      </table>
+    </section>
+
+    ${extratoClienteHTML()}
+  `;
+}
+
+// O caderno de um cliente, compra por compra. Existia no backend desde sempre e
+// a tela nunca tinha chamado: dava para ver o saldo, não de onde ele veio — e
+// quando o cliente pergunta "isso aí é de quê?", saldo não responde.
+function extratoClienteHTML() {
+  const e = state.extratoPrazo;
+  if (!e) return '';
+
+  const movimentos = e.movimentos || [];
+  let acumulado = 0;
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>${escapar(e.nome)}${e.codigo ? ` &middot; código ${escapar(e.codigo)}` : ''}</h2>
+        <span class="grupo-total">saldo ${brl(e.saldo)}</span>
+        <button id="btn-fechar-extrato" class="secundario">Fechar</button>
+      </div>
+      <p class="vazio">
+        ${movimentos.length} movimento(s) &middot; comprou ${brl(e.total_compras)} &middot;
+        pagou ${brl(e.total_pago)}.
+      </p>
+      <table class="tabela-contas">
+        <thead>
+          <tr><th>Data</th><th>O quê</th><th>Como pagou</th><th>Valor</th><th>Saldo depois</th><th></th></tr>
+        </thead>
+        <tbody>
+          ${
+            movimentos.length
+              ? movimentos
+                  .map((m) => {
+                    const v = Number(m.valor);
+                    const compra = m.tipo === 'compra';
+                    acumulado += compra ? v : -v;
+                    return `<tr>
+                      <td>${dateBR(m.data)}</td>
+                      <td>${compra ? 'Compra' : 'Pagamento'}</td>
+                      <td>${escapar(m.forma_pagamento || (compra ? '—' : 'não informado'))}</td>
+                      <td>${compra ? '' : '− '}<strong>${brl(v)}</strong></td>
+                      <td>${brl(acumulado)}</td>
+                      <td>${
+                        podeGerenciar()
+                          ? `<button data-excluir-mov="${m.id}" class="perigo">Excluir</button>`
+                          : ''
+                      }</td>
+                    </tr>`;
+                  })
+                  .join('')
+              : '<tr><td colspan="6">Nenhum movimento.</td></tr>'
           }
         </tbody>
       </table>
@@ -4535,6 +4677,11 @@ function pessoaisHTML() {
   `;
 }
 
+// Como o cliente acerta o caderno. Lista curta e fixa de propósito: é o balcão,
+// e separar débito de crédito importa porque caem em datas e taxas diferentes —
+// "cartão" sozinho não diria qual dos dois conferir depois.
+const FORMAS_RECEBIMENTO = ['Dinheiro', 'PIX', 'Cartão de débito', 'Cartão de crédito', 'Transferência'];
+
 const ADQUIRENTES_RECEB = [
   ['cielo', 'Cielo'],
   ['stone', 'Stone'],
@@ -5311,8 +5458,63 @@ function bind() {
   const formAcumulado = root.querySelector('[data-action="novo-acumulado"]');
   if (formAcumulado) formAcumulado.addEventListener('submit', onNovoAcumulado);
 
+  const formNovoDinheiro = root.querySelector('[data-action="novo-dinheiro"]');
+  if (formNovoDinheiro) formNovoDinheiro.addEventListener('submit', onNovoDinheiro);
+
+  const formEditarDinheiro = root.querySelector('[data-action="editar-dinheiro"]');
+  if (formEditarDinheiro) formEditarDinheiro.addEventListener('submit', onEditarDinheiro);
+
+  root.querySelectorAll('[data-editar-dinheiro]').forEach((b) =>
+    b.addEventListener('click', () => {
+      state.dinheiroEditando = Number(b.dataset.editarDinheiro);
+      render();
+      const f = root.querySelector('[data-action="editar-dinheiro"]');
+      if (f) f.scrollIntoView({ block: 'center' });
+    })
+  );
+
+  root.querySelectorAll('[data-excluir-dinheiro]').forEach((b) =>
+    b.addEventListener('click', () => onExcluirDinheiro(Number(b.dataset.excluirDinheiro)))
+  );
+
+  const btnCancelarDinheiro = root.querySelector('#btn-cancelar-dinheiro');
+  if (btnCancelarDinheiro) {
+    btnCancelarDinheiro.addEventListener('click', () => {
+      state.dinheiroEditando = null;
+      render();
+    });
+  }
+
+  root.querySelectorAll('[data-extrato-cliente]').forEach((b) =>
+    b.addEventListener('click', () => onAbrirExtratoCliente(Number(b.dataset.extratoCliente)))
+  );
+
+  root.querySelectorAll('[data-excluir-mov]').forEach((b) =>
+    b.addEventListener('click', () => onExcluirMovPrazo(Number(b.dataset.excluirMov)))
+  );
+
+  const btnFecharExtrato = root.querySelector('#btn-fechar-extrato');
+  if (btnFecharExtrato) {
+    btnFecharExtrato.addEventListener('click', () => {
+      state.extratoPrazo = null;
+      render();
+    });
+  }
+
   const formPrazo = root.querySelector('[data-action="novo-mov-prazo"]');
-  if (formPrazo) formPrazo.addEventListener('submit', onNovoMovPrazo);
+  if (formPrazo) {
+    formPrazo.addEventListener('submit', onNovoMovPrazo);
+
+    // "Como pagou" só aparece no pagamento: compra fiada é, por definição, a que
+    // ainda não foi paga por forma nenhuma — o campo ali só confundiria.
+    const tipoPrazo = formPrazo.querySelector('[name="tipo"]');
+    const campoForma = formPrazo.querySelector('#campo-forma-prazo');
+    if (tipoPrazo && campoForma) {
+      const alternar = () => campoForma.classList.toggle('escondido', tipoPrazo.value !== 'pagamento');
+      tipoPrazo.addEventListener('change', alternar);
+      alternar();
+    }
+  }
 
   const formCadastro = root.querySelector('[data-action="novo-cadastro"]');
   if (formCadastro) formCadastro.addEventListener('submit', onNovoCadastro);
@@ -5969,6 +6171,86 @@ async function onNovoAcumulado(ev) {
   }
 }
 
+// ── Dinheiro do PDV ──────────────────────────────────────────────────────────
+
+function corpoDinheiro(form) {
+  const fd = new FormData(form);
+  return JSON.stringify({
+    data: fd.get('data'),
+    pdv: fd.get('pdv') || null,
+    valor: fd.get('valor') || 0,
+    venda_prazo: fd.get('venda_prazo') || 0,
+  });
+}
+
+async function onNovoDinheiro(ev) {
+  ev.preventDefault();
+  try {
+    await apiFetch('/conciliacao/dinheiro', { method: 'POST', body: corpoDinheiro(ev.target) });
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onEditarDinheiro(ev) {
+  ev.preventDefault();
+  try {
+    await apiFetch(`/conciliacao/dinheiro/${ev.target.dataset.id}`, {
+      method: 'PUT',
+      body: corpoDinheiro(ev.target),
+    });
+    state.dinheiroEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onExcluirDinheiro(id) {
+  if (!confirm('Excluir este lançamento do caixa? O total do dia muda na hora.')) return;
+  try {
+    await apiFetch(`/conciliacao/dinheiro/${id}`, { method: 'DELETE' });
+    state.dinheiroEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onAbrirExtratoCliente(id) {
+  try {
+    state.extratoPrazo = await apiFetch(`/venda-prazo/clientes/${id}`);
+    state.erro = null;
+  } catch (err) {
+    state.extratoPrazo = null;
+    state.erro = err.message;
+  }
+  render();
+}
+
+async function onExcluirMovPrazo(id) {
+  if (!confirm('Excluir este movimento do caderno? O saldo do cliente muda na hora.')) return;
+  const clienteId = state.extratoPrazo && state.extratoPrazo.id;
+  try {
+    await apiFetch(`/venda-prazo/movimentos/${id}`, { method: 'DELETE' });
+    state.erro = null;
+    // Recarrega o caderno aberto junto com a lista: fechar o extrato aqui faria
+    // o clique parecer ter fechado a tela em vez de excluir a linha.
+    if (clienteId) state.extratoPrazo = await apiFetch(`/venda-prazo/clientes/${clienteId}`);
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
 async function onNovoMovPrazo(ev) {
   ev.preventDefault();
   const fd = new FormData(ev.target);
@@ -5980,6 +6262,7 @@ async function onNovoMovPrazo(ev) {
         tipo: fd.get('tipo'),
         valor: fd.get('valor'),
         data: fd.get('data'),
+        forma_pagamento: fd.get('forma_pagamento') || null,
       }),
     });
     carregarDados();

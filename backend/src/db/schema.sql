@@ -552,3 +552,9 @@ CREATE TABLE IF NOT EXISTS taxas_contratadas (
 -- vezes e nunca saber qual das duas está valendo.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_taxas_contratadas_chave
   ON taxas_contratadas (adquirente, COALESCE(bandeira, ''), COALESCE(forma, ''));
+
+-- Como o cliente pagou o que devia no caderno: PIX, dinheiro, cartão de débito,
+-- cartão de crédito. Sem isto, o pagamento entrava como um valor solto e não
+-- havia como cruzar depois com o extrato do banco ou da adquirente — e é
+-- justamente esse cruzamento que o dono quer fazer.
+ALTER TABLE mov_prazo ADD COLUMN IF NOT EXISTS forma_pagamento VARCHAR(40);
