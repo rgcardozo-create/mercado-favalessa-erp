@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.59.0';
+const VERSAO = '1.60.0';
 
 const state = {
   sessao: getSessao(),
@@ -3777,6 +3777,7 @@ function gerencialHTML() {
     despesa: 'Outras despesas',
     folha: 'Folha de pagamento',
     servico_extra: 'Serviços extras',
+    taxa_cartao: 'Taxa das maquininhas',
   };
   const composicao = Object.entries(t.despesas_por_tipo)
     .filter(([, v]) => v > 0)
@@ -3898,6 +3899,9 @@ function gerencialHTML() {
       <p class="vazio">
         Mês sem dia lançado aparece com margem "—": ali falta o fechamento, não é venda zero.
         Resultado é venda menos despesa paga; não é lucro contábil.
+        <strong>A taxa das maquininhas já está descontada</strong> — ela aparece na coluna ao lado só para
+        você ver o tamanho dela, mas já foi contada como despesa. As vendas continuam pelo valor cheio, que
+        é o que bate com o relatório do caixa.
       </p>
     </section>
   `;

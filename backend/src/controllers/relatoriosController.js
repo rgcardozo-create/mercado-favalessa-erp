@@ -132,8 +132,13 @@ async function consolidado(req, res) {
     [de, ate]
   );
 
+  // A taxa da adquirente entra nas despesas pelo mesmo motivo do Gerencial: as
+  // vendas aqui são o bruto, e o que a adquirente reteve nunca chegou na conta.
+  // Sem isto, o mesmo mês apareceria com um resultado neste relatório e outro no
+  // Gerencial — e aí nenhum dos dois serviria.
+  const totalTaxas = taxasRows.reduce((a, t) => a + Number(t.tarifa), 0);
   const totalDespesas =
-    despesasPorTipo.reduce((a, d) => a + d.pago, 0) + folhaTotal + servicosExtras;
+    despesasPorTipo.reduce((a, d) => a + d.pago, 0) + folhaTotal + servicosExtras + totalTaxas;
   const vendas = {
     dias: vendasRows[0].dias,
     total: Number(vendasRows[0].total),
@@ -274,6 +279,16 @@ async function gerencial(req, res) {
     // Serviço extra é despesa de gente, mas não é folha: aparece separado para
     // não somir dentro do salário de ninguém.
     porTipo.servico_extra = Number((acha(servicos, mes) || {}).total || 0);
+    // A taxa da adquirente é despesa, e por isso entra aqui.
+    //
+    // O faturamento vem do Acumulado, que é o BRUTO — o que passou na
+    // maquininha. A adquirente retém a taxa antes de depositar, então esse
+    // pedaço nunca chegou na conta. Enquanto ele ficava só numa coluna ao lado,
+    // o resultado do mês vinha inflado exatamente no valor dela.
+    //
+    // Contar como despesa, e não abater da venda, mantém o faturamento batendo
+    // com o relatório do PDV — que é o número que o dono confere todo dia.
+    porTipo.taxa_cartao = Number((acha(taxas, mes) || {}).total || 0);
 
     const totalDespesas = Object.values(porTipo).reduce((a, v) => a + v, 0);
     const totalVendas = venda ? Number(venda.total) : 0;
@@ -288,7 +303,9 @@ async function gerencial(req, res) {
       // Margem só existe se houve venda; sem isso, mês sem fechamento lançado
       // apareceria com -100% e pareceria catástrofe em vez de dado faltando.
       margem: totalVendas > 0 ? ((totalVendas - totalDespesas) / totalVendas) * 100 : null,
-      taxas: Number((acha(taxas, mes) || {}).total || 0),
+      // Mesmo número de `despesas_por_tipo.taxa_cartao`, repetido aqui porque a
+      // tabela mês a mês tem coluna própria para ele.
+      taxas: porTipo.taxa_cartao,
     };
   });
 
