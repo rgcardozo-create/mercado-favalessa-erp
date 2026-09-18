@@ -11,6 +11,9 @@ router.use(authenticate);
 router.use(exigirTela('venda-prazo'));
 
 router.get('/', asyncHandler(c.resumo));
+
+// Dia de corte e vencimento do caderno: regra da casa, então Master e Gerente.
+router.put('/config', authorize('master', 'gerente'), asyncHandler(c.salvarConfigPrazo));
 router.get('/clientes/:id', asyncHandler(c.extratoCliente));
 router.post('/movimentos', asyncHandler(c.criarMovimento));
 router.delete('/movimentos/:id', authorize('master', 'gerente'), asyncHandler(c.deletarMovimento));
