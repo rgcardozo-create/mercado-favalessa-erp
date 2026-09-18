@@ -648,3 +648,43 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 .tabela-compacta th { font-size: 10px; }
 .tabela-compacta button { padding: 2px 7px; font-size: 11px; }
 .linha-baixa .vazio { margin: 4px 0 6px; }
+
+/* Caderno da venda a prazo: um cartão por cliente, como no sistema antigo.
+   Numa tabela, o nome e o saldo — que é o que se procura — disputavam altura
+   com colunas que quase nunca interessam. */
+.cartao-cliente {
+  background: #fff;
+  border: 1px solid var(--borda);
+  border-left: 4px solid var(--borda);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+.cartao-cliente.atrasado { border-left-color: var(--vermelho); }
+.cartao-cliente.devendo  { border-left-color: var(--amarelo); }
+.cartao-cliente.em_dia   { border-left-color: var(--verde, #04785C); }
+.cartao-cliente-topo { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.cartao-cliente-nome { font-weight: 700; font-size: 13px; color: var(--azul); }
+.cartao-cliente-saldo { text-align: right; white-space: nowrap; }
+.cartao-cliente-saldo b { display: block; font-size: 15px; margin-top: 3px; }
+.cartao-cliente .mini { font-size: 11px; color: var(--texto-fraco, #6B7A90); }
+.cartao-cliente-linha {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 4px 0; border-top: 1px solid #F1F5FB;
+}
+.cartao-cliente-linha[data-extrato-cliente] { cursor: pointer; }
+.cartao-cliente-linha[data-extrato-cliente]:hover { background: #FAFCFF; }
+.cartao-cliente-acoes { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cartao-cliente-acoes button { padding: 2px 8px; font-size: 11px; }
+.cartao-cliente-rodape { padding-top: 6px; }
+.form-baixa-prazo { border-top: 1px solid #F1F5FB; padding-top: 8px; margin-top: 4px; }
+.texto-vermelho { color: var(--vermelho); }
+.texto-verde { color: #04785C; }
+
+/* Barra de quem mais deve: acha de relance o cliente que pesa. */
+.barra-linha { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; font-size: 12px; }
+.barra-linha b:first-child { width: 150px; flex: none; color: var(--azul); font-weight: 600; }
+.barra-linha b:last-child { width: 100px; flex: none; text-align: right; }
+.barra-trilho { flex: 1; background: #EEF3FA; border-radius: 4px; height: 14px; overflow: hidden; }
+.barra { height: 100%; background: var(--azul); border-radius: 4px; }
+.barra.barra-atraso { background: var(--vermelho); }

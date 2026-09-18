@@ -1,5 +1,30 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
+const { faturasAbertas } = require('../utils/faturasPrazo');
+
+// Dia de corte e dia de vencimento do caderno. Vêm do sistema antigo e moram em
+// `configuracoes`, como os percentuais da folha: são regra da casa, não dado de
+// lançamento.
+const PRAZO_PADRAO = { dia_corte: 1, dia_vencimento: 10 };
+
+async function lerConfigPrazo() {
+  const { rows } = await pool.query(
+    "SELECT chave, valor FROM configuracoes WHERE chave IN ('prazo_dia_corte', 'prazo_dia_vencimento')"
+  );
+  const guardado = new Map(rows.map((r) => [r.chave, Number(r.valor)]));
+  const limpo = (v, padrao) => (Number.isInteger(v) && v >= 1 && v <= 28 ? v : padrao);
+  return {
+    dia_corte: limpo(guardado.get('prazo_dia_corte'), PRAZO_PADRAO.dia_corte),
+    dia_vencimento: limpo(guardado.get('prazo_dia_vencimento'), PRAZO_PADRAO.dia_vencimento),
+  };
+}
+
+async function hojeSP() {
+  const { rows } = await pool.query(
+    "SELECT to_char((now() AT TIME ZONE 'America/Sao_Paulo')::date, 'YYYY-MM-DD') AS hoje"
+  );
+  return rows[0].hoje;
+}
 
 // Saldo devedor por cliente: o que ele comprou menos o que já pagou.
 const SALDO_POR_CLIENTE = `
@@ -17,24 +42,84 @@ const SALDO_POR_CLIENTE = `
 `;
 
 async function resumo(req, res) {
-  const { rows } = await pool.query(`${SALDO_POR_CLIENTE} ORDER BY saldo DESC, c.nome`);
+  const [{ rows }, config, hoje] = await Promise.all([
+    pool.query(`${SALDO_POR_CLIENTE} ORDER BY saldo DESC, c.nome`),
+    lerConfigPrazo(),
+    hojeSP(),
+  ]);
 
-  const clientes = rows.map((r) => ({
-    ...r,
-    total_compras: Number(r.total_compras),
-    total_pago: Number(r.total_pago),
-    saldo: Number(r.saldo),
-  }));
+  // Todos os movimentos de uma vez, e não uma consulta por cliente: com
+  // trezentos clientes isso seriam trezentas idas ao banco para montar uma tela.
+  const { rows: movimentos } = await pool.query(
+    `SELECT cliente_id, tipo::text AS tipo, valor, to_char(data, 'YYYY-MM-DD') AS data
+       FROM mov_prazo ORDER BY data, id`
+  );
+  const porCliente = new Map();
+  for (const m of movimentos) {
+    if (!porCliente.has(m.cliente_id)) porCliente.set(m.cliente_id, []);
+    porCliente.get(m.cliente_id).push(m);
+  }
+
+  const opcoes = { diaCorte: config.dia_corte, diaVencimento: config.dia_vencimento, hoje };
+
+  const clientes = rows.map((r) => {
+    const f = faturasAbertas(porCliente.get(r.id) || [], opcoes);
+    return {
+      ...r,
+      total_compras: Number(r.total_compras),
+      total_pago: Number(r.total_pago),
+      saldo: Number(r.saldo),
+      ultima_compra: (porCliente.get(r.id) || []).filter((m) => m.tipo === 'compra').slice(-1)[0]?.data || null,
+      faturas: f.faturas,
+      atraso_30: f.atraso_30,
+      situacao: f.situacao,
+    };
+  });
 
   return res.json({
+    config,
+    hoje,
     clientes,
     totais: {
       compras: clientes.reduce((a, c) => a + c.total_compras, 0),
       pago: clientes.reduce((a, c) => a + c.total_pago, 0),
       saldo: clientes.reduce((a, c) => a + c.saldo, 0),
       clientes_com_saldo: clientes.filter((c) => c.saldo > 0).length,
+      // Os dois recortes do sistema antigo: quem passou de 30 dias e quem não.
+      atrasados: clientes.filter((c) => c.situacao === 'atrasado').length,
+      em_dia_ate_30: clientes.filter((c) => c.situacao === 'devendo').length,
+      total_atrasado: clientes.reduce((a, c) => a + c.atraso_30, 0),
     },
   });
+}
+
+async function salvarConfigPrazo(req, res) {
+  const limpo = (v) => {
+    const n = Number(v);
+    return Number.isInteger(n) && n >= 1 && n <= 28 ? n : null;
+  };
+  const corte = limpo(req.body.dia_corte);
+  const vencimento = limpo(req.body.dia_vencimento);
+  if (corte === null || vencimento === null) {
+    return res.status(400).json({ error: 'Dia de corte e de vencimento: use números de 1 a 28.' });
+  }
+
+  for (const [chave, valor] of [['prazo_dia_corte', corte], ['prazo_dia_vencimento', vencimento]]) {
+    await pool.query(
+      `INSERT INTO configuracoes (chave, valor, atualizado_em) VALUES ($1, $2, now())
+       ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = now()`,
+      [chave, String(valor)]
+    );
+  }
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'update',
+    entidade: 'prazo_config',
+    dados: { dia_corte: corte, dia_vencimento: vencimento },
+  });
+
+  return res.json(await lerConfigPrazo());
 }
 
 async function extratoCliente(req, res) {
@@ -117,4 +202,5 @@ async function deletarMovimento(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { resumo, extratoCliente, criarMovimento, deletarMovimento };
+module.exports = {
+  salvarConfigPrazo, resumo, extratoCliente, criarMovimento, deletarMovimento };

@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.56.0';
+const VERSAO = '1.57.0';
 
 const state = {
   sessao: getSessao(),
@@ -142,6 +142,8 @@ const state = {
   dinheiroEditando: null,
   // Baixa aberta na linha do cliente da venda a prazo.
   baixaPrazoId: null,
+  buscaPrazo: '',
+  clientePrazoEscolhido: null,
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -2440,29 +2442,165 @@ function acumuladoHTML() {
   `;
 }
 
+// A tela do caderno, no desenho do sistema antigo: um cartão por cliente, não
+// uma tabela. O dono pediu assim de volta, e o motivo é bom — numa tabela, o
+// nome, o saldo e o status disputam a mesma altura de linha com colunas que
+// quase nunca interessam. No cartão, o que ele procura (quem deve, quanto, e há
+// quanto tempo) fica grande, e o resto fica pequeno embaixo.
+
+const SITUACOES_PRAZO = {
+  em_dia: { rotulo: 'Em dia', classe: 'quitado' },
+  devendo: { rotulo: 'Devendo', classe: 'a-vencer' },
+  atrasado: { rotulo: 'Atrasado', classe: 'vencida' },
+};
+
+// Barra proporcional ao maior saldo da lista. Serve para achar de relance o
+// cliente que pesa: três nomes com barra cheia dizem mais rápido que trinta
+// linhas de número.
+function barraPrazoHTML(rotulo, valor, maximo, atrasado) {
+  const largura = Math.max(3, (valor / (maximo || 1)) * 100);
+  return `
+    <div class="barra-linha">
+      <b>${escapar(rotulo)}</b>
+      <div class="barra-trilho"><div class="barra ${atrasado ? 'barra-atraso' : ''}" style="width:${largura}%"></div></div>
+      <b>${brl(valor)}</b>
+    </div>`;
+}
+
+function cartaoClientePrazo(c) {
+  const situacao = SITUACOES_PRAZO[c.situacao] || SITUACOES_PRAZO.em_dia;
+  const aberto = state.extratoPrazo && state.extratoPrazo.id === c.id;
+  const movimentos = aberto ? state.extratoPrazo.movimentos || [] : [];
+  const baixaAberta = state.baixaPrazoId === c.id;
+
+  // Do mais recente para o mais antigo, como no sistema antigo: o que acabou de
+  // acontecer é o que se confere.
+  const emOrdem = [...movimentos].reverse();
+
+  return `
+    <div class="cartao-cliente ${c.situacao}">
+      <div class="cartao-cliente-topo">
+        <div>
+          <div class="cartao-cliente-nome">${escapar(c.codigo || '—')} &middot; ${escapar(c.nome)}</div>
+          <div class="mini">
+            ${c.ultima_compra ? `Última compra ${dateBR(c.ultima_compra)}` : 'Sem compras lançadas'}
+            ${c.atraso_30 > 0 ? ` &middot; <span class="texto-vermelho">${brl(c.atraso_30)} vencido há mais de 30 dias</span>` : ''}
+          </div>
+        </div>
+        <div class="cartao-cliente-saldo">
+          <span class="badge ${situacao.classe}">${situacao.rotulo}</span>
+          <b class="${c.saldo > 0 ? 'texto-vermelho' : 'texto-verde'}">${brl(c.saldo)}</b>
+        </div>
+      </div>
+
+      <div class="cartao-cliente-linha" data-extrato-cliente="${c.id}">
+        <span class="mini">${
+          c.movimentos
+            ? `${c.movimentos} compra(s)/pagamento(s) &middot; ${aberto ? 'clique para ocultar' : 'clique para ver todas'}`
+            : 'Sem movimentos'
+        }</span>
+        <span class="mini">${aberto ? '▲' : '▼'}</span>
+      </div>
+
+      ${
+        aberto
+          ? emOrdem
+              .map(
+                (m) => `<div class="cartao-cliente-linha">
+                  <span class="mini">${dateBR(m.data)} &middot; ${m.tipo === 'compra' ? 'Compra' : 'Pagamento'}${
+                    m.forma_pagamento ? ` &middot; ${escapar(m.forma_pagamento)}` : ''
+                  }${m.observacoes ? ` &middot; ${escapar(m.observacoes)}` : ''}</span>
+                  <span class="cartao-cliente-acoes">
+                    <b class="${m.tipo === 'compra' ? 'texto-vermelho' : 'texto-verde'}">${
+                      m.tipo === 'compra' ? '+' : '−'
+                    } ${brl(m.valor)}</b>
+                    ${podeGerenciar() ? `<button data-excluir-mov="${m.id}" class="perigo">×</button>` : ''}
+                  </span>
+                </div>`
+              )
+              .join('')
+          : ''
+      }
+
+      ${
+        aberto && c.faturas && c.faturas.length
+          ? `<div class="cartao-cliente-linha">
+              <span class="mini">Faturas em aberto: ${c.faturas
+                .map(
+                  (f) =>
+                    `${mesExtenso(f.competencia)} ${brl(f.saldo)} (vence ${dateBR(f.vencimento)}${
+                      f.dias_vencida ? `, ${f.dias_vencida} dia(s) atrás` : ''
+                    })`
+                )
+                .join(' &middot; ')}</span>
+            </div>`
+          : ''
+      }
+
+      ${
+        baixaAberta
+          ? `<form data-action="baixa-prazo" data-id="${c.id}" class="form-inline form-baixa-prazo">
+              <label>Quanto pagou
+                <input type="number" step="0.01" min="0" name="valor" required value="${Number(c.saldo).toFixed(2)}" />
+              </label>
+              <label>Como pagou
+                <select name="forma_pagamento">
+                  <option value="">— não informado —</option>
+                  ${FORMAS_RECEBIMENTO.map((f) => `<option value="${escapar(f)}">${escapar(f)}</option>`).join('')}
+                </select>
+              </label>
+              <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
+              <button type="submit">Registrar</button>
+              <button type="button" class="secundario" data-baixa-prazo="${c.id}">Cancelar</button>
+            </form>`
+          : ''
+      }
+
+      <div class="cartao-cliente-linha cartao-cliente-rodape">
+        <span class="mini">${escapar(c.telefone || '')}</span>
+        <span class="cartao-cliente-acoes">
+          ${c.saldo > 0 ? `<button data-baixa-prazo="${c.id}">${baixaAberta ? 'Fechar baixa' : 'Dar baixa'}</button>` : ''}
+          <button data-usar-codigo="${escapar(c.codigo || '')}" class="secundario">Usar código</button>
+        </span>
+      </div>
+    </div>`;
+}
+
 function vendaPrazoHTML() {
   const cabecalho = cabecalhoHTML('Venda a prazo');
   if (!state.vendaPrazo) return `${cabecalho}${state.carregando ? '<p>Carregando…</p>' : ''}`;
 
-  const { clientes, totais } = state.vendaPrazo;
-  const comSaldo = clientes.filter((c) => c.saldo !== 0 || c.movimentos > 0);
+  const { clientes, totais, config } = state.vendaPrazo;
+  const busca = (state.buscaPrazo || '').trim().toLowerCase();
+  const filtrados = clientes.filter(
+    (c) =>
+      (c.saldo !== 0 || c.movimentos > 0) &&
+      (!busca ||
+        String(c.codigo || '').includes(busca) ||
+        String(c.nome || '').toLowerCase().includes(busca))
+  );
+
+  const devendo = filtrados.filter((c) => c.saldo > 0);
+  const maiorSaldo = Math.max(...devendo.map((c) => c.saldo), 1);
 
   return `
     ${cabecalho}
 
     <div class="cartoes-resumo">
       <div class="cartao-resumo vencidas">
-        <span class="rotulo">A receber</span>
+        <span class="rotulo">Total a receber</span>
         <strong>${brl(totais.saldo)}</strong>
         <small>${totais.clientes_com_saldo} cliente(s) devendo</small>
       </div>
-      <div class="cartao-resumo proximos">
-        <span class="rotulo">Compras lançadas</span>
-        <strong>${brl(totais.compras)}</strong>
-      </div>
       <div class="cartao-resumo hoje">
-        <span class="rotulo">Já pago</span>
-        <strong>${brl(totais.pago)}</strong>
+        <span class="rotulo">Acima de 30 dias</span>
+        <strong>${totais.atrasados}</strong>
+        <small>${brl(totais.total_atrasado)} vencido</small>
+      </div>
+      <div class="cartao-resumo proximos">
+        <span class="rotulo">Até 30 dias</span>
+        <strong>${totais.em_dia_ate_30}</strong>
+        <small>em dia com o prazo</small>
       </div>
     </div>
 
@@ -2471,7 +2609,14 @@ function vendaPrazoHTML() {
         <h2>Lançar movimento</h2>
         <label>Cliente
           <select name="cliente_id" required>
-            ${clientes.map((c) => `<option value="${c.id}">${c.codigo ? `${c.codigo} — ` : ''}${c.nome}</option>`).join('')}
+            ${clientes
+              .map(
+                (c) =>
+                  `<option value="${c.id}" ${String(state.clientePrazoEscolhido) === String(c.id) ? 'selected' : ''}>${
+                    c.codigo ? `${escapar(c.codigo)} — ` : ''
+                  }${escapar(c.nome)}</option>`
+              )
+              .join('')}
           </select>
         </label>
         <label>Tipo
@@ -2490,131 +2635,52 @@ function vendaPrazoHTML() {
         </label>
         <button type="submit">Lançar</button>
         <p class="vazio campo-largo">
-          <strong>Compra</strong> é o que o cliente levou e ficou devendo. <strong>Pagamento</strong> é
-          quando ele acerta — aí aparece o campo de como pagou, que é o que permite cruzar depois com o
-          extrato do banco ou da maquininha.
+          <strong>Compra</strong> é o que o cliente levou e ficou devendo. <strong>Pagamento</strong> é quando
+          ele acerta — aí aparece o campo de como pagou. Dá para dar baixa direto no cartão do cliente,
+          sem voltar aqui.
+        </p>
+      </form>
+
+      <form data-action="config-prazo" class="form-inline">
+        <h2>Dia de corte e vencimento</h2>
+        <label>Dia de corte <input type="number" min="1" max="28" name="dia_corte" required value="${config.dia_corte}" /></label>
+        <label>Dia de vencimento <input type="number" min="1" max="28" name="dia_vencimento" required value="${config.dia_vencimento}" /></label>
+        <button type="submit">Salvar</button>
+        <p class="vazio campo-largo">
+          <strong>Corte</strong>: em que dia as compras do mês fecham numa fatura. <strong>Vencimento</strong>:
+          em que dia do mês seguinte essa fatura vence. É daqui que sai o <strong>Atrasado</strong> — sem
+          vencimento, "deve há três meses" e "comprou ontem" seriam a mesma coisa.
         </p>
       </form>
     </section>
+
+    ${
+      devendo.length
+        ? `<section class="grupo-painel">
+            <div class="grupo-cabecalho"><h2>Quem mais deve</h2></div>
+            ${devendo
+              .slice(0, 15)
+              .map((c) => barraPrazoHTML(c.nome.slice(0, 18), c.saldo, maiorSaldo, c.situacao === 'atrasado'))
+              .join('')}
+          </section>`
+        : ''
+    }
 
     <section class="grupo-painel">
-      <div class="grupo-cabecalho"><h2>Clientes</h2></div>
-      <table class="tabela-contas">
-        <thead><tr><th>Código</th><th>Cliente</th><th>Compras</th><th>Pago</th><th>Saldo</th><th>Movs</th><th>Último</th><th></th></tr></thead>
-        <tbody>
-          ${
-            comSaldo.length
-              ? comSaldo
-                  .map(
-                    (c) => `
-                    <tr class="${state.extratoPrazo && state.extratoPrazo.id === c.id ? 'marcada' : ''}">
-                      <td>${c.codigo || '—'}</td>
-                      <td>${c.nome}</td>
-                      <td>${brl(c.total_compras)}</td>
-                      <td>${brl(c.total_pago)}</td>
-                      <td><strong>${brl(c.saldo)}</strong></td>
-                      <td>${c.movimentos}</td>
-                      <td>${c.ultimo_movimento ? dateBR(c.ultimo_movimento) : '—'}</td>
-                      <td class="acoes"><div class="acoes-linha">
-                        <button data-extrato-cliente="${c.id}" class="secundario">${
-                          state.extratoPrazo && state.extratoPrazo.id === c.id ? 'Fechar' : 'Ver compras'
-                        }</button>
-                        ${c.saldo > 0 ? `<button data-baixa-prazo="${c.id}">Dar baixa</button>` : ''}
-                      </div></td>
-                    </tr>
-                    ${formBaixaPrazoHTML(c)}
-                    ${extratoClienteHTML(c)}`
-                  )
-                  .join('')
-              : '<tr><td colspan="8">Nenhum movimento lançado.</td></tr>'
-          }
-        </tbody>
-      </table>
+      <div class="grupo-cabecalho">
+        <h2>Clientes</h2>
+        <form class="busca" data-action="busca-prazo">
+          <input type="search" id="busca-prazo" name="busca" placeholder="Pesquisar código ou nome…"
+                 value="${escapar(state.buscaPrazo || '')}" autocomplete="off" />
+        </form>
+        <span class="resumo-lista">${filtrados.length} cliente(s)</span>
+      </div>
+      ${
+        filtrados.length
+          ? filtrados.map(cartaoClientePrazo).join('')
+          : '<p class="vazio">Nenhum cliente encontrado. Cadastre em Cadastros &gt; Clientes.</p>'
+      }
     </section>
-  `;
-}
-
-// A baixa acontece na linha do cliente, não num formulário lá em cima.
-//
-// Com trezentos nomes na lista, "escolha o cliente no topo" quer dizer rolar
-// para cima, achar a pessoa de novo numa caixa de seleção e torcer para ser a
-// mesma. É o mesmo motivo pelo qual Contas a pagar já dá baixa na linha.
-function formBaixaPrazoHTML(c) {
-  if (state.baixaPrazoId !== c.id) return '';
-
-  return `
-    <tr class="linha-baixa"><td colspan="8">
-      <form data-action="baixa-prazo" data-id="${c.id}" class="form-inline">
-        <label>Quanto pagou
-          <input type="number" step="0.01" min="0" name="valor" required value="${Number(c.saldo).toFixed(2)}" />
-        </label>
-        <label>Como pagou
-          <select name="forma_pagamento">
-            <option value="">— não informado —</option>
-            ${FORMAS_RECEBIMENTO.map((f) => `<option value="${escapar(f)}">${escapar(f)}</option>`).join('')}
-          </select>
-        </label>
-        <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
-        <button type="submit">Registrar pagamento</button>
-        <button type="button" class="secundario" data-baixa-prazo="${c.id}">Cancelar</button>
-        <p class="vazio campo-largo">
-          Já vem com o saldo inteiro de <strong>${brl(c.saldo)}</strong>. Pagou só uma parte? Troque o
-          valor — o resto continua no caderno.
-        </p>
-      </form>
-    </td></tr>
-  `;
-}
-
-// O caderno do cliente, compra por compra, aberto na linha dele.
-//
-// Existia no backend desde sempre e a tela nunca tinha chamado: dava para ver o
-// saldo, não de onde ele veio — e quando o cliente pergunta "isso aí é de quê?",
-// saldo não responde.
-function extratoClienteHTML(c) {
-  const e = state.extratoPrazo;
-  if (!e || e.id !== c.id) return '';
-
-  const movimentos = e.movimentos || [];
-  let acumulado = 0;
-
-  return `
-    <tr class="linha-baixa"><td colspan="8">
-      <p class="vazio">
-        <strong>${movimentos.length} movimento(s)</strong> &middot; comprou ${brl(e.total_compras)} &middot;
-        pagou ${brl(e.total_pago)} &middot; saldo <strong>${brl(e.saldo)}</strong>.
-      </p>
-      <table class="tabela-contas tabela-compacta">
-        <thead>
-          <tr><th>Data</th><th>O quê</th><th>Como pagou</th><th>Valor</th><th>Saldo depois</th><th></th></tr>
-        </thead>
-        <tbody>
-          ${
-            movimentos.length
-              ? movimentos
-                  .map((m) => {
-                    const v = Number(m.valor);
-                    const compra = m.tipo === 'compra';
-                    acumulado += compra ? v : -v;
-                    return `<tr>
-                      <td>${dateBR(m.data)}</td>
-                      <td>${compra ? 'Compra' : 'Pagamento'}</td>
-                      <td>${escapar(m.forma_pagamento || (compra ? '—' : 'não informado'))}</td>
-                      <td>${compra ? '' : '− '}<strong>${brl(v)}</strong></td>
-                      <td>${brl(acumulado)}</td>
-                      <td>${
-                        podeGerenciar()
-                          ? `<button data-excluir-mov="${m.id}" class="perigo">Excluir</button>`
-                          : ''
-                      }</td>
-                    </tr>`;
-                  })
-                  .join('')
-              : '<tr><td colspan="6">Nenhum movimento.</td></tr>'
-          }
-        </tbody>
-      </table>
-    </td></tr>
   `;
 }
 
@@ -5541,6 +5607,51 @@ function bind() {
   const formBaixaPrazo = root.querySelector('[data-action="baixa-prazo"]');
   if (formBaixaPrazo) formBaixaPrazo.addEventListener('submit', onBaixaPrazo);
 
+  const formConfigPrazo = root.querySelector('[data-action="config-prazo"]');
+  if (formConfigPrazo) formConfigPrazo.addEventListener('submit', onSalvarConfigPrazo);
+
+  // Busca do caderno filtra na memória: a lista já está toda carregada, e ir ao
+  // servidor a cada letra só deixaria a digitação travada.
+  const buscaPrazo = root.querySelector('#busca-prazo');
+  if (buscaPrazo) {
+    buscaPrazo.addEventListener('input', () => {
+      state.buscaPrazo = buscaPrazo.value;
+      const pos = buscaPrazo.selectionStart;
+      render();
+      const novo = root.querySelector('#busca-prazo');
+      if (novo) {
+        novo.focus();
+        try {
+          novo.setSelectionRange(pos, pos);
+        } catch (err) {
+          /* campo sem seleção: o foco já basta */
+        }
+      }
+    });
+  }
+
+  // Enter na busca não recarrega a página: a filtragem já acontece ao digitar.
+  const formBuscaPrazo = root.querySelector('[data-action="busca-prazo"]');
+  if (formBuscaPrazo) formBuscaPrazo.addEventListener('submit', (ev) => ev.preventDefault());
+
+  // "Usar código" leva o cliente para o formulário de lançamento, como no
+  // sistema antigo — lá se digitava o código; aqui a lista já seleciona sozinha.
+  root.querySelectorAll('[data-usar-codigo]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const cartao = b.closest('.cartao-cliente');
+      const id = cartao && cartao.querySelector('[data-extrato-cliente]');
+      if (!id) return;
+      state.clientePrazoEscolhido = Number(id.dataset.extratoCliente);
+      render();
+      const form = root.querySelector('[data-action="novo-mov-prazo"]');
+      if (form) {
+        form.scrollIntoView({ block: 'center' });
+        const valor = form.querySelector('[name="valor"]');
+        if (valor) valor.focus();
+      }
+    })
+  );
+
   const formPrazo = root.querySelector('[data-action="novo-mov-prazo"]');
   if (formPrazo) {
     formPrazo.addEventListener('submit', onNovoMovPrazo);
@@ -6256,6 +6367,22 @@ async function onExcluirDinheiro(id) {
   try {
     await apiFetch(`/conciliacao/dinheiro/${id}`, { method: 'DELETE' });
     state.dinheiroEditando = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
+}
+
+async function onSalvarConfigPrazo(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  try {
+    await apiFetch('/venda-prazo/config', {
+      method: 'PUT',
+      body: JSON.stringify({ dia_corte: fd.get('dia_corte'), dia_vencimento: fd.get('dia_vencimento') }),
+    });
     state.erro = null;
     carregarDados();
   } catch (err) {
