@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.57.0';
+const VERSAO = '1.58.0';
 
 const state = {
   sessao: getSessao(),
@@ -2467,6 +2467,36 @@ function barraPrazoHTML(rotulo, valor, maximo, atrasado) {
     </div>`;
 }
 
+// Uma faixa de atraso: só o que está vencido há N dias ou mais.
+//
+// As faixas são cumulativas, como no sistema antigo — quem está cem dias
+// vencido aparece em 30, em 60 e em 90. Não é repetição à toa: cada bloco
+// responde uma pergunta diferente. "Vencido há mais de 30" é cobrança; "há mais
+// de 120" é outra conversa.
+//
+// O valor da barra não é o saldo do cliente: é só a parte dele vencida naquela
+// faixa. Quem deve 500 mas tem só 100 vencidos há 90 dias aparece aqui com 100.
+function faixaAtrasoHTML(clientes, dias) {
+  const itens = clientes
+    .map((c) => ({ nome: c.nome, valor: (c.atrasos && c.atrasos[dias]) || 0 }))
+    .filter((x) => x.valor > 0)
+    .sort((a, b) => b.valor - a.valor);
+
+  if (!itens.length) return '';
+
+  const maximo = Math.max(...itens.map((x) => x.valor), 1);
+  const total = itens.reduce((a, x) => a + x.valor, 0);
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Vencidos há mais de ${dias} dias</h2>
+        <span class="grupo-total">${itens.length} cliente(s) &middot; ${brl(total)}</span>
+      </div>
+      ${itens.map((x) => barraPrazoHTML(x.nome.slice(0, 18), x.valor, maximo, true)).join('')}
+    </section>`;
+}
+
 function cartaoClientePrazo(c) {
   const situacao = SITUACOES_PRAZO[c.situacao] || SITUACOES_PRAZO.em_dia;
   const aberto = state.extratoPrazo && state.extratoPrazo.id === c.id;
@@ -2657,14 +2687,18 @@ function vendaPrazoHTML() {
     ${
       devendo.length
         ? `<section class="grupo-painel">
-            <div class="grupo-cabecalho"><h2>Quem mais deve</h2></div>
+            <div class="grupo-cabecalho">
+              <h2>Saldos dos clientes</h2>
+              <span class="grupo-total">${brl(devendo.reduce((a, c) => a + c.saldo, 0))}</span>
+            </div>
             ${devendo
-              .slice(0, 15)
               .map((c) => barraPrazoHTML(c.nome.slice(0, 18), c.saldo, maiorSaldo, c.situacao === 'atrasado'))
               .join('')}
           </section>`
         : ''
     }
+
+    ${(state.vendaPrazo.faixas || [30, 60, 90, 120]).map((d) => faixaAtrasoHTML(filtrados, d)).join('')}
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">

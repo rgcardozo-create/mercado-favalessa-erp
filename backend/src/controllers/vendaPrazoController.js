@@ -1,6 +1,6 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
-const { faturasAbertas } = require('../utils/faturasPrazo');
+const { faturasAbertas, FAIXAS } = require('../utils/faturasPrazo');
 
 // Dia de corte e dia de vencimento do caderno. Vêm do sistema antigo e moram em
 // `configuracoes`, como os percentuais da folha: são regra da casa, não dado de
@@ -71,6 +71,7 @@ async function resumo(req, res) {
       saldo: Number(r.saldo),
       ultima_compra: (porCliente.get(r.id) || []).filter((m) => m.tipo === 'compra').slice(-1)[0]?.data || null,
       faturas: f.faturas,
+      atrasos: f.atrasos,
       atraso_30: f.atraso_30,
       situacao: f.situacao,
     };
@@ -89,7 +90,12 @@ async function resumo(req, res) {
       atrasados: clientes.filter((c) => c.situacao === 'atrasado').length,
       em_dia_ate_30: clientes.filter((c) => c.situacao === 'devendo').length,
       total_atrasado: clientes.reduce((a, c) => a + c.atraso_30, 0),
+      // Quanto há em cada faixa, para a tela não ter que somar de novo.
+      por_faixa: Object.fromEntries(
+        FAIXAS.map((d) => [d, Math.round(clientes.reduce((a, c) => a + (c.atrasos[d] || 0), 0) * 100) / 100])
+      ),
     },
+    faixas: FAIXAS,
   });
 }
 
