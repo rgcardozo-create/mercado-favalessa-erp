@@ -8,6 +8,10 @@
 
 const centavos = (n) => Math.round(n * 100) / 100;
 
+// As faixas de atraso que a tela mostra, em dias. Ficam aqui porque quem sabe
+// somar fatura vencida é este arquivo; a tela só desenha o que ele devolve.
+const FAIXAS = [30, 60, 90, 120];
+
 function diasNoMes(ano, mes) {
   return new Date(Date.UTC(ano, mes, 0)).getUTCDate();
 }
@@ -80,15 +84,25 @@ function faturasAbertas(movimentos, { diaCorte, diaVencimento, hoje }) {
     // Meio centavo de resto não é fatura em aberto: é arredondamento.
     .filter((f) => f.saldo > 0.004);
 
-  const atraso30 = faturas.filter((f) => f.dias_vencida >= 30).reduce((s, f) => s + f.saldo, 0);
+  // As faixas são cumulativas, como no sistema antigo: quem está cem dias
+  // vencido aparece em 30, em 60 e em 90. Não é redundância — cada faixa
+  // responde uma pergunta diferente ("quanto está podre" contra "quanto está
+  // atrasado"), e um cliente pode ter uma fatura de 100 dias e outra de 40.
+  const atrasos = {};
+  for (const dias of FAIXAS) {
+    atrasos[dias] = centavos(
+      faturas.filter((f) => f.dias_vencida >= dias).reduce((s, f) => s + f.saldo, 0)
+    );
+  }
 
   return {
     faturas,
-    atraso_30: centavos(atraso30),
+    atrasos,
+    atraso_30: atrasos[30],
     // "Atrasado" é ter fatura vencida há 30 dias ou mais; "Devendo" é dever sem
     // ter chegado lá; "Em dia" é não dever nada.
-    situacao: atraso30 > 0 ? 'atrasado' : faturas.length ? 'devendo' : 'em_dia',
+    situacao: atrasos[30] > 0 ? 'atrasado' : faturas.length ? 'devendo' : 'em_dia',
   };
 }
 
-module.exports = { faturasAbertas, competenciaDe, vencimentoDaCompetencia, diasNoMes, diasDesde };
+module.exports = { FAIXAS, faturasAbertas, competenciaDe, vencimentoDaCompetencia, diasNoMes, diasDesde };
