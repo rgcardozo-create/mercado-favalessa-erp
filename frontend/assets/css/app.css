@@ -688,3 +688,46 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 .barra-trilho { flex: 1; background: #EEF3FA; border-radius: 4px; height: 14px; overflow: hidden; }
 .barra { height: 100%; background: var(--azul); border-radius: 4px; }
 .barra.barra-atraso { background: var(--vermelho); }
+
+/* Venda a prazo em duas colunas, como no sistema antigo: à esquerda o que se
+   faz, à direita o que se olha. Num monitor só, alternar entre lançar uma
+   compra e conferir quem está atrasado deixa de exigir rolar a tela inteira. */
+.colunas-prazo { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; margin-bottom: 14px; }
+.painel-prazo {
+  background: #fff; border: 1px solid var(--borda); border-radius: 12px;
+  padding: 14px; box-shadow: 0 1px 3px #1a3faa12;
+}
+.painel-prazo > h2 { margin: 0 0 12px; font-size: 16px; color: var(--azul); }
+.painel-prazo h3 {
+  margin: 16px 0 8px; font-size: 13px; color: var(--azul);
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+}
+.painel-prazo h3:first-of-type { margin-top: 0; }
+.painel-prazo .form-inline { background: none; border: none; padding: 0; box-shadow: none; margin-bottom: 14px; }
+/* O formulário é flex; sem isto o título vira mais um item na fila e aparece ao
+   LADO do primeiro campo em vez de acima dele. */
+.painel-prazo .form-inline h3 { flex: 1 1 100%; margin: 0 0 2px; }
+
+/* Três cartões em três colunas, sempre. Com `auto-fit` eles quebravam em 2+1
+   dentro da coluna estreita, e o terceiro ficava sozinho ocupando a largura
+   toda — desalinhado do resto do resumo. */
+.painel-prazo .cartoes-resumo {
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.painel-prazo .cartao-resumo { padding: 10px; }
+.painel-prazo .cartao-resumo strong { font-size: 16px; }
+.painel-prazo .cartao-resumo .rotulo { font-size: 10px; }
+.painel-prazo .cartao-resumo small { font-size: 10px; }
+
+/* Numa coluna estreita os três cartões lado a lado ficariam ilegíveis. */
+@media (max-width: 1200px) {
+  .painel-prazo .cartoes-resumo { grid-template-columns: 1fr 1fr; }
+}
+
+/* Numa tela estreita as duas colunas viram uma: lado a lado, cada painel
+   ficaria com metade da largura de um celular. */
+@media (max-width: 1000px) {
+  .colunas-prazo { grid-template-columns: 1fr; }
+}

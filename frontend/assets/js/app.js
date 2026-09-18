@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.58.0';
+const VERSAO = '1.59.0';
 
 const state = {
   sessao: getSessao(),
@@ -2488,13 +2488,10 @@ function faixaAtrasoHTML(clientes, dias) {
   const total = itens.reduce((a, x) => a + x.valor, 0);
 
   return `
-    <section class="grupo-painel">
-      <div class="grupo-cabecalho">
-        <h2>Vencidos há mais de ${dias} dias</h2>
-        <span class="grupo-total">${itens.length} cliente(s) &middot; ${brl(total)}</span>
-      </div>
-      ${itens.map((x) => barraPrazoHTML(x.nome.slice(0, 18), x.valor, maximo, true)).join('')}
-    </section>`;
+    <h3>Vencidos há mais de ${dias} dias
+      <span class="resumo-lista">${itens.length} cliente(s) &middot; ${brl(total)}</span>
+    </h3>
+    ${itens.map((x) => barraPrazoHTML(x.nome.slice(0, 18), x.valor, maximo, true)).join('')}`;
 }
 
 function cartaoClientePrazo(c) {
@@ -2613,49 +2610,33 @@ function vendaPrazoHTML() {
   const devendo = filtrados.filter((c) => c.saldo > 0);
   const maiorSaldo = Math.max(...devendo.map((c) => c.saldo), 1);
 
-  return `
-    ${cabecalho}
+  const opcoesCliente = clientes
+    .map(
+      (c) =>
+        `<option value="${c.id}" ${String(state.clientePrazoEscolhido) === String(c.id) ? 'selected' : ''}>${
+          c.codigo ? `${escapar(c.codigo)} — ` : ''
+        }${escapar(c.nome)}</option>`
+    )
+    .join('');
 
-    <div class="cartoes-resumo">
-      <div class="cartao-resumo vencidas">
-        <span class="rotulo">Total a receber</span>
-        <strong>${brl(totais.saldo)}</strong>
-        <small>${totais.clientes_com_saldo} cliente(s) devendo</small>
-      </div>
-      <div class="cartao-resumo hoje">
-        <span class="rotulo">Acima de 30 dias</span>
-        <strong>${totais.atrasados}</strong>
-        <small>${brl(totais.total_atrasado)} vencido</small>
-      </div>
-      <div class="cartao-resumo proximos">
-        <span class="rotulo">Até 30 dias</span>
-        <strong>${totais.em_dia_ate_30}</strong>
-        <small>em dia com o prazo</small>
-      </div>
-    </div>
+  // Duas colunas, como no sistema antigo: à esquerda o que se faz (lançar,
+  // receber, configurar), à direita o que se olha (quanto, de quem, há quanto
+  // tempo). Separar as duas coisas evita rolar a tela inteira para alternar
+  // entre lançar uma compra e conferir quem está atrasado.
+  const coluna_esquerda = `
+    <div class="painel-prazo">
+      <h2>Venda a prazo</h2>
 
-    <section class="cartoes-form">
       <form data-action="novo-mov-prazo" class="form-inline">
-        <h2>Lançar movimento</h2>
-        <label>Cliente
-          <select name="cliente_id" required>
-            ${clientes
-              .map(
-                (c) =>
-                  `<option value="${c.id}" ${String(state.clientePrazoEscolhido) === String(c.id) ? 'selected' : ''}>${
-                    c.codigo ? `${escapar(c.codigo)} — ` : ''
-                  }${escapar(c.nome)}</option>`
-              )
-              .join('')}
-          </select>
-        </label>
+        <h3>Lançar movimento</h3>
+        <label>Cliente <select name="cliente_id" required>${opcoesCliente}</select></label>
         <label>Tipo
           <select name="tipo">
             <option value="compra">Compra</option>
             <option value="pagamento">Pagamento do cliente</option>
           </select>
         </label>
-        <label>Valor <input type="number" step="0.01" min="0" name="valor" required /></label>
+        <label>Valor <input type="number" step="0.01" min="0" name="valor" required placeholder="Ex: 120,00" /></label>
         <label>Data <input type="date" name="data" required value="${todayISO()}" /></label>
         <label id="campo-forma-prazo" class="escondido">Como pagou
           <select name="forma_pagamento">
@@ -2672,33 +2653,56 @@ function vendaPrazoHTML() {
       </form>
 
       <form data-action="config-prazo" class="form-inline">
-        <h2>Dia de corte e vencimento</h2>
-        <label>Dia de corte <input type="number" min="1" max="28" name="dia_corte" required value="${config.dia_corte}" /></label>
-        <label>Dia de vencimento <input type="number" min="1" max="28" name="dia_vencimento" required value="${config.dia_vencimento}" /></label>
-        <button type="submit">Salvar</button>
+        <h3>Dia de corte e vencimento</h3>
+        <label>Dia de corte (1–28) <input type="number" min="1" max="28" name="dia_corte" required value="${config.dia_corte}" /></label>
+        <label>Dia de vencimento (1–28) <input type="number" min="1" max="28" name="dia_vencimento" required value="${config.dia_vencimento}" /></label>
+        <button type="submit">Salvar configuração</button>
         <p class="vazio campo-largo">
           <strong>Corte</strong>: em que dia as compras do mês fecham numa fatura. <strong>Vencimento</strong>:
-          em que dia do mês seguinte essa fatura vence. É daqui que sai o <strong>Atrasado</strong> — sem
+          em que dia do mês seguinte essa fatura vence. É daqui que saem as faixas de atraso — sem
           vencimento, "deve há três meses" e "comprou ontem" seriam a mesma coisa.
         </p>
       </form>
-    </section>
+    </div>`;
 
-    ${
-      devendo.length
-        ? `<section class="grupo-painel">
-            <div class="grupo-cabecalho">
-              <h2>Saldos dos clientes</h2>
-              <span class="grupo-total">${brl(devendo.reduce((a, c) => a + c.saldo, 0))}</span>
-            </div>
-            ${devendo
-              .map((c) => barraPrazoHTML(c.nome.slice(0, 18), c.saldo, maiorSaldo, c.situacao === 'atrasado'))
-              .join('')}
-          </section>`
-        : ''
-    }
+  const coluna_direita = `
+    <div class="painel-prazo">
+      <h2>Resumo da venda a prazo</h2>
 
-    ${(state.vendaPrazo.faixas || [30, 60, 90, 120]).map((d) => faixaAtrasoHTML(filtrados, d)).join('')}
+      <div class="cartoes-resumo">
+        <div class="cartao-resumo vencidas">
+          <span class="rotulo">Total a receber</span><strong>${brl(totais.saldo)}</strong>
+          <small>${totais.clientes_com_saldo} cliente(s) devendo</small>
+        </div>
+        <div class="cartao-resumo hoje">
+          <span class="rotulo">Acima de 30 dias</span><strong>${totais.atrasados}</strong>
+          <small>${brl(totais.total_atrasado)} vencido</small>
+        </div>
+        <div class="cartao-resumo proximos">
+          <span class="rotulo">Até 30 dias</span><strong>${totais.em_dia_ate_30}</strong>
+          <small>em dia com o prazo</small>
+        </div>
+      </div>
+
+      ${
+        devendo.length
+          ? `<h3>Saldos dos clientes <span class="resumo-lista">${brl(devendo.reduce((a, c) => a + c.saldo, 0))}</span></h3>
+             ${devendo
+               .map((c) => barraPrazoHTML(c.nome.slice(0, 18), c.saldo, maiorSaldo, c.situacao === 'atrasado'))
+               .join('')}`
+          : '<p class="vazio">Nenhum cliente devendo.</p>'
+      }
+
+      ${(state.vendaPrazo.faixas || [30, 60, 90, 120]).map((d) => faixaAtrasoHTML(filtrados, d)).join('')}
+    </div>`;
+
+  return `
+    ${cabecalho}
+
+    <div class="colunas-prazo">
+      ${coluna_esquerda}
+      ${coluna_direita}
+    </div>
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
