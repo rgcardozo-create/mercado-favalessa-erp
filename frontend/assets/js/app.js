@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.62.0';
+const VERSAO = '1.63.0';
 
 const state = {
   sessao: getSessao(),
@@ -144,6 +144,11 @@ const state = {
   baixaPrazoId: null,
   buscaPrazo: '',
   clientePrazoEscolhido: null,
+  // Importação do "Contas a Receber" do PDV.
+  prazoImport: null,
+  prazoImportErro: null,
+  prazoImportResultado: null,
+  prazoImportArquivo: null,
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -2658,6 +2663,86 @@ function cartaoClientePrazo(c) {
     </div>`;
 }
 
+// Importar o "Contas a Receber" do PDV para dentro do caderno.
+//
+// Confere antes de gravar: o relatório declara os próprios totais, e a tela só
+// libera o botão de importar se a leitura reproduzir os números dele. Num
+// caderno de fiado, ler quase certo é cobrar do cliente errado.
+function importarPrazoHTML() {
+  const p = state.prazoImport;
+
+  return `
+    <div class="painel-prazo">
+      <h2>Importar do PDV</h2>
+      <form data-action="analisar-prazo" class="form-inline">
+        <h3>Relatório "Contas a Receber"</h3>
+        <label class="campo-largo">Arquivo
+          <input type="file" name="arquivo" accept=".xls,.xlsx,.csv" required />
+        </label>
+        <button type="submit">Conferir arquivo</button>
+        <p class="vazio campo-largo">
+          Lê código, nome, data e valor de cada título. Cliente que ainda não existe aqui é
+          <strong>cadastrado na hora</strong>, e nome diferente é atualizado — o arquivo é a fonte.
+          Reimportar o mesmo período <strong>atualiza</strong>, não duplica.
+        </p>
+      </form>
+
+      ${state.prazoImportErro ? `<div class="alerta erro">${escapar(state.prazoImportErro)}</div>` : ''}
+
+      ${
+        p
+          ? `<div class="alerta ${p.confere ? 'sucesso' : 'erro'}">
+              <strong>${p.clientes} cliente(s) e ${p.titulos} título(s)</strong>
+              ${p.periodo ? `de ${dateBR(p.periodo.de)} a ${dateBR(p.periodo.ate)}` : ''}.
+              Em aberto ${brl(p.soma.abertos)} &middot; já baixados ${brl(p.soma.baixados)}.
+              <br>
+              ${
+                p.confere
+                  ? 'Confere com os totais declarados no próprio arquivo.'
+                  : '<strong>NÃO confere com os totais do próprio arquivo.</strong> Não vou importar — me mande o arquivo para eu acertar a leitura.'
+              }
+            </div>
+            ${
+              p.novos.length
+                ? `<p class="vazio"><strong>${p.novos.length} cliente(s) novo(s)</strong>, que serão cadastrados:
+                    ${p.novos.slice(0, 12).map((c) => `${escapar(c.codigo)} ${escapar(c.nome)}`).join(' &middot; ')}
+                    ${p.novos.length > 12 ? ` e mais ${p.novos.length - 12}` : ''}</p>`
+                : '<p class="vazio">Nenhum cliente novo: todos já estão cadastrados.</p>'
+            }
+            ${
+              p.renomeados.length
+                ? `<p class="vazio"><strong>${p.renomeados.length} nome(s) serão atualizados:</strong>
+                    ${p.renomeados.slice(0, 8).map((c) => `${escapar(c.de)} → ${escapar(c.para)}`).join(' &middot; ')}</p>`
+                : ''
+            }
+            ${
+              p.confere
+                ? '<button type="button" id="btn-importar-prazo">Importar de verdade</button>'
+                : ''
+            }`
+          : ''
+      }
+
+      ${
+        state.prazoImportResultado
+          ? `<div class="alerta sucesso">
+              Importado: <strong>${state.prazoImportResultado.compras} compra(s)</strong> e
+              ${state.prazoImportResultado.pagamentos} pagamento(s) novos${
+                state.prazoImportResultado.atualizados
+                  ? `, ${state.prazoImportResultado.atualizados} já existiam e foram atualizados`
+                  : ''
+              }.
+              ${
+                state.prazoImportResultado.clientes_novos.length
+                  ? `<br>${state.prazoImportResultado.clientes_novos.length} cliente(s) cadastrado(s).`
+                  : ''
+              }
+            </div>`
+          : ''
+      }
+    </div>`;
+}
+
 function vendaPrazoHTML() {
   const cabecalho = cabecalhoHTML('Venda a prazo');
   if (!state.vendaPrazo) return `${cabecalho}${state.carregando ? '<p>Carregando…</p>' : ''}`;
@@ -2765,7 +2850,10 @@ function vendaPrazoHTML() {
     ${cabecalho}
 
     <div class="colunas-prazo">
-      ${coluna_esquerda}
+      <div>
+        ${coluna_esquerda}
+        ${podeGerenciar() ? importarPrazoHTML() : ''}
+      </div>
       ${coluna_direita}
     </div>
 
@@ -5717,6 +5805,12 @@ function bind() {
   const formConfigPrazo = root.querySelector('[data-action="config-prazo"]');
   if (formConfigPrazo) formConfigPrazo.addEventListener('submit', onSalvarConfigPrazo);
 
+  const formAnalisarPrazo = root.querySelector('[data-action="analisar-prazo"]');
+  if (formAnalisarPrazo) formAnalisarPrazo.addEventListener('submit', onAnalisarPrazo);
+
+  const btnImportarPrazo = root.querySelector('#btn-importar-prazo');
+  if (btnImportarPrazo) btnImportarPrazo.addEventListener('click', onImportarPrazo);
+
   // Busca do caderno filtra na memória: a lista já está toda carregada, e ir ao
   // servidor a cada letra só deixaria a digitação travada.
   const buscaPrazo = root.querySelector('#busca-prazo');
@@ -6480,6 +6574,59 @@ async function onExcluirDinheiro(id) {
     state.erro = err.message;
     render();
   }
+}
+
+// ── Importação do Contas a Receber ───────────────────────────────────────────
+
+async function onAnalisarPrazo(ev) {
+  ev.preventDefault();
+  const campo = ev.target.querySelector('[name="arquivo"]');
+  const arquivo = campo && campo.files && campo.files[0];
+  if (!arquivo) return;
+
+  state.prazoImportErro = null;
+  state.prazoImportResultado = null;
+  state.carregando = true;
+  render();
+
+  try {
+    // Guarda o conteúdo: o input de arquivo se esvazia a cada render, e sem isso
+    // ele teria que escolher o arquivo de novo entre conferir e importar.
+    state.prazoImportArquivo = { nome: arquivo.name, conteudo: await paraBase64(arquivo) };
+    state.prazoImport = await apiFetch('/venda-prazo/importar/analisar', {
+      method: 'POST',
+      body: JSON.stringify({ arquivo: state.prazoImportArquivo.conteudo, nome: arquivo.name }),
+    });
+  } catch (err) {
+    state.prazoImport = null;
+    state.prazoImportErro = err.message;
+  }
+  state.carregando = false;
+  render();
+}
+
+async function onImportarPrazo() {
+  const a = state.prazoImportArquivo;
+  if (!a) return;
+  if (!confirm(`Importar ${state.prazoImport.titulos} título(s) de ${state.prazoImport.clientes} cliente(s)?`)) return;
+
+  state.carregando = true;
+  render();
+  try {
+    state.prazoImportResultado = await apiFetch('/venda-prazo/importar', {
+      method: 'POST',
+      body: JSON.stringify({ arquivo: a.conteudo, nome: a.nome }),
+    });
+    state.prazoImport = null;
+    state.prazoImportArquivo = null;
+    state.prazoImportErro = null;
+    carregarDados();
+    return;
+  } catch (err) {
+    state.prazoImportErro = err.message;
+  }
+  state.carregando = false;
+  render();
 }
 
 async function onSalvarConfigPrazo(ev) {

@@ -47,6 +47,7 @@ const comPrefixo = (prefixo, roteador) =>
 const ROTAS_COM_ARQUIVO = new Set([
   ...comPrefixo('/api/admin', adminRoutes),
   ...comPrefixo('/api/conciliacao', conciliacaoRoutes),
+  ...comPrefixo('/api/venda-prazo', vendaPrazoRoutes),
 ]);
 
 app.use((req, res, next) => {
