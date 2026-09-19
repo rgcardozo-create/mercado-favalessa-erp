@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.65.0';
+const VERSAO = '1.66.0';
 
 const state = {
   sessao: getSessao(),
@@ -156,6 +156,7 @@ const state = {
   verTodosPrazo: false,
   // Meses fechados que o dono abriu para ver compra por compra.
   mesesAbertos: new Set(),
+  cadernoLimpo: null,
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -2909,6 +2910,50 @@ function importarPrazoHTML() {
     </div>`;
 }
 
+// Apagar o caderno e recomeçar do zero.
+//
+// Fica no fim da coluna, separado e com a cor de perigo, porque é a única ação
+// desta tela que não tem volta. Exige escrever LIMPAR: clique errado não apaga
+// nada, e quem digitou a palavra sabe o que está fazendo.
+function limparCadernoHTML() {
+  const total = (state.vendaPrazo && state.vendaPrazo.totais) || {};
+
+  return `
+    <div class="painel-prazo painel-perigo">
+      <h2>Começar o caderno do zero</h2>
+
+      <div class="alerta erro">
+        <strong>Isto apaga todas as compras e pagamentos do caderno, de todos os clientes.</strong>
+        Não tem como desfazer. Os <strong>clientes continuam cadastrados</strong>, com código e nome — some
+        o histórico, não o cadastro. Nada fora da venda a prazo é tocado.
+        <br><br>
+        <strong>Baixe o backup antes</strong>, em Administração. É a única rede que existe depois daqui.
+      </div>
+
+      <p class="vazio">
+        Hoje há <strong>${state.vendaPrazo ? state.vendaPrazo.clientes.reduce((a, c) => a + c.movimentos, 0) : 0}
+        lançamento(s)</strong> no caderno, somando ${brl(total.compras || 0)} em compras e
+        ${brl(total.pago || 0)} em pagamentos.
+      </p>
+
+      <form data-action="limpar-caderno" class="form-inline">
+        <label>Escreva LIMPAR para confirmar
+          <input type="text" name="confirmacao" placeholder="LIMPAR" autocomplete="off" required />
+        </label>
+        <button type="submit" class="perigo">Apagar o caderno</button>
+      </form>
+
+      ${
+        state.cadernoLimpo
+          ? `<div class="alerta sucesso">
+              Caderno zerado: ${state.cadernoLimpo.apagados} lançamento(s) apagados.
+              Pode começar a lançar do zero.
+            </div>`
+          : ''
+      }
+    </div>`;
+}
+
 function vendaPrazoHTML() {
   const cabecalho = cabecalhoHTML('Venda a prazo');
   if (!state.vendaPrazo) return `${cabecalho}${state.carregando ? '<p>Carregando…</p>' : ''}`;
@@ -3009,6 +3054,7 @@ function vendaPrazoHTML() {
       <div>
         ${coluna_esquerda}
         ${podeGerenciar() ? importarPrazoHTML() : ''}
+        ${ehMaster() ? limparCadernoHTML() : ''}
       </div>
       ${coluna_direita}
     </div>
@@ -5958,6 +6004,9 @@ function bind() {
   const formBaixaPrazo = root.querySelector('[data-action="baixa-prazo"]');
   if (formBaixaPrazo) formBaixaPrazo.addEventListener('submit', onBaixaPrazo);
 
+  const formLimpar = root.querySelector('[data-action="limpar-caderno"]');
+  if (formLimpar) formLimpar.addEventListener('submit', onLimparCaderno);
+
   const formConfigPrazo = root.querySelector('[data-action="config-prazo"]');
   if (formConfigPrazo) formConfigPrazo.addEventListener('submit', onSalvarConfigPrazo);
 
@@ -6818,6 +6867,40 @@ async function onImportarPrazo() {
   }
   state.carregando = false;
   render();
+}
+
+async function onLimparCaderno(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const palavra = String(fd.get('confirmacao') || '').trim().toUpperCase();
+
+  if (palavra !== 'LIMPAR') {
+    state.erro = 'Escreva LIMPAR no campo para confirmar.';
+    render();
+    return;
+  }
+
+  // Segunda parada, com o número na frente: a palavra digitada prova intenção,
+  // mas o tamanho do estrago só fica claro quando se vê quantos lançamentos vão
+  // embora.
+  const quantos = state.vendaPrazo ? state.vendaPrazo.clientes.reduce((a, c) => a + c.movimentos, 0) : 0;
+  if (!confirm(`Apagar ${quantos} lançamento(s) do caderno, de todos os clientes?\n\nNão tem como desfazer.`)) {
+    return;
+  }
+
+  try {
+    state.cadernoLimpo = await apiFetch('/venda-prazo/limpar', {
+      method: 'POST',
+      body: JSON.stringify({ confirmacao: 'LIMPAR' }),
+    });
+    state.extratoPrazo = null;
+    state.mesesAbertos = new Set();
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 async function onSalvarConfigPrazo(ev) {
