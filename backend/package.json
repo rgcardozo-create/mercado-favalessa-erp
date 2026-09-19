@@ -6,7 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node test/calculoFerias.test.js && node test/calculoRescisao.test.js && node test/faturasPrazo.test.js && node test/colunasExtrato.test.js && node test/extratoBanco.test.js",
+    "test": "node test/calculoFerias.test.js && node test/calculoRescisao.test.js && node test/faturasPrazo.test.js && node test/colunasExtrato.test.js && node test/vendaPrazoExtrato.test.js && node test/extratoBanco.test.js",
     "dev": "node --watch src/server.js",
     "migrate": "node src/db/migrate.js",
     "seed": "node src/db/seed.js",
