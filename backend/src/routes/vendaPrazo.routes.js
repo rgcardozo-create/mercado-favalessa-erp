@@ -30,10 +30,6 @@ router.get('/clientes/:id', asyncHandler(c.extratoCliente));
 router.post('/movimentos', asyncHandler(c.criarMovimento));
 router.delete('/movimentos/:id', authorize('master', 'gerente'), asyncHandler(c.deletarMovimento));
 
-// Apagar o caderno inteiro. Só o Master, e só com a palavra de confirmação no
-// corpo — é sem volta.
-router.post('/limpar', authorize('master'), asyncHandler(c.limparCaderno));
-
 router.caminhosComArquivo = CAMINHOS_COM_ARQUIVO;
 
 module.exports = router;
