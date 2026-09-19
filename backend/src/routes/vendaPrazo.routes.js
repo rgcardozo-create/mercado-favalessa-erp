@@ -13,6 +13,9 @@ router.use(exigirTela('venda-prazo'));
 
 router.get('/', asyncHandler(c.resumo));
 
+// Aviso do painel: quem passou de 30 dias vencido e precisa ser bloqueado.
+router.get('/alertas', asyncHandler(c.alertas));
+
 // Importar o "Contas a Receber" do PDV. O corpo traz a planilha em base64 e
 // passa do limite global de 1 MB, então a rota traz o próprio parser.
 const corpoGrande = express.json({ limit: process.env.LIMITE_IMPORTACAO || '25mb' });

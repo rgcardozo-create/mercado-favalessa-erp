@@ -99,6 +99,48 @@ async function resumo(req, res) {
   });
 }
 
+// Quem passou de 30 dias vencido — para o painel do dia avisar.
+//
+// O dono pediu porque é a hora de bloquear o cliente na balança, e essa decisão
+// não pode depender de ele lembrar de abrir a tela de venda a prazo. Devolve
+// nome e valor de propósito: caderno de fiado não é a folha, e sem o nome o
+// aviso não serve para nada — "alguém está atrasado" não bloqueia ninguém.
+async function alertas(req, res) {
+  const [config, hoje] = await Promise.all([lerConfigPrazo(), hojeSP()]);
+
+  const { rows: movimentos } = await pool.query(
+    `SELECT m.cliente_id, c.codigo, c.nome, m.tipo::text AS tipo, m.valor,
+            to_char(m.data, 'YYYY-MM-DD') AS data
+       FROM mov_prazo m JOIN clientes c ON c.id = m.cliente_id
+      ORDER BY m.data, m.id`
+  );
+
+  const porCliente = new Map();
+  for (const m of movimentos) {
+    if (!porCliente.has(m.cliente_id)) {
+      porCliente.set(m.cliente_id, { id: m.cliente_id, codigo: m.codigo, nome: m.nome, movimentos: [] });
+    }
+    porCliente.get(m.cliente_id).movimentos.push(m);
+  }
+
+  const opcoes = { diaCorte: config.dia_corte, diaVencimento: config.dia_vencimento, hoje };
+  const bloquear = [];
+  for (const c of porCliente.values()) {
+    const f = faturasAbertas(c.movimentos, opcoes);
+    if (f.atraso_30 > 0) {
+      const maisVelha = f.faturas.reduce((a, x) => (x.dias_vencida > a ? x.dias_vencida : a), 0);
+      bloquear.push({ id: c.id, codigo: c.codigo, nome: c.nome, valor: f.atraso_30, dias: maisVelha });
+    }
+  }
+
+  bloquear.sort((a, b) => b.dias - a.dias || b.valor - a.valor);
+  return res.json({
+    quantidade: bloquear.length,
+    total: Math.round(bloquear.reduce((a, c) => a + c.valor, 0) * 100) / 100,
+    clientes: bloquear,
+  });
+}
+
 async function salvarConfigPrazo(req, res) {
   const limpo = (v) => {
     const n = Number(v);
@@ -209,4 +251,5 @@ async function deletarMovimento(req, res) {
 }
 
 module.exports = {
-  salvarConfigPrazo, resumo, extratoCliente, criarMovimento, deletarMovimento };
+  salvarConfigPrazo,
+  alertas, resumo, extratoCliente, criarMovimento, deletarMovimento };
