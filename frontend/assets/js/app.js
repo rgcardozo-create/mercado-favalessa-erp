@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.63.0';
+const VERSAO = '1.64.0';
 
 const state = {
   sessao: getSessao(),
@@ -149,6 +149,9 @@ const state = {
   prazoImportErro: null,
   prazoImportResultado: null,
   prazoImportArquivo: null,
+  // Recorte do resumo do caderno: 0 = todos, 30/60/90/120 = faixa de atraso.
+  faixaPrazo: 0,
+  verTodosPrazo: false,
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -2537,31 +2540,75 @@ function barraPrazoHTML(rotulo, valor, maximo, atrasado) {
     </div>`;
 }
 
-// Uma faixa de atraso: só o que está vencido há N dias ou mais.
+// O resumo do caderno num bloco só, com filtro — e não cinco listas empilhadas.
 //
-// As faixas são cumulativas, como no sistema antigo — quem está cem dias
-// vencido aparece em 30, em 60 e em 90. Não é repetição à toa: cada bloco
-// responde uma pergunta diferente. "Vencido há mais de 30" é cobrança; "há mais
-// de 120" é outra conversa.
-//
-// O valor da barra não é o saldo do cliente: é só a parte dele vencida naquela
-// faixa. Quem deve 500 mas tem só 100 vencidos há 90 dias aparece aqui com 100.
-function faixaAtrasoHTML(clientes, dias) {
-  const itens = clientes
-    .map((c) => ({ nome: c.nome, valor: (c.atrasos && c.atrasos[dias]) || 0 }))
-    .filter((x) => x.valor > 0)
+// Antes eram "Saldos dos clientes" mais uma lista por faixa de atraso. Como as
+// faixas são cumulativas, quem devia há muito tempo aparecia nas cinco: a mesma
+// pessoa cinco vezes, a página enorme, e nenhuma delas respondendo sozinha
+// "quem eu cobro hoje". Agora é uma lista que muda conforme o recorte.
+const FAIXAS_PRAZO = [
+  { dias: 0, rotulo: 'Todos que devem' },
+  { dias: 30, rotulo: 'Vencidos +30' },
+  { dias: 60, rotulo: '+60' },
+  { dias: 90, rotulo: '+90' },
+  { dias: 120, rotulo: '+120' },
+];
+
+// O valor mostrado depende do recorte: em "todos", é o saldo do cliente; numa
+// faixa, é só a parte dele vencida naquele prazo. Somar o saldo inteiro na faixa
+// faria a cobrança parecer mais velha do que é.
+function itensDaFaixa(clientes, dias) {
+  return clientes
+    .map((c) => ({
+      nome: c.nome,
+      atrasado: c.situacao === 'atrasado',
+      valor: dias === 0 ? c.saldo : (c.atrasos && c.atrasos[dias]) || 0,
+    }))
+    .filter((x) => x.valor > 0.004)
     .sort((a, b) => b.valor - a.valor);
+}
 
-  if (!itens.length) return '';
-
-  const maximo = Math.max(...itens.map((x) => x.valor), 1);
+function resumoPrazoHTML(clientes) {
+  const escolhida = FAIXAS_PRAZO.some((f) => f.dias === state.faixaPrazo) ? state.faixaPrazo : 0;
+  const itens = itensDaFaixa(clientes, escolhida);
   const total = itens.reduce((a, x) => a + x.valor, 0);
+  const maximo = Math.max(...itens.map((x) => x.valor), 1);
+
+  // Lista longa fica cortada: quinze nomes já mostram quem pesa, e o resto é
+  // rolagem. O botão abre quando ele quiser o quadro inteiro.
+  const LIMITE = 15;
+  const cortada = !state.verTodosPrazo && itens.length > LIMITE;
+  const visiveis = cortada ? itens.slice(0, LIMITE) : itens;
+
+  const abas = FAIXAS_PRAZO.map((f) => {
+    const n = itensDaFaixa(clientes, f.dias).length;
+    return `<button data-faixa-prazo="${f.dias}" class="${escolhida === f.dias ? 'ativo' : ''}" ${
+      n ? '' : 'disabled'
+    }>${f.rotulo}${n ? ` (${n})` : ''}</button>`;
+  }).join('');
 
   return `
-    <h3>Vencidos há mais de ${dias} dias
-      <span class="resumo-lista">${itens.length} cliente(s) &middot; ${brl(total)}</span>
-    </h3>
-    ${itens.map((x) => barraPrazoHTML(x.nome.slice(0, 18), x.valor, maximo, true)).join('')}`;
+    <h3>Saldos dos clientes <span class="resumo-lista">${itens.length} &middot; ${brl(total)}</span></h3>
+
+    <div class="filtros filtros-prazo">${abas}</div>
+
+    <p class="vazio legenda-prazo">
+      <span class="amostra-barra barra-atraso"></span> vencido há mais de 30 dias
+      &middot;
+      <span class="amostra-barra"></span> devendo, ainda dentro do prazo
+      ${escolhida ? ' &middot; nesta faixa a barra mostra só a parte vencida, não o saldo todo' : ''}
+    </p>
+
+    ${
+      itens.length
+        ? visiveis.map((x) => barraPrazoHTML(x.nome.slice(0, 18), x.valor, maximo, x.atrasado)).join('') +
+          (cortada
+            ? `<button type="button" id="btn-ver-todos-prazo" class="secundario">Ver os outros ${
+                itens.length - LIMITE
+              }</button>`
+            : '')
+        : '<p class="vazio">Ninguém nesta faixa.</p>'
+    }`;
 }
 
 function cartaoClientePrazo(c) {
@@ -2758,7 +2805,6 @@ function vendaPrazoHTML() {
   );
 
   const devendo = filtrados.filter((c) => c.saldo > 0);
-  const maiorSaldo = Math.max(...devendo.map((c) => c.saldo), 1);
 
   const opcoesCliente = clientes
     .map(
@@ -2834,16 +2880,7 @@ function vendaPrazoHTML() {
         </div>
       </div>
 
-      ${
-        devendo.length
-          ? `<h3>Saldos dos clientes <span class="resumo-lista">${brl(devendo.reduce((a, c) => a + c.saldo, 0))}</span></h3>
-             ${devendo
-               .map((c) => barraPrazoHTML(c.nome.slice(0, 18), c.saldo, maiorSaldo, c.situacao === 'atrasado'))
-               .join('')}`
-          : '<p class="vazio">Nenhum cliente devendo.</p>'
-      }
-
-      ${(state.vendaPrazo.faixas || [30, 60, 90, 120]).map((d) => faixaAtrasoHTML(filtrados, d)).join('')}
+      ${devendo.length ? resumoPrazoHTML(filtrados) : '<p class="vazio">Nenhum cliente devendo.</p>'}
     </div>`;
 
   return `
@@ -5810,6 +5847,24 @@ function bind() {
 
   const btnImportarPrazo = root.querySelector('#btn-importar-prazo');
   if (btnImportarPrazo) btnImportarPrazo.addEventListener('click', onImportarPrazo);
+
+  root.querySelectorAll('[data-faixa-prazo]').forEach((b) =>
+    b.addEventListener('click', () => {
+      state.faixaPrazo = Number(b.dataset.faixaPrazo);
+      // Trocar de recorte fecha a lista aberta: a faixa nova tem outro tamanho,
+      // e manter "ver todos" ligado mostraria uma lista longa sem ele pedir.
+      state.verTodosPrazo = false;
+      render();
+    })
+  );
+
+  const btnVerTodosPrazo = root.querySelector('#btn-ver-todos-prazo');
+  if (btnVerTodosPrazo) {
+    btnVerTodosPrazo.addEventListener('click', () => {
+      state.verTodosPrazo = true;
+      render();
+    });
+  }
 
   // Busca do caderno filtra na memória: a lista já está toda carregada, e ir ao
   // servidor a cada letra só deixaria a digitação travada.
