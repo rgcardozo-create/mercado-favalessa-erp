@@ -54,5 +54,72 @@ console.log('\n=== uma coluna serve a um campo só ===');
 const repetido = mapear(['Data', 'Valor', 'Valor']);
 ok('a segunda "Valor" não vira líquido', repetido.liquido === null);
 
+// ── Traço não é zero ─────────────────────────────────────────────────────────
+//
+// O relatório de vendas da Rede escreve "-" em `valor líquido` enquanto o MDR do
+// dia não fecha. Lido como zero, a taxa virava a venda inteira — 100% — e num
+// extrato do mês, misturado com linhas já liquidadas, dava os 30% e 45% que o
+// dono estranhou. Reproduzido aqui com o mesmo desenho de colunas do arquivo
+// real (o arquivo em si não entra no repositório: é movimentação de verdade).
+const { converterLinhas } = require('../src/utils/extrato');
+
+console.log('\n=== extrato da Rede com o MDR ainda em aberto ===');
+const CAB_REDE = [
+  'data da venda', 'hora da venda', 'status da venda', 'valor da venda original',
+  'valor da venda atualizado', 'modalidade', 'tipo', 'número de parcelas', 'bandeira',
+  'taxa MDR', 'valor MDR', 'valor líquido',
+];
+const mapaRede = acharCabecalho([CAB_REDE, []]).mapa;
+
+const semMdr = converterLinhas(
+  [['18/09/2026', '17:00:12', 'aprovada', 57.13, 57.13, 'crédito', 'à vista', 1, 'Mastercard', '-', 0, '-']],
+  mapaRede,
+  'itau',
+  'rede.xlsx'
+).transacoes[0];
+ok('bruto lido certo',                 semMdr.valorBruto === 57.13);
+ok('taxa é ZERO, não a venda inteira', semMdr.tarifa === 0);
+ok('líquido é o bruto, não zero',      semMdr.valorLiquido === 57.13);
+
+console.log('\n=== a mesma linha depois de o MDR fechar ===');
+const comMdr = converterLinhas(
+  [['18/09/2026', '17:00:12', 'aprovada', 57.13, 57.13, 'crédito', 'à vista', 1, 'Mastercard', '3,15%', 1.8, 55.33]],
+  mapaRede,
+  'itau',
+  'rede.xlsx'
+).transacoes[0];
+ok('taxa = bruto menos líquido',  Math.abs(comMdr.tarifa - 1.8) < 0.001);
+ok('percentual plausível (3,15%)', Math.abs((comMdr.tarifa / comMdr.valorBruto) * 100 - 3.15) < 0.05);
+
+console.log('\n=== zero de verdade continua sendo zero ===');
+const zeroReal = converterLinhas(
+  [['18/09/2026', '17:00:12', 'aprovada', 57.13, 57.13, 'crédito', 'à vista', 1, 'Mastercard', '0%', 0, 57.13]],
+  mapaRede,
+  'itau',
+  'rede.xlsx'
+).transacoes[0];
+ok('líquido igual ao bruto dá taxa 0', zeroReal.tarifa === 0);
+ok('e o líquido segue sendo o bruto',  zeroReal.valorLiquido === 57.13);
+
+console.log('\n=== outros jeitos de dizer "não tem valor" ===');
+for (const vazio of ['--', 'N/A', 'n/d', '—', '', '  ']) {
+  const t = converterLinhas(
+    [['18/09/2026', '17:00:12', 'aprovada', 100, 100, 'débito', 'à vista', 1, 'Visa', '-', 0, vazio]],
+    mapaRede,
+    'itau',
+    'rede.xlsx'
+  ).transacoes[0];
+  ok(`"${vazio.trim() || '(vazio)'}" não vira taxa de 100%`, t.tarifa === 0 && t.valorLiquido === 100);
+}
+
+console.log('\n=== voucher vai para Tickets mesmo vindo da Rede ===');
+const voucher = converterLinhas(
+  [['18/09/2026', '16:37:38', 'aprovada', 29.94, 29.94, 'voucher', 'outros', 1, 'Pluxee', '-', 0, '-']],
+  mapaRede,
+  'itau',
+  'rede.xlsx'
+).transacoes[0];
+ok('separado como ticket', voucher.adquirente === 'tickets');
+
 console.log(falhas ? `\n${falhas} FALHA(S)` : '\nTudo certo.');
 process.exit(falhas ? 1 : 0);
