@@ -316,6 +316,34 @@ function taxasSuspeitas(transacoes) {
   };
 }
 
+// Quanto do arquivo veio sem a taxa informada.
+//
+// O relatório de vendas da Rede traz "-" em `valor líquido` enquanto o MDR do
+// dia não fecha. O arquivo é legítimo e as vendas são reais — só a taxa ainda
+// não existe. Importar assim não estraga nada (a taxa entra como zero e a tela
+// de Taxas separa essas linhas), mas o dono precisa saber ANTES: se ele veio
+// conferir taxa, aquele arquivo não responde a pergunta dele.
+//
+// Sem este aviso, a saída era ele decorar "importe sempre de dias anteriores".
+// Regra decorada falha justamente no dia corrido.
+function semTaxaNoArquivo(transacoes) {
+  const sem = transacoes.filter((t) => t.tarifa === 0);
+  if (!sem.length || sem.length === 0) return null;
+
+  const bruto = Number(transacoes.reduce((a, t) => a + t.valorBruto, 0).toFixed(2));
+  const brutoSem = Number(sem.reduce((a, t) => a + t.valorBruto, 0).toFixed(2));
+
+  return {
+    quantidade: sem.length,
+    total: transacoes.length,
+    bruto_sem_taxa: brutoSem,
+    // Tudo sem taxa é o caso do arquivo do dia ainda aberto; uma parte só pode
+    // ser voucher, que às vezes não traz taxa mesmo.
+    tudo: sem.length === transacoes.length,
+    percentual_do_volume: bruto > 0 ? Number(((brutoSem / bruto) * 100).toFixed(1)) : null,
+  };
+}
+
 async function analisarExtratoEnviado(req, res) {
   const arquivo = arquivoDoCorpo(req);
   if (!arquivo) {
@@ -369,6 +397,7 @@ async function analisarExtratoEnviado(req, res) {
       primeiras: transacoes.slice(0, 8),
       // null quando está tudo dentro do esperado; a tela só avisa se houver.
       taxas_suspeitas: taxasSuspeitas(transacoes),
+      sem_taxa: semTaxaNoArquivo(transacoes),
     };
   }
 

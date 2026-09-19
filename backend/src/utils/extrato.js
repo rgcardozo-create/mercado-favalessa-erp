@@ -54,6 +54,26 @@ function paraValor(valor) {
   return negativo ? -n : n;
 }
 
+// Célula vazia e célula com traço são a mesma coisa: "ainda não tem valor".
+//
+// A Rede escreve "-" em `valor líquido` enquanto não fecha o MDR do dia — o
+// próprio arquivo avisa que "pode sofrer alterações durante o dia". Lendo isso
+// como zero, o líquido virava zero e a taxa virava a venda inteira: 100%. Num
+// extrato do mês, com parte das linhas já liquidada e parte ainda em traço, a
+// média por bandeira dava aqueles 30% e 45% que não existem no mercado.
+//
+// Vale para qualquer coluna: melhor não saber do que saber errado.
+const SEM_VALOR = new Set(['', '-', '--', '---', 'n/a', 'na', 'n/d', 'nd', 'null', 'nulo', '—', '–']);
+
+function temNumero(valor) {
+  if (valor === null || valor === undefined) return false;
+  if (typeof valor === 'number') return Number.isFinite(valor);
+  const texto = String(valor).trim().toLowerCase();
+  if (SEM_VALOR.has(texto)) return false;
+  // Texto que não tem nenhum algarismo não é número nenhum.
+  return /\d/.test(texto);
+}
+
 // Voucher/ticket vai para a tela de Tickets independentemente do arquivo de
 // origem — é assim que o sistema atual separa, e foi confirmado nos dados reais:
 // dentro do extrato da Stone e da Rede, as linhas de voucher aparecem em Tickets.
@@ -108,19 +128,24 @@ function converterLinhas(linhas, mapa, adquirente, nomeArquivo) {
       String(valorDe(linha, mapa, 'bandeira') ?? '').trim() || (forma === 'Pix' ? 'Pix' : null);
     const bruto = paraValor(valorDe(linha, mapa, 'valorBruto'));
     const liquidoLido = valorDe(linha, mapa, 'valorLiquido');
-    const temLiquido = liquidoLido !== '' && liquidoLido !== null && liquidoLido !== undefined;
-    const liquido = temLiquido
-      ? paraValor(liquidoLido)
-      : Number((bruto - Math.abs(paraValor(valorDe(linha, mapa, 'tarifa')))).toFixed(6));
+    const temLiquido = temNumero(liquidoLido);
+    const tarifaLida = valorDe(linha, mapa, 'tarifa');
 
     // A taxa é o que não chegou: bruto menos líquido. Contar a coluna de desconto
     // sozinha erra sempre que o adquirente divide a taxa em várias — a Stone tem
     // "desconto de MDR", "de antecipação" e "unificado", e na maioria das vendas o
     // valor está só no unificado. Só quando não há líquido a coluna de taxa manda,
     // porque aí ela é a única informação existente.
+    //
+    // Sem líquido e sem taxa, a taxa é ZERO e o líquido é o bruto inteiro. Não é
+    // afirmar que não houve taxa: é dizer que o arquivo não disse qual foi. A
+    // tela de Taxas separa essas linhas como "sem taxa no extrato" justamente
+    // para elas não baixarem a média das que têm.
     const tarifa = temLiquido
-      ? Number((bruto - liquido).toFixed(6))
-      : Math.abs(paraValor(valorDe(linha, mapa, 'tarifa')));
+      ? Number((bruto - paraValor(liquidoLido)).toFixed(6))
+      : Math.abs(paraValor(temNumero(tarifaLida) ? tarifaLida : 0));
+
+    const liquido = Number((bruto - tarifa).toFixed(6));
 
     const ticket = ehTicket(forma, bandeira);
 
