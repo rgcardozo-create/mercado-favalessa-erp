@@ -731,3 +731,15 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 @media (max-width: 1000px) {
   .colunas-prazo { grid-template-columns: 1fr; }
 }
+
+/* Legenda das cores do caderno. Sem ela, "azul" e "vermelho" eram adivinhação —
+   e a leitura natural de azul era "pago", que é justamente o contrário. */
+.legenda-prazo { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+.amostra-barra {
+  display: inline-block; width: 22px; height: 9px; border-radius: 3px;
+  background: var(--azul); vertical-align: middle;
+}
+.amostra-barra.barra-atraso { background: var(--vermelho); }
+.filtros-prazo { margin-bottom: 4px; gap: 4px; }
+.filtros-prazo button { padding: 3px 9px; font-size: 11px; }
+.filtros-prazo button[disabled] { opacity: 0.4; cursor: default; }
