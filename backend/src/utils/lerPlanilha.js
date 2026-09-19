@@ -44,27 +44,74 @@ function valorDaCelula(celula) {
   return v;
 }
 
-// Cabeçalho = a primeira linha em que pelo menos dois campos conhecidos aparecem.
+// Quanto um título de coluna combina com um sinônimo. Não basta "combina ou
+// não": era assim que "Valor líquido" caía em valorBruto, porque o sinônimo
+// fraco 'valor' está contido nele e valorBruto é testado primeiro.
+//
+// Com nota, o campo certo ganha: "valor liquido" bate EXATO com um sinônimo de
+// valorLiquido (3) e só por conter com um de valorBruto (1).
+function nota(texto, sinonimos) {
+  let melhor = 0;
+  for (const s of sinonimos) {
+    if (texto === s) return 3;
+    if (texto.startsWith(`${s} `)) melhor = Math.max(melhor, 2);
+    else if (texto.includes(s)) melhor = Math.max(melhor, 1);
+  }
+  return melhor;
+}
+
+// Coluna de parcela não serve para bruto nem para líquido da VENDA.
+//
+// Este foi o defeito que inflou a taxa do Itaú: num extrato de crédito
+// parcelado, "Valor líquido da parcela" era tomado como o líquido da venda, e a
+// taxa virava "venda menos uma parcela" — 67% numa compra em 3x. Percentual de
+// dois dígitos passava por taxa de adquirente sem ninguém desconfiar.
+const PALAVRAS_DE_PARCELA = ['parcela', 'parcelas'];
+
+function ehDeParcela(texto) {
+  return PALAVRAS_DE_PARCELA.some((p) => texto.includes(p));
+}
+
+// Cabeçalho = a linha em que mais campos conhecidos aparecem.
+//
+// A escolha por campo é por NOTA, e não por ordem: cada campo fica com a coluna
+// que melhor o descreve, e uma coluna só serve a um campo. Antes era quem
+// chegasse primeiro, e a ordem dos campos no código decidia o resultado — o que
+// funcionava na Cielo e errava no Itaú por acidente de layout.
 function acharCabecalho(linhas) {
   const limite = Math.min(linhas.length, 30);
   let melhor = { indice: -1, acertos: 0, mapa: {} };
 
   for (let i = 0; i < limite; i += 1) {
-    const mapa = {};
-    let acertos = 0;
+    const candidatos = [];
 
     linhas[i].forEach((celula, coluna) => {
       const texto = normalizar(celula);
       if (!texto) return;
       for (const campo of CAMPOS) {
-        if (mapa[campo] !== undefined) continue;
-        if (SINONIMOS[campo].some((s) => texto === s || texto.startsWith(`${s} `) || texto.includes(s))) {
-          mapa[campo] = coluna;
-          acertos += 1;
-          break;
-        }
+        let n = nota(texto, SINONIMOS[campo]);
+        if (!n) continue;
+        // Rebaixa, não elimina: se o extrato SÓ tiver colunas de parcela, é
+        // melhor ler por elas do que não ler nada — mas nunca na frente da
+        // coluna da venda.
+        if (n && ehDeParcela(texto) && (campo === 'valorBruto' || campo === 'valorLiquido')) n = 0.5;
+        candidatos.push({ campo, coluna, n });
       }
     });
+
+    // Melhor nota primeiro; empate resolve pela coluna mais à esquerda, que é
+    // estável e não depende de como o arquivo foi gerado.
+    candidatos.sort((a, b) => b.n - a.n || a.coluna - b.coluna);
+
+    const mapa = {};
+    const usadas = new Set();
+    let acertos = 0;
+    for (const c of candidatos) {
+      if (mapa[c.campo] !== undefined || usadas.has(c.coluna)) continue;
+      mapa[c.campo] = c.coluna;
+      usadas.add(c.coluna);
+      acertos += 1;
+    }
 
     if (acertos > melhor.acertos) melhor = { indice: i, acertos, mapa };
   }
@@ -164,4 +211,7 @@ async function analisarExtrato(buffer, nomeArquivo) {
   };
 }
 
-module.exports = { lerArquivo, analisarExtrato, normalizar, valorDaCelula, SINONIMOS, CAMPOS };
+module.exports = { lerArquivo, analisarExtrato, normalizar, valorDaCelula, SINONIMOS, CAMPOS,
+  // Exportado para teste: foi ele que inflou a taxa do extrato parcelado.
+  acharCabecalho,
+};

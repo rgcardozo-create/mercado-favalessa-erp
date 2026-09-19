@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.60.0';
+const VERSAO = '1.61.0';
 
 const state = {
   sessao: getSessao(),
@@ -1119,6 +1119,41 @@ function previaExtratoBancoHTML() {
   `;
 }
 
+// Aviso de taxa fora do mundo real, antes de importar.
+//
+// Taxa de adquirente não passa de uns 8%; com antecipação sobe, mas não a 30%.
+// Percentual assim é leitura errada de coluna, não cobrança — e antes desta
+// conferência ele entrava calado, virava despesa no Gerencial e derrubava o
+// resultado do mês sem ninguém saber por quê.
+//
+// O aviso não bloqueia: o arquivo é dele e pode haver caso que eu não conheço.
+// Mas ele vê o número antes de gravar, e não depois de estranhar o lucro.
+function avisoTaxasSuspeitasHTML(s) {
+  if (!s) return '';
+
+  return `
+    <div class="alerta erro">
+      <strong>Confira antes de importar: ${s.quantidade} de ${s.total} transações vêm com taxa acima de
+      ${s.limite}%</strong>, somando ${brl(s.valor)}. A maior é de
+      ${s.maior.toFixed(2).replace('.', ',')}%.
+      <br><br>
+      Taxa de maquininha não passa de uns 8% — com antecipação sobe um pouco, mas não a esse ponto.
+      Percentual assim quase sempre quer dizer que o arquivo tem uma coluna que o sistema leu errado,
+      e não que a adquirente cobrou isso. Importar assim joga esse valor nas despesas do Gerencial.
+      <ul>
+        ${s.exemplos
+          .map(
+            (x) => `<li>${dateBR(x.data)} &middot; ${escapar(x.bandeira || '—')} ${escapar(x.forma || '')} &middot;
+              vendeu ${brl(x.bruto)}, taxa ${brl(x.tarifa)} =
+              <strong>${x.percentual.toFixed(2).replace('.', ',')}%</strong></li>`
+          )
+          .join('')}
+      </ul>
+      Se esses números não fizerem sentido no seu extrato, <strong>não importe</strong> — me mande o
+      arquivo que eu acerto a leitura.
+    </div>`;
+}
+
 function importarExtratoHTML() {
   const e = state.extrato;
   const doSistema = ehImportacaoDoSistema();
@@ -1231,6 +1266,7 @@ function importarExtratoHTML() {
                   .join('')}
               </tbody>
             </table>
+            ${avisoTaxasSuspeitasHTML(e.previa.taxas_suspeitas)}
             <button id="btn-extrato-importar">Importar de verdade</button>`
           : ''
       }

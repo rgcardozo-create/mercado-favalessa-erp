@@ -278,6 +278,44 @@ function arquivoDoCorpo(req) {
   return { buffer: Buffer.from(base64, 'base64'), nome: nome || 'extrato.xlsx' };
 }
 
+// Taxa de adquirente que passa disto não existe no mercado: é leitura errada.
+//
+// A régua real: débito perto de 1,5%, crédito à vista de 3 a 5%, parcelado até
+// uns 6%, voucher até 8%. Com antecipação de recebíveis o efetivo sobe, mas não
+// a este ponto. Vinte por cento é o limiar em que parar de acreditar.
+//
+// Isso não é paranoia: foi exatamente assim que o extrato de crédito parcelado
+// entrou com 30%, 45% e 67% de "taxa" — o leitor tomava o líquido da PARCELA
+// como líquido da venda. O defeito está corrigido, mas a regra que o deixou
+// passar era "importe o que vier". A conferência agora fica no caminho, para a
+// próxima diferença de layout ser vista em vez de virar número.
+const TAXA_IMPLAUSIVEL = 20;
+
+function taxasSuspeitas(transacoes) {
+  const suspeitas = transacoes
+    .filter((t) => t.valorBruto > 0 && t.tarifa > 0 && (t.tarifa / t.valorBruto) * 100 > TAXA_IMPLAUSIVEL)
+    .map((t) => ({
+      data: t.data,
+      bandeira: t.bandeira,
+      forma: t.forma,
+      bruto: t.valorBruto,
+      tarifa: t.tarifa,
+      percentual: Number(((t.tarifa / t.valorBruto) * 100).toFixed(2)),
+    }))
+    .sort((a, b) => b.percentual - a.percentual);
+
+  if (!suspeitas.length) return null;
+
+  return {
+    limite: TAXA_IMPLAUSIVEL,
+    quantidade: suspeitas.length,
+    total: transacoes.length,
+    valor: Number(suspeitas.reduce((a, x) => a + x.tarifa, 0).toFixed(2)),
+    maior: suspeitas[0].percentual,
+    exemplos: suspeitas.slice(0, 5),
+  };
+}
+
 async function analisarExtratoEnviado(req, res) {
   const arquivo = arquivoDoCorpo(req);
   if (!arquivo) {
@@ -329,6 +367,8 @@ async function analisarExtratoEnviado(req, res) {
             ate: transacoes.reduce((a, t) => (t.data > a ? t.data : a), transacoes[0].data) }
         : null,
       primeiras: transacoes.slice(0, 8),
+      // null quando está tudo dentro do esperado; a tela só avisa se houver.
+      taxas_suspeitas: taxasSuspeitas(transacoes),
     };
   }
 
