@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.64.0';
+const VERSAO = '1.65.0';
 
 const state = {
   sessao: getSessao(),
@@ -126,6 +126,8 @@ const state = {
   // Sub-aba da Folha: 'folha' (lançamentos) ou 'calculos'.
   folhaAba: 'folha',
   pessoaisPendencias: null,
+  prazoAlertas: null,
+  verTodosBloqueios: false,
   // Análise das taxas das adquirentes. Nasce no mês passado fechado.
   conciliacaoAba: 'conferencia',
   taxas: null,
@@ -152,6 +154,8 @@ const state = {
   // Recorte do resumo do caderno: 0 = todos, 30/60/90/120 = faixa de atraso.
   faixaPrazo: 0,
   verTodosPrazo: false,
+  // Meses fechados que o dono abriu para ver compra por compra.
+  mesesAbertos: new Set(),
   // Contas pessoais do dono. Abre no que está vencido: a tela existe para ele
   // não esquecer de pagar, não para consultar histórico.
   pessoais: null,
@@ -302,6 +306,9 @@ async function carregarDados() {
       // nem o valor. O painel fica aberto no balcão, e o que o dono deve na vida
       // dele não é assunto de quem está do outro lado do balcão.
       state.pessoaisPendencias = ehMaster() ? await apiFetch('/pessoais/pendencias') : null;
+      // Quem passou de 30 dias no caderno. Só para quem enxerga venda a prazo —
+      // sem a tela, o aviso levaria a um lugar onde a pessoa não pode entrar.
+      state.prazoAlertas = podeVerTela('venda-prazo') ? await apiFetch('/venda-prazo/alertas') : null;
       state.formasPagamento = formasPainel;
       state.bancos = bancosPainel;
     } else if (state.tab === 'conciliacao') {
@@ -870,6 +877,7 @@ function painelHTML() {
 
     ${faixaVendasHTML()}
     ${avisoFolhaHTML()}
+    ${avisoBloqueioHTML()}
     ${avisoPessoaisHTML()}
 
     <div class="colunas-painel">
@@ -1669,6 +1677,48 @@ function avisoFolhaHTML() {
 // descrição, sem valor. O painel é a tela que fica aberta no balcão, e o que o
 // dono deve na vida particular dele não é assunto de quem passa por ali. O
 // lembrete que ele pediu cabe inteiro num número.
+// Aviso de cliente para bloquear.
+//
+// Trinta dias vencidos é a hora de travar o fiado na balança, e essa decisão não
+// pode depender de o dono lembrar de abrir a tela de venda a prazo. Vem com
+// nome, quanto e há quantos dias — sem o nome, "alguém está atrasado" não
+// bloqueia ninguém.
+function avisoBloqueioHTML() {
+  const a = state.prazoAlertas;
+  if (!a || !a.quantidade) return '';
+
+  const LIMITE = 5;
+  const mostrar = state.verTodosBloqueios ? a.clientes : a.clientes.slice(0, LIMITE);
+  const um = a.quantidade === 1;
+
+  return `
+    <section class="faixa-vendas pendente">
+      <div>
+        <strong>${a.quantidade} ${um ? 'cliente passou' : 'clientes passaram'} de 30 dias sem pagar</strong>
+        <small>${brl(a.total)} vencido. ${um ? 'É hora de bloquear o fiado dele' : 'É hora de bloquear o fiado deles'}.</small>
+        <ul class="lista-bloqueio">
+          ${mostrar
+            .map(
+              (c) => `<li>
+                ${c.codigo ? `<strong>${escapar(c.codigo)}</strong> ` : ''}${escapar(c.nome)} &middot;
+                ${brl(c.valor)} &middot; ${c.dias} dia(s)
+              </li>`
+            )
+            .join('')}
+          ${
+            !state.verTodosBloqueios && a.clientes.length > LIMITE
+              ? `<li><button type="button" id="btn-ver-bloqueios" class="secundario">Ver os outros ${
+                  a.clientes.length - LIMITE
+                }</button></li>`
+              : ''
+          }
+        </ul>
+      </div>
+      <button data-tab="venda-prazo">Abrir caderno</button>
+    </section>
+  `;
+}
+
 function avisoPessoaisHTML() {
   const p = state.pessoaisPendencias;
   if (!p || !p.quantidade) return '';
@@ -2611,6 +2661,93 @@ function resumoPrazoHTML(clientes) {
     }`;
 }
 
+// A competência de um movimento: o mês em que ele cai, pelo dia de corte.
+// Antes do corte, a compra ainda pertence à conta do mês anterior.
+function competenciaDoMovimento(data) {
+  const corte = (state.vendaPrazo && state.vendaPrazo.config && state.vendaPrazo.config.dia_corte) || 1;
+  const [ano, mes, dia] = data.split('-').map(Number);
+  let a = ano;
+  let m = mes;
+  if (dia < corte) {
+    m -= 1;
+    if (m < 1) { m = 12; a -= 1; }
+  }
+  return `${a}-${String(m).padStart(2, '0')}`;
+}
+
+function linhaMovimentoHTML(m) {
+  const compra = m.tipo === 'compra';
+  return `
+    <div class="cartao-cliente-linha">
+      <span class="mini">${dateBR(m.data)} &middot; ${compra ? 'Compra' : 'Pagamento'}${
+        m.forma_pagamento ? ` &middot; ${escapar(m.forma_pagamento)}` : ''
+      }${m.observacoes ? ` &middot; ${escapar(m.observacoes)}` : ''}</span>
+      <span class="cartao-cliente-acoes">
+        <b class="${compra ? 'texto-vermelho' : 'texto-verde'}">${compra ? '+' : '−'} ${brl(m.valor)}</b>
+        ${podeGerenciar() ? `<button data-excluir-mov="${m.id}" class="perigo">×</button>` : ''}
+      </span>
+    </div>`;
+}
+
+// Mês fechado vira uma linha só; o mês corrente continua compra por compra.
+//
+// É como o dono trabalha: fechou o mês, aquilo virou uma conta, e o que ele
+// precisa ver é o total. As compras de agosto, uma a uma, só interessam quando
+// o cliente contesta — e aí ele clica e abre. Sem isso, um cliente de meses de
+// caderno abria uma lista de cem linhas onde as três de hoje se perdiam.
+function movimentosDoCadernoHTML(movimentos) {
+  if (!movimentos.length) return '';
+
+  const atual = competenciaDoMovimento(todayISO());
+  const grupos = new Map();
+  for (const m of movimentos) {
+    const chave = competenciaDoMovimento(m.data);
+    if (!grupos.has(chave)) grupos.set(chave, []);
+    grupos.get(chave).push(m);
+  }
+
+  // Do mês mais recente para o mais antigo.
+  const chaves = [...grupos.keys()].sort().reverse();
+
+  return chaves
+    .map((chave) => {
+      const itens = grupos.get(chave);
+      if (chave === atual || state.mesesAbertos.has(chave)) {
+        const fechavel = chave !== atual;
+        return `
+          ${
+            fechavel
+              ? `<div class="cartao-cliente-linha linha-mes" data-mes-caderno="${chave}">
+                  <span class="mini"><strong>${mesExtenso(chave)}</strong> &middot; clique para agrupar</span>
+                  <span class="mini">▲</span>
+                </div>`
+              : `<div class="cartao-cliente-linha linha-mes">
+                  <span class="mini"><strong>${mesExtenso(chave)}</strong> &middot; mês aberto</span>
+                  <span class="mini">${itens.length} lançamento(s)</span>
+                </div>`
+          }
+          ${itens.map(linhaMovimentoHTML).join('')}`;
+      }
+
+      const compras = itens.filter((m) => m.tipo === 'compra').reduce((a, m) => a + Number(m.valor), 0);
+      const pagos = itens.filter((m) => m.tipo !== 'compra').reduce((a, m) => a + Number(m.valor), 0);
+
+      return `
+        <div class="cartao-cliente-linha linha-mes" data-mes-caderno="${chave}">
+          <span class="mini">
+            <strong>${mesExtenso(chave)}</strong> &middot; ${itens.length} lançamento(s) &middot;
+            clique para ver uma a uma
+          </span>
+          <span class="cartao-cliente-acoes">
+            ${compras ? `<b class="texto-vermelho">+ ${brl(compras)}</b>` : ''}
+            ${pagos ? `<b class="texto-verde">− ${brl(pagos)}</b>` : ''}
+            <span class="mini">▼</span>
+          </span>
+        </div>`;
+    })
+    .join('');
+}
+
 function cartaoClientePrazo(c) {
   const situacao = SITUACOES_PRAZO[c.situacao] || SITUACOES_PRAZO.em_dia;
   const aberto = state.extratoPrazo && state.extratoPrazo.id === c.id;
@@ -2646,25 +2783,7 @@ function cartaoClientePrazo(c) {
         <span class="mini">${aberto ? '▲' : '▼'}</span>
       </div>
 
-      ${
-        aberto
-          ? emOrdem
-              .map(
-                (m) => `<div class="cartao-cliente-linha">
-                  <span class="mini">${dateBR(m.data)} &middot; ${m.tipo === 'compra' ? 'Compra' : 'Pagamento'}${
-                    m.forma_pagamento ? ` &middot; ${escapar(m.forma_pagamento)}` : ''
-                  }${m.observacoes ? ` &middot; ${escapar(m.observacoes)}` : ''}</span>
-                  <span class="cartao-cliente-acoes">
-                    <b class="${m.tipo === 'compra' ? 'texto-vermelho' : 'texto-verde'}">${
-                      m.tipo === 'compra' ? '+' : '−'
-                    } ${brl(m.valor)}</b>
-                    ${podeGerenciar() ? `<button data-excluir-mov="${m.id}" class="perigo">×</button>` : ''}
-                  </span>
-                </div>`
-              )
-              .join('')
-          : ''
-      }
+      ${aberto ? movimentosDoCadernoHTML(emOrdem) : ''}
 
       ${
         aberto && c.faturas && c.faturas.length
@@ -5847,6 +5966,23 @@ function bind() {
 
   const btnImportarPrazo = root.querySelector('#btn-importar-prazo');
   if (btnImportarPrazo) btnImportarPrazo.addEventListener('click', onImportarPrazo);
+
+  root.querySelectorAll('[data-mes-caderno]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const mes = el.dataset.mesCaderno;
+      if (state.mesesAbertos.has(mes)) state.mesesAbertos.delete(mes);
+      else state.mesesAbertos.add(mes);
+      render();
+    })
+  );
+
+  const btnVerBloqueios = root.querySelector('#btn-ver-bloqueios');
+  if (btnVerBloqueios) {
+    btnVerBloqueios.addEventListener('click', () => {
+      state.verTodosBloqueios = true;
+      render();
+    });
+  }
 
   root.querySelectorAll('[data-faixa-prazo]').forEach((b) =>
     b.addEventListener('click', () => {

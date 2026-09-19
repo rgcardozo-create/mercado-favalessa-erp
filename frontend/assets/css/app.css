@@ -743,3 +743,13 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 .filtros-prazo { margin-bottom: 4px; gap: 4px; }
 .filtros-prazo button { padding: 3px 9px; font-size: 11px; }
 .filtros-prazo button[disabled] { opacity: 0.4; cursor: default; }
+
+/* Lista de quem bloquear, dentro do aviso do painel. */
+.lista-bloqueio { margin: 6px 0 0; padding-left: 16px; font-size: 12px; }
+.lista-bloqueio li { margin-bottom: 2px; }
+.lista-bloqueio button { padding: 2px 8px; font-size: 11px; }
+
+/* Cabeçalho de mês dentro do caderno do cliente. */
+.linha-mes { background: #F6F9FE; cursor: pointer; }
+.linha-mes:hover { background: #EEF4FD; }
+.cartao-cliente-linha.linha-mes:first-child { border-top: none; }
