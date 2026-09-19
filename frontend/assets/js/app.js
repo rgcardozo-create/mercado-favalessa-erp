@@ -1128,6 +1128,34 @@ function previaExtratoBancoHTML() {
 //
 // O aviso não bloqueia: o arquivo é dele e pode haver caso que eu não conheço.
 // Mas ele vê o número antes de gravar, e não depois de estranhar o lucro.
+// Aviso de arquivo que veio sem a taxa.
+//
+// Não é erro: a Rede escreve traço em `valor líquido` enquanto o MDR do dia não
+// fecha, e o arquivo do próprio dia sempre chega assim. As vendas são reais e
+// entram certas. Só a taxa não existe ainda — e se foi taxa que ele veio
+// conferir, esse arquivo não responde.
+function avisoSemTaxaHTML(s) {
+  if (!s) return '';
+
+  return `
+    <div class="alerta aviso">
+      <strong>${s.tudo ? 'Nenhuma' : `${s.quantidade} de ${s.total}`} transação(ões) ${
+        s.tudo ? 'traz' : 'trazem'
+      } a taxa</strong> neste arquivo — ${brl(s.bruto_sem_taxa)}${
+        s.percentual_do_volume !== null && !s.tudo ? `, ${String(s.percentual_do_volume).replace('.', ',')}% do volume` : ''
+      }.
+      ${
+        s.tudo
+          ? `Isso é normal no relatório do <strong>próprio dia</strong>: a adquirente só fecha a taxa depois.
+             As vendas entram certas e contam no faturamento; a taxa fica como <strong>“sem taxa no
+             extrato”</strong> e não atrapalha as médias. <strong>Mas para conferir taxa, puxe um período já
+             fechado</strong> — este arquivo não responde essa pergunta.`
+          : `Essas linhas entram no volume e ficam de fora das porcentagens. Voucher às vezes não traz taxa
+             mesmo; se for venda de cartão, pode ser período ainda não fechado pela adquirente.`
+      }
+    </div>`;
+}
+
 function avisoTaxasSuspeitasHTML(s) {
   if (!s) return '';
 
@@ -1267,6 +1295,7 @@ function importarExtratoHTML() {
               </tbody>
             </table>
             ${avisoTaxasSuspeitasHTML(e.previa.taxas_suspeitas)}
+            ${avisoSemTaxaHTML(e.previa.sem_taxa)}
             <button id="btn-extrato-importar">Importar de verdade</button>`
           : ''
       }
