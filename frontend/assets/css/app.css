@@ -755,5 +755,3 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 .cartao-cliente-linha.linha-mes:first-child { border-top: none; }
 
 /* Painel de ação sem volta: a cor avisa antes de o texto ser lido. */
-.painel-perigo { border-color: var(--vermelho); border-top: 3px solid var(--vermelho); }
-.painel-perigo > h2 { color: var(--vermelho); }
