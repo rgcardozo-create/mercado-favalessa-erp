@@ -141,6 +141,55 @@ async function alertas(req, res) {
   });
 }
 
+// Apagar o caderno inteiro e recomeçar do zero.
+//
+// O dono pediu porque o histórico veio do PDV e ele não consegue trabalhar
+// assim. É decisão dele e é legítima — mas é sem volta, então a função foi
+// escrita para ser difícil de disparar por engano:
+//
+//  - Só o Master alcança a rota.
+//  - Exige a palavra LIMPAR no corpo. Botão errado não apaga nada; só apaga
+//    quem digitou de propósito.
+//  - Apaga os LANÇAMENTOS e não os clientes: o cadastro custou a existir, e
+//    recriá-lo à mão seria trabalho sem motivo.
+//  - Devolve quanto apagou e deixa registro na auditoria, com o total que havia.
+//
+// O que ela não faz é backup. Isso fica dito na tela, em vermelho, porque é a
+// única rede que existe depois daqui.
+async function limparCaderno(req, res) {
+  if (String(req.body.confirmacao || '').trim().toUpperCase() !== 'LIMPAR') {
+    return res.status(400).json({
+      error: 'Para apagar o caderno, escreva LIMPAR no campo de confirmação.',
+    });
+  }
+
+  const { rows: antes } = await pool.query(
+    `SELECT count(*)::int AS movimentos,
+            COALESCE(sum(valor) FILTER (WHERE tipo = 'compra'), 0) AS compras,
+            COALESCE(sum(valor) FILTER (WHERE tipo = 'pagamento'), 0) AS pagamentos
+       FROM mov_prazo`
+  );
+
+  const { rowCount } = await pool.query('DELETE FROM mov_prazo');
+
+  await registrarAuditoria({
+    usuarioId: req.user.id,
+    acao: 'limpar-caderno',
+    entidade: 'mov_prazo',
+    dados: {
+      movimentos_apagados: rowCount,
+      compras: Number(antes[0].compras),
+      pagamentos: Number(antes[0].pagamentos),
+    },
+  });
+
+  return res.json({
+    apagados: rowCount,
+    compras: Number(antes[0].compras),
+    pagamentos: Number(antes[0].pagamentos),
+  });
+}
+
 async function salvarConfigPrazo(req, res) {
   const limpo = (v) => {
     const n = Number(v);
@@ -252,4 +301,5 @@ async function deletarMovimento(req, res) {
 
 module.exports = {
   salvarConfigPrazo,
+  limparCaderno,
   alertas, resumo, extratoCliente, criarMovimento, deletarMovimento };
