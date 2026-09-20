@@ -353,6 +353,11 @@ label.escondido { display: none; }
 .rolagem-grafico { overflow-x: auto; }
 .rolagem-grafico .grafico-svg { min-width: 700px; }
 
+/* O gráfico de linha foi desenhado para meia largura: solto numa seção inteira
+   ele estica na proporção do viewBox e vira um paredão de dois palmos de altura.
+   Limitar a caixa é o bastante — o SVG se encaixa sozinho. */
+.grafico-estreito { max-width: 620px; }
+
 /* Venda dia a dia: o mês escolhido em azul, o mês comparado em amarelo ao lado.
    Amarelo e azul são as cores da marca e se distinguem bem impressos em cinza. */
 .grafico-dias .col.comparada rect { fill: var(--amarelo-escuro); }

@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.67.0';
+const VERSAO = '1.68.0';
 
 const state = {
   sessao: getSessao(),
@@ -74,6 +74,10 @@ const state = {
   relatorio: null,
   gerencial: null,
   anoGerencial: null,
+  // Recorte da composição das despesas no gerencial: 'ano', 'mes' ou 'dia'.
+  // Abre no mês porque a pergunta de quem abre a tela é "quanto gastei ESTE
+  // mês, e com o quê" — o ano inteiro numa rosca só não responde isso.
+  gerencialRecorte: { modo: 'mes', mes: '', dia: '' },
   auditoria: null,
   importacao: null,
   importando: false,
@@ -137,6 +141,11 @@ const state = {
   recebimentos: null,
   recebimentosPeriodo: mesPassado(),
   recebimentosDia: null,
+  // Filtro das listas de recebimento, por adquirente e por bandeira/empresa.
+  recebFiltro: { cartoes: { adquirente: '', bandeira: '' }, tickets: { bandeira: '' } },
+  // A lista de taxas combinadas fica fechada: depois de cadastrada, ela só é
+  // consultada quando há divergência — e a taxa já aparece na tabela de cima.
+  taxasAbertas: false,
   // Caderno aberto de um cliente da venda a prazo.
   extratoPrazo: null,
   // Lançamentos de dinheiro do PDV, para poder corrigir e excluir.
@@ -1435,7 +1444,7 @@ function taxasHTML() {
             ? linhas
                 .map(
                   (l) => `<tr class="${l.percentual === null ? 'com-atencao' : ''}">
-                    ${comAdquirente ? `<td>${escapar(l.adquirente)}</td>` : ''}
+                    ${comAdquirente ? `<td>${escapar(rotuloAdquirente(l.adquirente))}</td>` : ''}
                     <td>${escapar(l.bandeira || '—')}</td>
                     <td>${escapar(l.forma || '—')}</td>
                     <td>${l.transacoes}</td>
@@ -4065,6 +4074,170 @@ function graficoRoscaSVG(itens, centroRotulo, centroValor) {
   `;
 }
 
+const centavosJS = (v) => Number(v.toFixed(2));
+
+const ROTULO_DESPESA = {
+  fornecedor: 'Fornecedores',
+  ceasa: 'Ceasa',
+  fixa: 'Despesas fixas',
+  imposto: 'Impostos',
+  operacional: 'Custos operacionais',
+  despesa: 'Outras despesas',
+  folha: 'Folha de pagamento',
+  servico_extra: 'Serviços extras',
+  taxa_cartao: 'Taxa das maquininhas',
+};
+
+// O recorte da composição: ano inteiro, um mês ou um dia.
+//
+// A tela mostrava só o ano, e o ano responde "como o negócio está indo" — não
+// responde "quanto eu gastei este mês e com o quê", que é a pergunta de quem
+// abre a tela no meio do mês. O recorte não muda número nenhum: ele escolhe
+// quais dias entram na soma, e todos saem da mesma lista de lançamentos.
+function recorteGerencial() {
+  const g = state.gerencial;
+  const r = state.gerencialRecorte;
+
+  const mesesComDado = [
+    ...new Set([...g.lancamentos.map((l) => l.data), ...g.vendas_por_dia.map((v) => v.data)].map((d) => d.slice(0, 7))),
+  ].sort();
+
+  // Sem escolha feita, abre no mês mais recente que tem movimento. Mês vazio
+  // como padrão daria uma tela em branco e a impressão de defeito.
+  const mes = mesesComDado.includes(r.mes) ? r.mes : mesesComDado[mesesComDado.length - 1] || `${g.ano}-01`;
+
+  const dias = [...new Set(g.lancamentos.map((l) => l.data))].sort();
+  const dia = dias.includes(r.dia) ? r.dia : dias[dias.length - 1] || '';
+
+  const modo = r.modo === 'dia' && !dia ? 'mes' : r.modo;
+  const prefixo = modo === 'ano' ? String(g.ano) : modo === 'mes' ? mes : dia;
+
+  const lancamentos = g.lancamentos.filter((l) => l.data.startsWith(prefixo));
+  const vendas = g.vendas_por_dia.filter((v) => v.data.startsWith(prefixo));
+
+  const nome =
+    modo === 'ano'
+      ? `ano de ${g.ano}`
+      : modo === 'mes'
+        ? `${MESES[Number(mes.slice(5)) - 1]} de ${mes.slice(0, 4)}`
+        : dateBR(dia);
+
+  return { modo, mes, dia, mesesComDado, dias, lancamentos, vendas, nome };
+}
+
+// Soma uma lista de lançamentos por uma chave, já com rótulo e ordenada do
+// maior para o menor — que é a ordem em que a pergunta é feita ("com o que eu
+// mais gastei?").
+function somarPor(lancamentos, chave, rotular) {
+  const mapa = new Map();
+  for (const l of lancamentos) mapa.set(l[chave], centavosJS((mapa.get(l[chave]) || 0) + l.total));
+  return [...mapa.entries()]
+    .filter(([, v]) => v > 0)
+    .map(([k, valor]) => ({ rotulo: rotular(k), valor }))
+    .sort((a, b) => b.valor - a.valor);
+}
+
+function composicaoGerencialHTML() {
+  const g = state.gerencial;
+  const rec = recorteGerencial();
+
+  const porTipo = somarPor(rec.lancamentos, 'tipo', (t) => ROTULO_DESPESA[t] || t);
+  const porForma = somarPor(rec.lancamentos, 'forma', (f) => f || 'Sem forma registrada');
+
+  const despesas = centavosJS(rec.lancamentos.reduce((a, l) => a + l.total, 0));
+  const vendas = centavosJS(rec.vendas.reduce((a, v) => a + v.total, 0));
+  const resultado = centavosJS(vendas - despesas);
+  const semForma = centavosJS(rec.lancamentos.filter((l) => !l.forma).reduce((a, l) => a + l.total, 0));
+
+  // Recorte sem nenhum fechamento lançado não tem resultado: mostrar "pagou
+  // menos vendeu" ali seria dizer que o dia deu prejuízo, quando o que houve foi
+  // que ninguém lançou a venda ainda. É a mesma regra da margem "—" da tabela.
+  const semFechamento = rec.vendas.length === 0;
+
+  const opcao = (v, r, atual) => `<option value="${v}" ${v === atual ? 'selected' : ''}>${r}</option>`;
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Para onde foi o dinheiro</h2>
+
+        <select id="modo-recorte" class="sem-impressao">
+          ${opcao('ano', 'Ano inteiro', rec.modo)}
+          ${opcao('mes', 'Por mês', rec.modo)}
+          ${opcao('dia', 'Por dia', rec.modo)}
+        </select>
+
+        ${
+          rec.modo === 'mes'
+            ? `<select id="mes-recorte" class="sem-impressao">
+                ${rec.mesesComDado
+                  .map((m) => opcao(m, `${MESES[Number(m.slice(5)) - 1]}/${m.slice(2, 4)}`, rec.mes))
+                  .join('')}
+              </select>`
+            : ''
+        }
+        ${
+          rec.modo === 'dia'
+            ? `<select id="dia-recorte" class="sem-impressao">
+                ${[...rec.dias].reverse().map((d) => opcao(d, dateBR(d), rec.dia)).join('')}
+              </select>`
+            : ''
+        }
+
+        <span class="grupo-total">${brl(despesas)} <small>de despesa</small></span>
+      </div>
+
+      <p class="periodo-impresso">Recorte: ${rec.nome}</p>
+
+      <div class="kpis">
+        <div class="kpi azul">
+          <span class="rotulo">Vendeu</span><strong>${brl(vendas)}</strong>
+          <span class="nota">${rec.vendas.length} dia(s) de fechamento lançados</span>
+        </div>
+        <div class="kpi vermelho">
+          <span class="rotulo">Pagou</span><strong>${brl(despesas)}</strong>
+          <span class="nota">saídas de caixa no recorte</span>
+        </div>
+        <div class="kpi ${semFechamento ? 'amarelo' : resultado >= 0 ? 'verde' : 'vermelho'}">
+          <span class="rotulo">Sobrou</span>
+          <strong>${semFechamento ? '—' : brl(resultado)}</strong>
+          <span class="nota">${
+            semFechamento
+              ? 'falta o fechamento deste recorte — não é venda zero'
+              : `margem de ${((resultado / vendas) * 100).toFixed(1).replace('.', ',')}%`
+          }</span>
+        </div>
+      </div>
+
+      <div class="colunas-painel">
+        <div>
+          <h3>Com o quê — por categoria</h3>
+          ${graficoRoscaSVG(porTipo, 'Despesas por categoria', rec.nome)}
+        </div>
+        <div>
+          <h3>Como você pagou — por forma</h3>
+          ${graficoRoscaSVG(porForma, 'Despesas por forma', rec.nome)}
+          ${
+            semForma > 0
+              ? `<p class="vazio">
+                  <strong>${brl(semForma)}</strong> aparece como <strong>sem forma registrada</strong>.
+                  São folha, serviço extra e taxa de maquininha — que saem de outras telas, onde não se
+                  escolhe forma de pagamento — mais as baixas antigas, importadas do sistema velho, que não
+                  trouxeram essa informação. Fica na conta para o total por forma bater com o total pago.
+                </p>`
+              : ''
+          }
+        </div>
+      </div>
+
+      <p class="vazio">
+        As duas roscas somam o <strong>mesmo dinheiro</strong>, repartido de dois jeitos: uma diz
+        <strong>com o quê</strong> você gastou, a outra <strong>por onde</strong> o dinheiro saiu. Trocar o
+        recorte não recalcula nada no servidor — só muda quais dias entram na soma.
+      </p>
+    </section>`;
+}
+
 function gerencialHTML() {
   const cabecalho = cabecalhoHTML('Painel gerencial');
 
@@ -4076,22 +4249,6 @@ function gerencialHTML() {
   const t = g.totais;
   const positivo = t.resultado >= 0;
   const anos = g.anos_disponiveis.length ? g.anos_disponiveis : [g.ano];
-
-  const ROTULO_DESPESA = {
-    fornecedor: 'Fornecedores',
-    ceasa: 'Ceasa',
-    fixa: 'Despesas fixas',
-    imposto: 'Impostos',
-    operacional: 'Custos operacionais',
-    despesa: 'Outras despesas',
-    folha: 'Folha de pagamento',
-    servico_extra: 'Serviços extras',
-    taxa_cartao: 'Taxa das maquininhas',
-  };
-  const composicao = Object.entries(t.despesas_por_tipo)
-    .filter(([, v]) => v > 0)
-    .map(([tipo, valor]) => ({ rotulo: ROTULO_DESPESA[tipo] || tipo, valor }))
-    .sort((a, b) => b.valor - a.valor);
 
   const mesesComDado = g.meses.filter((m) => m.vendas || m.despesas);
   // Mês com despesa e sem fechamento lançado puxa o resultado do ano para baixo
@@ -4164,17 +4321,12 @@ function gerencialHTML() {
       ${graficoReceitaDespesaSVG(g.meses)}
     </section>
 
-    <div class="colunas-painel">
-      <section class="grupo-painel">
-        <div class="grupo-cabecalho"><h2>Resultado mês a mês</h2></div>
-        ${graficoResultadoSVG(g.meses)}
-      </section>
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho"><h2>Resultado mês a mês</h2></div>
+      <div class="grafico-estreito">${graficoResultadoSVG(g.meses)}</div>
+    </section>
 
-      <section class="grupo-painel">
-        <div class="grupo-cabecalho"><h2>Composição das despesas</h2></div>
-        ${graficoRoscaSVG(composicao, 'Composição das despesas', 'no ano')}
-      </section>
-    </div>
+    ${composicaoGerencialHTML()}
 
     <section class="grupo-painel">
       <div class="grupo-cabecalho">
@@ -5145,6 +5297,7 @@ const ADQUIRENTES_RECEB = [
 
 const pctTexto = (v) => (v === null || v === undefined ? null : `${v.toFixed(2).replace('.', ',')}%`);
 
+
 // A diferença entre a taxa combinada e a cobrada. Verde quando cobraram menos,
 // vermelho quando cobraram mais — e traço quando não dá para saber, que é o
 // caso de não haver taxa no extrato ou não haver combinado cadastrado.
@@ -5180,7 +5333,7 @@ function tabelaRecebimentos(linhas, rotuloPrimeira, comAdquirente) {
             ? linhas
                 .map(
                   (l) => `<tr class="${l.combinado !== null && l.diferenca_valor > 0.01 ? 'com-atencao' : ''}">
-                    ${comAdquirente ? `<td>${escapar(l.adquirente)}</td>` : ''}
+                    ${comAdquirente ? `<td>${escapar(rotuloAdquirente(l.adquirente))}</td>` : ''}
                     <td>${escapar(l.bandeira)}</td>
                     <td>${escapar(l.forma)}</td>
                     <td>${l.transacoes}</td>
@@ -5199,7 +5352,43 @@ function tabelaRecebimentos(linhas, rotuloPrimeira, comAdquirente) {
     </table>`;
 }
 
-function blocoRecebimentos(titulo, bloco, explicacao) {
+// Filtro das listas de recebimento.
+//
+// A dos cartões é adquirente × bandeira × forma e passa fácil de trinta linhas;
+// procurar o Elo no meio disso de olho é trabalho que a tela deveria poupar. A
+// dos tickets é curta hoje, então o filtro só aparece quando a lista cresce a
+// ponto de atrapalhar — botão de filtro em lista de cinco linhas é só mais um
+// botão.
+//
+// O filtro não esconde dinheiro: os quatro cartões de total continuam sendo os
+// do período inteiro, e a linha acima da tabela diz, em separado, quanto é a
+// parte que ficou à vista. Fosse o contrário, bastaria esquecer um filtro
+// ligado para ler um total pela metade achando que era o todo.
+const LINHAS_ATE_FILTRAR = 6;
+
+function aplicarFiltroReceb(linhas, filtro) {
+  return linhas.filter(
+    (l) =>
+      (!filtro.adquirente || l.adquirente === filtro.adquirente) &&
+      (!filtro.bandeira || l.bandeira === filtro.bandeira)
+  );
+}
+
+function botoesFiltroReceb(chave, campo, valores, atual, rotuloTudo) {
+  if (valores.length < 2) return '';
+  return `<div class="filtros filtros-prazo">
+    <button data-receb-filtro="${chave}" data-campo="${campo}" data-valor=""
+      class="${atual ? '' : 'ativo'}">${rotuloTudo}</button>
+    ${valores
+      .map(
+        (v) => `<button data-receb-filtro="${chave}" data-campo="${campo}" data-valor="${escapar(v)}"
+          class="${v === atual ? 'ativo' : ''}">${escapar(campo === 'adquirente' ? rotuloAdquirente(v) : v)}</button>`
+      )
+      .join('')}
+  </div>`;
+}
+
+function blocoRecebimentos(titulo, bloco, explicacao, chave) {
   const t = bloco.totais;
   if (!bloco.linhas.length) {
     return `<section class="grupo-painel">
@@ -5207,6 +5396,35 @@ function blocoRecebimentos(titulo, bloco, explicacao) {
       <p class="vazio">Nada neste período.</p>
     </section>`;
   }
+
+  const comAdquirente = titulo !== 'Tickets';
+  const filtro = state.recebFiltro[chave] || {};
+  const visiveis = aplicarFiltroReceb(bloco.linhas, filtro);
+  const vale = bloco.linhas.length > LINHAS_ATE_FILTRAR;
+
+  const distintos = (campo) =>
+    [...new Set(bloco.linhas.map((l) => l[campo]).filter(Boolean))].sort((a, b) =>
+      (campo === 'adquirente' ? rotuloAdquirente(a) : a).localeCompare(campo === 'adquirente' ? rotuloAdquirente(b) : b, 'pt-BR')
+    );
+
+  const filtros = vale
+    ? `${comAdquirente ? botoesFiltroReceb(chave, 'adquirente', distintos('adquirente'), filtro.adquirente, 'Todas as maquininhas') : ''}
+       ${botoesFiltroReceb(chave, 'bandeira', distintos('bandeira'), filtro.bandeira, comAdquirente ? 'Todas as bandeiras' : 'Todas as empresas')}`
+    : '';
+
+  const filtrando = filtro.adquirente || filtro.bandeira;
+  const soma = (campo) => visiveis.reduce((a, l) => a + l[campo], 0);
+
+  const resumoFiltro = filtrando
+    ? `<p class="vazio">
+        Mostrando <strong>${visiveis.length}</strong> de ${bloco.linhas.length} linha(s)
+        ${filtro.adquirente ? ` &middot; ${escapar(rotuloAdquirente(filtro.adquirente))}` : ''}
+        ${filtro.bandeira ? ` &middot; ${escapar(filtro.bandeira)}` : ''}:
+        vendeu <strong>${brl(soma('bruto'))}</strong>, taxa de <strong>${brl(soma('tarifa'))}</strong>,
+        vai receber <strong>${brl(soma('liquido'))}</strong>.
+        <em>Os cartões acima continuam somando o período inteiro.</em>
+      </p>`
+    : '';
 
   return `
     <section class="grupo-painel">
@@ -5237,7 +5455,14 @@ function blocoRecebimentos(titulo, bloco, explicacao) {
       </div>
 
       <p class="vazio">${explicacao}</p>
-      ${tabelaRecebimentos(bloco.linhas, titulo === 'Tickets' ? 'Empresa' : 'Bandeira', titulo !== 'Tickets')}
+      ${filtros}
+      ${resumoFiltro}
+      ${
+        visiveis.length
+          ? tabelaRecebimentos(visiveis, comAdquirente ? 'Bandeira' : 'Empresa', comAdquirente)
+          : `<p class="vazio">Nenhuma linha com esse filtro. Houve movimento no período —
+              ${bloco.linhas.length} linha(s) —, só não nessa combinação.</p>`
+      }
     </section>`;
 }
 
@@ -5275,7 +5500,7 @@ function diaADiaRecebimentosHTML(r) {
           ${doDia
             .map(
               (l) => `<tr>
-                <td>${escapar(l.adquirente)}</td>
+                <td>${escapar(rotuloAdquirente(l.adquirente))}</td>
                 <td>${escapar(l.bandeira)}</td>
                 <td>${escapar(l.forma)}</td>
                 <td>${l.transacoes}</td>
@@ -5501,20 +5726,37 @@ function recebimentosHTML() {
     ${blocoRecebimentos(
       'Cartões',
       r.cartoes,
-      'Cada linha é uma bandeira numa forma de pagamento. <strong>Cobrado</strong> é o que o extrato mostra; <strong>combinado</strong> é o que você cadastrou embaixo. A diferença em reais é o que você leva para a conversa com a adquirente.'
+      'Cada linha é uma bandeira numa forma de pagamento. <strong>Cobrado</strong> é o que o extrato mostra; <strong>combinado</strong> é o que você cadastrou embaixo. A diferença em reais é o que você leva para a conversa com a adquirente.',
+      'cartoes'
     )}
 
     ${blocoRecebimentos(
       'Tickets',
       r.tickets,
-      'Cada linha aqui é <strong>uma empresa diferente</strong> — VR, Alelo, Comprocard, cada uma com contrato e depósito próprios. Somá-las esconderia justamente a conta que você precisa fazer com cada uma.'
+      'Cada linha aqui é <strong>uma empresa diferente</strong> — VR, Alelo, Comprocard, cada uma com contrato e depósito próprios. Somá-las esconderia justamente a conta que você precisa fazer com cada uma.',
+      'tickets'
     )}
 
     ${diaADiaRecebimentosHTML(r)}
 
     <section class="grupo-painel">
-      <div class="grupo-cabecalho"><h2>Taxas combinadas</h2></div>
-      ${taxasCombinadasHTML(r.regras, r.combinacoes || [])}
+      <div class="grupo-cabecalho">
+        <h2>Taxas combinadas</h2>
+        <span class="grupo-total">${r.regras.length} cadastrada(s)</span>
+        <button type="button" id="abrir-taxas" class="secundario sem-impressao">
+          ${state.taxasAbertas ? 'Esconder' : 'Cadastrar ou alterar'}
+        </button>
+      </div>
+      ${
+        state.taxasAbertas
+          ? taxasCombinadasHTML(r.regras, r.combinacoes || [])
+          : `<p class="vazio">
+              Cadastro guardado. A taxa combinada de cada linha já aparece na coluna
+              <strong>Combinado</strong> das tabelas acima, junto com a diferença — não é preciso abrir
+              esta lista para conferir. Abra quando for <strong>cadastrar uma taxa nova, corrigir ou
+              excluir</strong> uma que mudou.
+            </p>`
+      }
     </section>
 
     <div class="alerta aviso">
@@ -6118,6 +6360,33 @@ function bind() {
     });
   }
 
+  root.querySelectorAll('[data-receb-filtro]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const chave = b.dataset.recebFiltro;
+      const novo = { ...state.recebFiltro[chave], [b.dataset.campo]: b.dataset.valor };
+
+      // Trocar de maquininha pode deixar uma bandeira escolhida que não passa
+      // nela — e a tabela ficaria vazia sem explicar por quê. Só solta a
+      // bandeira quando ela realmente não existe na nova escolha.
+      if (b.dataset.campo === 'adquirente' && novo.bandeira && state.recebimentos) {
+        const linhas = state.recebimentos[chave].linhas;
+        const existe = linhas.some((l) => (!novo.adquirente || l.adquirente === novo.adquirente) && l.bandeira === novo.bandeira);
+        if (!existe) novo.bandeira = '';
+      }
+
+      state.recebFiltro = { ...state.recebFiltro, [chave]: novo };
+      render();
+    })
+  );
+
+  const btnTaxas = root.querySelector('#abrir-taxas');
+  if (btnTaxas) {
+    btnTaxas.addEventListener('click', () => {
+      state.taxasAbertas = !state.taxasAbertas;
+      render();
+    });
+  }
+
   const formTaxaCombinada = root.querySelector('[data-action="nova-taxa-combinada"]');
   if (formTaxaCombinada) {
     formTaxaCombinada.addEventListener('submit', onSalvarTaxaCombinada);
@@ -6357,6 +6626,19 @@ function bind() {
       carregarDados();
     });
   }
+
+  // Recorte da composição. Troca só o que está na tela: os lançamentos por dia
+  // já vieram do servidor, então mudar de mês não custa uma ida à rede.
+  const trocarRecorte = (campo) => (ev) => {
+    state.gerencialRecorte = { ...state.gerencialRecorte, [campo]: ev.target.value };
+    render();
+  };
+  const selModo = root.querySelector('#modo-recorte');
+  if (selModo) selModo.addEventListener('change', trocarRecorte('modo'));
+  const selMesRec = root.querySelector('#mes-recorte');
+  if (selMesRec) selMesRec.addEventListener('change', trocarRecorte('mes'));
+  const selDiaRec = root.querySelector('#dia-recorte');
+  if (selDiaRec) selDiaRec.addEventListener('change', trocarRecorte('dia'));
 
   const btnImprimir = root.querySelector('#btn-imprimir');
   if (btnImprimir) btnImprimir.addEventListener('click', () => window.print());

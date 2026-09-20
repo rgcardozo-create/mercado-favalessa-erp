@@ -199,44 +199,59 @@ async function consolidado(req, res) {
 // Painel gerencial: o ano inteiro em doze colunas. Enquanto o consolidado
 // responde "como foi este período", este responde "como o ano está indo" — e
 // para isso o que importa é a série, não o instante.
+//
+// Ele é montado a partir de UMA lista de lançamentos por dia, e não de somas
+// prontas por mês.
+//
+// O motivo é que a tela passou a ter recorte: o mesmo dinheiro precisa fechar
+// visto por ano, por mês e por dia. Duas consultas diferentes para o mesmo total
+// é exatamente como nasce a divergência que ninguém consegue explicar depois —
+// com uma lista só, o ano é a soma dos meses porque não há outro jeito de ser.
 async function gerencial(req, res) {
   const ano = /^\d{4}$/.test(req.query.ano || '') ? Number(req.query.ano) : new Date().getFullYear();
   const de = `${ano}-01-01`;
   const ate = `${ano}-12-31`;
 
-  // Uma consulta por origem, todas agrupadas por mês, para o front só somar.
-  const { rows: vendas } = await pool.query(
-    `SELECT to_char(data, 'YYYY-MM') AS mes,
-            COALESCE(sum(dinheiro + cartao + pix + tickets + venda_prazo + pos_sistema + pos_maquina + outras), 0) AS total,
-            count(*)::int AS dias
-       FROM acumulados WHERE data BETWEEN $1 AND $2 GROUP BY 1`,
+  const { rows: vendasDia } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM-DD') AS data,
+            COALESCE(sum(dinheiro + cartao + pix + tickets + venda_prazo + pos_sistema + pos_maquina + outras), 0) AS total
+       FROM acumulados WHERE data BETWEEN $1 AND $2 GROUP BY 1 ORDER BY 1`,
     [de, ate]
   );
 
-  const { rows: despesas } = await pool.query(
-    `SELECT to_char(p.data_pagamento, 'YYYY-MM') AS mes, c.tipo::text AS tipo,
+  // Contas a pagar é o único lugar onde a forma de pagamento existe, porque é o
+  // único lugar onde alguém dá baixa escolhendo como pagou.
+  //
+  // A forma vem em MAIÚSCULAS e sem espaço nas pontas: "Pix", "PIX " e "pix"
+  // são o mesmo dinheiro saindo pelo mesmo caminho, e separá-los faria a lista
+  // parecer ter três formas onde há uma. Baixa antiga, importada do sistema
+  // velho, não trouxe forma nenhuma — essa fica com string vazia, e a tela diz
+  // "não informado" em vez de chutar um rótulo.
+  const { rows: despesasDia } = await pool.query(
+    `SELECT to_char(p.data_pagamento, 'YYYY-MM-DD') AS data, c.tipo::text AS tipo,
+            COALESCE(NULLIF(btrim(upper(p.forma_pagamento)), ''), '') AS forma,
             COALESCE(sum(p.valor), 0) AS total
        FROM contas_pagamentos p
        JOIN contas c ON c.id = p.conta_id
       WHERE p.data_pagamento BETWEEN $1 AND $2
-      GROUP BY 1, 2`,
+      GROUP BY 1, 2, 3`,
     [de, ate]
   );
 
-  const { rows: folha } = await pool.query(
-    `SELECT to_char(data_pagamento, 'YYYY-MM') AS mes, COALESCE(sum(valor), 0) AS total
+  const { rows: folhaDia } = await pool.query(
+    `SELECT to_char(data_pagamento, 'YYYY-MM-DD') AS data, COALESCE(sum(valor), 0) AS total
        FROM folha_pagamentos WHERE data_pagamento BETWEEN $1 AND $2 GROUP BY 1`,
     [de, ate]
   );
 
-  const { rows: servicos } = await pool.query(
-    `SELECT to_char(data, 'YYYY-MM') AS mes, COALESCE(sum(valor), 0) AS total
+  const { rows: servicosDia } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM-DD') AS data, COALESCE(sum(valor), 0) AS total
        FROM extras WHERE tipo = 'servico' AND data BETWEEN $1 AND $2 GROUP BY 1`,
     [de, ate]
   );
 
-  const { rows: taxas } = await pool.query(
-    `SELECT to_char(data, 'YYYY-MM') AS mes, COALESCE(sum(tarifa), 0) AS total
+  const { rows: taxasDia } = await pool.query(
+    `SELECT to_char(data, 'YYYY-MM-DD') AS data, COALESCE(sum(tarifa), 0) AS total
        FROM conciliacao_transacoes WHERE data BETWEEN $1 AND $2 GROUP BY 1`,
     [de, ate]
   );
@@ -263,22 +278,17 @@ async function gerencial(req, res) {
      ORDER BY ano DESC`
   );
 
-  const acha = (lista, mes) => lista.find((r) => r.mes === mes);
-  const meses = Array.from({ length: 12 }, (_, i) => {
-    const mes = `${ano}-${String(i + 1).padStart(2, '0')}`;
-    const venda = acha(vendas, mes);
-    const doMes = despesas.filter((d) => d.mes === mes);
-    const folhaMes = acha(folha, mes);
+  // Folha, serviço extra e taxa de maquininha são despesa igual às outras, mas
+  // vêm de tabelas onde ninguém escolhe forma de pagamento. Entram com forma
+  // vazia em vez de ficarem de fora: omiti-las faria a soma por forma não bater
+  // com a despesa total, e um total que não fecha é pior do que um rótulo feio.
+  // Somar float em JavaScript deixa rastro (0,1 + 0,2 = 0,30000000000000004).
+  const centavos = (v) => Number(v.toFixed(2));
 
-    const porTipo = TIPOS_VALIDOS.reduce((acc, tipo) => {
-      const achado = doMes.find((d) => d.tipo === tipo);
-      acc[tipo] = achado ? Number(achado.total) : 0;
-      return acc;
-    }, {});
-    porTipo.folha = folhaMes ? Number(folhaMes.total) : 0;
-    // Serviço extra é despesa de gente, mas não é folha: aparece separado para
-    // não somir dentro do salário de ninguém.
-    porTipo.servico_extra = Number((acha(servicos, mes) || {}).total || 0);
+  const lancamentos = [
+    ...despesasDia.map((r) => ({ data: r.data, tipo: r.tipo, forma: r.forma, total: centavos(Number(r.total)) })),
+    ...folhaDia.map((r) => ({ data: r.data, tipo: 'folha', forma: '', total: centavos(Number(r.total)) })),
+    ...servicosDia.map((r) => ({ data: r.data, tipo: 'servico_extra', forma: '', total: centavos(Number(r.total)) })),
     // A taxa da adquirente é despesa, e por isso entra aqui.
     //
     // O faturamento vem do Acumulado, que é o BRUTO — o que passou na
@@ -288,18 +298,36 @@ async function gerencial(req, res) {
     //
     // Contar como despesa, e não abater da venda, mantém o faturamento batendo
     // com o relatório do PDV — que é o número que o dono confere todo dia.
-    porTipo.taxa_cartao = Number((acha(taxas, mes) || {}).total || 0);
+    ...taxasDia.map((r) => ({ data: r.data, tipo: 'taxa_cartao', forma: '', total: centavos(Number(r.total)) })),
+  ].filter((l) => l.total !== 0);
 
-    const totalDespesas = Object.values(porTipo).reduce((a, v) => a + v, 0);
-    const totalVendas = venda ? Number(venda.total) : 0;
+  const TIPOS_DESPESA = [...TIPOS_VALIDOS, 'folha', 'servico_extra', 'taxa_cartao'];
+
+  const meses = Array.from({ length: 12 }, (_, i) => {
+    const mes = `${ano}-${String(i + 1).padStart(2, '0')}`;
+    const doMes = lancamentos.filter((l) => l.data.startsWith(mes));
+    const diasDoMes = vendasDia.filter((v) => v.data.startsWith(mes));
+
+    const porTipo = TIPOS_DESPESA.reduce((acc, tipo) => {
+      acc[tipo] = 0;
+      return acc;
+    }, {});
+    for (const l of doMes) porTipo[l.tipo] = centavos((porTipo[l.tipo] || 0) + l.total);
+
+    // O total é a soma das categorias, e não uma soma à parte: assim a rosca da
+    // composição fecha exatamente com o número grande em cima dela. Duas somas
+    // independentes do mesmo dinheiro divergem por um centavo mais cedo ou mais
+    // tarde, e um centavo sem explicação derruba a confiança na tela inteira.
+    const totalDespesas = centavos(Object.values(porTipo).reduce((a, v) => a + v, 0));
+    const totalVendas = centavos(diasDoMes.reduce((a, v) => a + Number(v.total), 0));
 
     return {
       mes,
       vendas: totalVendas,
-      dias_lancados: venda ? venda.dias : 0,
+      dias_lancados: diasDoMes.length,
       despesas: totalDespesas,
       despesas_por_tipo: porTipo,
-      resultado: totalVendas - totalDespesas,
+      resultado: centavos(totalVendas - totalDespesas),
       // Margem só existe se houve venda; sem isso, mês sem fechamento lançado
       // apareceria com -100% e pareceria catástrofe em vez de dado faltando.
       margem: totalVendas > 0 ? ((totalVendas - totalDespesas) / totalVendas) * 100 : null,
@@ -309,12 +337,16 @@ async function gerencial(req, res) {
     };
   });
 
-  const soma = (campo) => meses.reduce((a, m) => a + m[campo], 0);
+  const soma = (campo) => centavos(meses.reduce((a, m) => a + m[campo], 0));
 
   return res.json({
     ano,
     anos_disponiveis: anos.map((a) => a.ano),
     meses,
+    // O detalhe por dia, de onde a tela tira o recorte de ano, mês ou dia sem
+    // precisar voltar ao servidor a cada troca.
+    lancamentos,
+    vendas_por_dia: vendasDia.map((v) => ({ data: v.data, total: centavos(Number(v.total)) })),
     totais: {
       vendas: soma('vendas'),
       despesas: soma('despesas'),
@@ -323,7 +355,7 @@ async function gerencial(req, res) {
       margem: soma('vendas') > 0 ? (soma('resultado') / soma('vendas')) * 100 : null,
       despesas_por_tipo: meses.reduce((acc, m) => {
         for (const [tipo, valor] of Object.entries(m.despesas_por_tipo)) {
-          acc[tipo] = (acc[tipo] || 0) + valor;
+          acc[tipo] = centavos((acc[tipo] || 0) + valor);
         }
         return acc;
       }, {}),
