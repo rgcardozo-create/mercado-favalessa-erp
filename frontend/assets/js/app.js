@@ -97,6 +97,8 @@ const state = {
   statusFiltro: 'vencidas',
   // Recorte por mês da lista de contas: '' (tudo), 'atual' ou 'anterior'.
   mesFiltro: '',
+  // Ordem da lista de contas: campo e sentido (ver ORDENACOES_CONTAS).
+  ordemContas: 'vencimento_asc',
   // Conta expandida: detalhe carregado à parte, com os pagamentos já feitos.
   detalheConta: null,
   edicaoContaId: null,
@@ -4864,6 +4866,33 @@ const FILTROS_STATUS = [
   ['quitado', 'Quitadas'],
 ];
 
+// Ordenação da lista de contas. É só a ordem na tela: não muda o que é
+// filtrado nem os totais. Quem ainda não tem pagamento fica sempre no fim
+// quando se ordena por data de pagamento, nos dois sentidos — "sem data" não é
+// nem mais antigo nem mais novo que nada.
+const ORDENACOES_CONTAS = [
+  ['vencimento_asc', 'Vencimento (mais antigo primeiro)', 'vencimento', 1],
+  ['vencimento_desc', 'Vencimento (mais recente primeiro)', 'vencimento', -1],
+  ['pagamento_asc', 'Pagamento (mais antigo primeiro)', 'ultimo_pagamento', 1],
+  ['pagamento_desc', 'Pagamento (mais recente primeiro)', 'ultimo_pagamento', -1],
+];
+
+function ordenarContas(contas) {
+  const opcao = ORDENACOES_CONTAS.find(([v]) => v === state.ordemContas) || ORDENACOES_CONTAS[0];
+  const [, , campo, sentido] = opcao;
+  const data = (c) => (c[campo] ? String(c[campo]).slice(0, 10) : '');
+  return [...contas].sort((a, b) => {
+    const da = data(a);
+    const db = data(b);
+    if (da !== db) {
+      if (!da) return 1;
+      if (!db) return -1;
+      return da < db ? -sentido : sentido;
+    }
+    return (a.id - b.id) * sentido;
+  });
+}
+
 function textoListaVazia() {
   if (state.buscaContas.trim()) return 'Nenhum lançamento encontrado para essa busca.';
   if (state.statusFiltro === 'vencidas') return 'Nada vencido nem vencendo hoje. Tudo em dia por aqui.';
@@ -5032,6 +5061,12 @@ function contasHTML() {
         <option value="atual" ${state.mesFiltro === 'atual' ? 'selected' : ''}>Mês atual</option>
         <option value="anterior" ${state.mesFiltro === 'anterior' ? 'selected' : ''}>Mês passado</option>
       </select>
+      <select id="ordem-contas" title="Ordenar por">
+        ${ORDENACOES_CONTAS.map(
+          ([valor, rotulo]) =>
+            `<option value="${valor}" ${state.ordemContas === valor ? 'selected' : ''}>${rotulo}</option>`
+        ).join('')}
+      </select>
       <form class="busca" data-action="busca-contas">
         <input
           type="search"
@@ -5134,8 +5169,9 @@ function listaContasHTML({ ehFornecedor, ehDespesa, podeGerir }) {
       <tbody><tr><td colspan="9">${textoListaVazia()}</td></tr></tbody></table>`;
   }
 
+  const contasOrdenadas = ordenarContas(state.contas);
   const grupos = new Map();
-  for (const conta of state.contas) {
+  for (const conta of contasOrdenadas) {
     const forma = conta.forma_prevista || SEM_FORMA;
     if (!grupos.has(forma)) grupos.set(forma, []);
     grupos.get(forma).push(conta);
@@ -5143,7 +5179,7 @@ function listaContasHTML({ ehFornecedor, ehDespesa, podeGerir }) {
 
   if (grupos.size < 2) {
     return `<table class="tabela-contas">${cabecalho}
-      <tbody>${state.contas.map(linhaConta).join('')}</tbody></table>`;
+      <tbody>${contasOrdenadas.map(linhaConta).join('')}</tbody></table>`;
   }
 
   return [...grupos.entries()]
@@ -6067,6 +6103,16 @@ function bind() {
       state.mesFiltro = ev.target.value;
       focoBusca = false;
       carregarDados();
+    });
+  }
+
+  // Ordenar não precisa ir ao servidor: a lista já está toda na tela.
+  const seletorOrdem = root.querySelector('#ordem-contas');
+  if (seletorOrdem) {
+    seletorOrdem.addEventListener('change', (ev) => {
+      state.ordemContas = ev.target.value;
+      focoBusca = false;
+      render();
     });
   }
 
