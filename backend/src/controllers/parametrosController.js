@@ -14,12 +14,16 @@ const PADRAO = {
   he_percentual: 50,
   he_percentual_domingo: 100,
   divisor_horas: 220,
+  // Sobreaviso: a lei paga 1/3 da hora normal (CLT art. 244, § 2º). Algumas
+  // convenções pagam mais; o campo existe para isso.
+  sobreaviso_percentual: 33.33,
 };
 
 const LIMITES = {
   he_percentual: [0, 300],
   he_percentual_domingo: [0, 300],
   divisor_horas: [1, 400],
+  sobreaviso_percentual: [0, 100],
 };
 
 const CHAVES = Object.keys(PADRAO);

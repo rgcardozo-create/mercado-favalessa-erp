@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.68.0';
+const VERSAO = '1.69.0';
 
 const state = {
   sessao: getSessao(),
@@ -125,6 +125,8 @@ const state = {
   // os campos não se apagarem quando a conta volta.
   calculoHoras: null,
   calculoEntrada: {},
+  calculoSobreaviso: null,
+  sobreavisoEntrada: {},
   calculoFerias: null,
   feriasEntrada: {},
   calculoRescisao: null,
@@ -3355,6 +3357,107 @@ function calculadoraHorasHTML() {
   `;
 }
 
+// Calculadora de sobreaviso. Mesma régua da de hora extra: não grava nada,
+// mostra a conta aberta e devolve o bruto.
+//
+// O que se digita é o que está na escala do mês: quantas horas ele ficou de
+// sobreaviso e, dessas, quantas foi chamado e trabalhou. A tela não pede para
+// ninguém descontar uma da outra — isso é conta, e conta é com o sistema.
+function calculadoraSobreavisoHTML() {
+  const c = state.calculoSobreaviso;
+  const d = state.sobreavisoEntrada || {};
+  const p = (state.parametrosTrabalhistas && state.parametrosTrabalhistas.parametros) || {};
+  const guardado = (k, padrao = '') => escapar(String(d[k] ?? padrao));
+  const funcionarioId = Number(d.funcionario_id) || (c && c.funcionario.id);
+
+  return `
+    <section class="grupo-painel">
+      <div class="grupo-cabecalho">
+        <h2>Calcular sobreaviso</h2>
+        ${c ? `<span class="grupo-total">${brl(c.total)}</span>` : ''}
+      </div>
+
+      <form data-action="calculo-sobreaviso" class="form-inline">
+        <label>Funcionário
+          <select name="funcionario_id" required>
+            <option value="">— escolha —</option>
+            ${state.funcionarios
+              .map(
+                (f) =>
+                  `<option value="${f.id}" ${funcionarioId === f.id ? 'selected' : ''}>${escapar(f.nome)}${
+                    f.salario_base ? '' : ' (sem salário no cadastro)'
+                  }</option>`
+              )
+              .join('')}
+          </select>
+        </label>
+        <label>Mês <input type="month" name="mes" required value="${guardado('mes', todayISO().slice(0, 7))}" /></label>
+        <label>Horas de sobreaviso no mês <input type="number" step="0.5" min="0.5" name="horas_sobreaviso" required value="${guardado('horas_sobreaviso')}" /></label>
+        <label>% da hora <input type="number" step="0.01" min="0" max="100" name="percentual_sobreaviso" value="${guardado('percentual_sobreaviso', p.sobreaviso_percentual ?? 33.33)}" /></label>
+        <label>Dessas, horas que foi chamado e trabalhou <input type="number" step="0.5" min="0" name="horas_acionado" value="${guardado('horas_acionado')}" /></label>
+        <label>% <input type="number" step="1" min="0" name="percentual_acionado" value="${guardado('percentual_acionado', p.he_percentual ?? 50)}" /></label>
+        <label>Chamado em domingo/feriado <input type="number" step="0.5" min="0" name="horas_acionado_domingo" value="${guardado('horas_acionado_domingo')}" /></label>
+        <label>% <input type="number" step="1" min="0" name="percentual_domingo" value="${guardado('percentual_domingo', p.he_percentual_domingo ?? 100)}" /></label>
+        <label>Feriados no mês <input type="number" step="1" min="0" name="feriados_no_mes" value="${guardado('feriados_no_mes')}" /></label>
+        <button type="submit">Calcular</button>
+        <p class="vazio campo-largo">
+          <strong>Sobreaviso</strong> é o tempo em que ele fica em casa esperando ser chamado, com o celular
+          ligado e sem poder sair da cidade. A lei paga essas horas a <strong>1/3 da hora normal</strong>
+          (CLT art. 244). Quando ele é chamado e vai trabalhar, essas horas saem do sobreaviso e são pagas
+          como hora extra — por isso informe as horas trabalhadas <em>dentro</em> do total de sobreaviso.
+          Cada escala vai até no máximo 24 horas seguidas.
+        </p>
+      </form>
+
+      ${
+        c
+          ? `<table class="tabela-contas">
+              <thead><tr><th>O quê</th><th>Conta</th><th>Valor</th></tr></thead>
+              <tbody>
+                ${
+                  c.linhas.length
+                    ? c.linhas
+                        .map(
+                          (l) => `<tr>
+                            <td>${escapar(l.rotulo)}</td>
+                            <td><small>${escapar(l.detalhe)}</small></td>
+                            <td><strong>${brl(l.valor)}</strong></td>
+                          </tr>`
+                        )
+                        .join('')
+                    : '<tr><td colspan="3">Nada a pagar com esses números.</td></tr>'
+                }
+              </tbody>
+              <tfoot>
+                <tr><td colspan="2"><strong>Total bruto</strong></td><td><strong>${brl(c.total)}</strong></td></tr>
+              </tfoot>
+            </table>
+            <p class="vazio">
+              ${escapar(c.funcionario.nome)} &middot; salário ${brl(c.funcionario.salario_base)} &middot;
+              hora ${brl(c.valor_hora)} (salário ÷ ${c.parametros.divisor_horas}) &middot;
+              ${c.horas.escala} h de escala: ${c.horas.so_espera} h esperando e ${c.horas.trabalhadas} h trabalhando.
+              ${mesExtenso(c.mes)}: ${c.base_do_mes.dias} dias, ${c.base_do_mes.domingos} domingo(s)${
+                c.base_do_mes.feriados ? ` e ${c.base_do_mes.feriados} feriado(s)` : ''
+              }, ${c.base_do_mes.uteis} úteis.
+            </p>
+            <div class="alerta aviso">
+              <strong>Valor bruto</strong>, sem INSS e sem imposto de renda — os dois dependem do total do
+              mês inteiro, não só desta verba. Use para saber quanto separar e para conferir a folha do
+              contador; quem fecha o número é ele.
+            </div>
+            ${
+              c.total > 0
+                ? `<div class="acoes-alerta">
+                    <button type="button" id="btn-lancar-sobreaviso">Lançar ${brl(c.total)} como serviço extra pago</button>
+                  </div>`
+                : ''
+            }`
+          : ''
+      }
+    </section>
+  `;
+}
+
 // Somar dias a uma data ISO sem passar pelo fuso: `new Date('2026-10-01')` é
 // meia-noite em UTC e, no horário de Brasília, já é o dia anterior.
 function somarDiasISO(iso, n) {
@@ -3717,6 +3820,7 @@ function folhaHTML() {
       ${cabecalho}
       ${subAbas}
       ${calculadoraHorasHTML()}
+      ${calculadoraSobreavisoHTML()}
       ${calculadoraFeriasHTML()}
       ${calculadoraRescisaoHTML()}
     `;
@@ -4778,10 +4882,12 @@ function adminHTML() {
         <label>Hora extra (%) <input type="number" step="1" min="0" max="300" name="he_percentual" value="${pt.parametros.he_percentual}" /></label>
         <label>Domingo e feriado (%) <input type="number" step="1" min="0" max="300" name="he_percentual_domingo" value="${pt.parametros.he_percentual_domingo}" /></label>
         <label>Divisor de horas <input type="number" step="1" min="1" max="400" name="divisor_horas" value="${pt.parametros.divisor_horas}" /></label>
+        <label>Sobreaviso (% da hora) <input type="number" step="0.01" min="0" max="100" name="sobreaviso_percentual" value="${pt.parametros.sobreaviso_percentual}" /></label>
         <button type="submit">Salvar</button>
         <p class="vazio campo-largo">
           O divisor é 220 para quem trabalha 44 horas por semana e 200 para 40 horas.
           É por ele que o salário vira o valor da hora.
+          O sobreaviso pela lei é 1/3 da hora (33,33%); só mude se a convenção pagar mais.
         </p>
       </form>
     </section>`
@@ -6544,6 +6650,12 @@ function bind() {
   const btnLancarCalculo = root.querySelector('#btn-lancar-calculo');
   if (btnLancarCalculo) btnLancarCalculo.addEventListener('click', onLancarCalculo);
 
+  const formSobreaviso = root.querySelector('[data-action="calculo-sobreaviso"]');
+  if (formSobreaviso) formSobreaviso.addEventListener('submit', onCalcularSobreaviso);
+
+  const btnLancarSobreaviso = root.querySelector('#btn-lancar-sobreaviso');
+  if (btnLancarSobreaviso) btnLancarSobreaviso.addEventListener('click', onLancarSobreaviso);
+
   const formFerias = root.querySelector('[data-action="calculo-ferias"]');
   if (formFerias) {
     formFerias.addEventListener('submit', onCalcularFerias);
@@ -7388,6 +7500,50 @@ async function onCalcularHoras(ev) {
     state.erro = err.message;
   }
   render();
+}
+
+async function onCalcularSobreaviso(ev) {
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const corpo = {};
+  for (const [k, v] of fd.entries()) corpo[k] = v;
+  state.sobreavisoEntrada = corpo;
+  try {
+    state.calculoSobreaviso = await apiFetch('/folha/calculo-sobreaviso', { method: 'POST', body: JSON.stringify(corpo) });
+    state.erro = null;
+  } catch (err) {
+    state.calculoSobreaviso = null;
+    state.erro = err.message;
+  }
+  render();
+}
+
+// Mesmo caminho da hora extra: serviço extra pago, que nasce quitado.
+async function onLancarSobreaviso() {
+  const c = state.calculoSobreaviso;
+  if (!c) return;
+  if (!confirm(`Lançar ${brl(c.total)} para ${c.funcionario.nome} como serviço extra pago?`)) return;
+  try {
+    await apiFetch('/folha/extras', {
+      method: 'POST',
+      body: JSON.stringify({
+        funcionario_id: c.funcionario.id,
+        codigo: c.funcionario.codigo || undefined,
+        tipo: 'servico',
+        valor: c.total,
+        data: todayISO(),
+        observacoes: `Sobreaviso — ${mesExtenso(c.mes)}`,
+      }),
+    });
+    state.calculoSobreaviso = null;
+    state.sobreavisoEntrada = {};
+    state.filtroExtras = 'todos';
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+    render();
+  }
 }
 
 async function onCalcularFerias(ev) {
