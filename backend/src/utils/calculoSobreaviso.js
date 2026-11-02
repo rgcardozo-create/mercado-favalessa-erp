@@ -116,6 +116,7 @@ function calcularSobreaviso({
     base_do_mes: base,
     horas: { escala: hs, so_espera: horasSoEspera, trabalhadas: acionadas },
     linhas,
+    dsr,
     total: centavos(variavel + dsr),
   };
 }

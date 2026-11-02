@@ -39,6 +39,7 @@ ok('trabalhadas comuns 90,00',      perto(b.linhas[1].valor, 90));
 ok('trabalhadas em domingo 40,00',  perto(b.linhas[2].valor, 40));
 ok('DSR 68,67',                     perto(b.linhas[3].valor, 68.67));
 ok('total 412,00',                  perto(b.total, 412));
+ok('DSR separado: 68,67',           perto(b.dsr, 68.67));
 
 console.log('\n=== feriado no mês muda o DSR ===');
 // 2 feriados: 7 de descanso, 23 úteis. DSR = 240 ÷ 23 × 7 = 73,04
