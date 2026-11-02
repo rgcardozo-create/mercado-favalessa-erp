@@ -3346,15 +3346,41 @@ function calculadoraHorasHTML() {
             </div>
             ${
               c.total > 0
-                ? `<div class="acoes-alerta">
-                    <button type="button" id="btn-lancar-calculo">Lançar ${brl(c.total)} como serviço extra pago</button>
-                  </div>`
+                ? botoesLancarComSemDSR(c, 'btn-lancar-calculo')
                 : ''
             }`
           : ''
       }
     </section>
   `;
+}
+
+// Lançar com ou sem o DSR. Há quem pague o DSR junto, como serviço extra, e
+// há quem deixe para o contador pôr na folha do mês — e aí lançar com ele
+// aqui seria pagar o descanso duas vezes. Por isso a escolha é na hora de
+// lançar, com o valor de cada um escrito no botão.
+function botoesLancarComSemDSR(c, classe) {
+  const dsr = Number(c.dsr) || 0;
+  const semDSR = Math.round((c.total - dsr) * 100) / 100;
+  if (dsr <= 0) {
+    return `<div class="acoes-alerta">
+      <button type="button" class="${classe}" data-com-dsr="1">Lançar ${brl(c.total)} como serviço extra pago</button>
+    </div>`;
+  }
+  return `<div class="acoes-alerta">
+    <button type="button" class="${classe}" data-com-dsr="1">Lançar ${brl(c.total)} com DSR</button>
+    ${semDSR > 0 ? `<button type="button" class="${classe} secundario" data-com-dsr="0">Lançar ${brl(semDSR)} sem DSR</button>` : ''}
+  </div>
+  <p class="vazio">Os dois lançam como serviço extra pago. Sem DSR fica de fora o descanso de ${brl(dsr)} — use quando o contador já paga o DSR na folha.</p>`;
+}
+
+// Valor e descrição do lançamento conforme o botão apertado.
+function escolhaDoLancamento(c, ev, nome) {
+  const comDSR = !ev || !ev.currentTarget || ev.currentTarget.dataset.comDsr !== '0';
+  const dsr = Number(c.dsr) || 0;
+  const valor = comDSR ? c.total : Math.round((c.total - dsr) * 100) / 100;
+  const sufixo = dsr > 0 ? (comDSR ? ' (com DSR)' : ' (sem DSR)') : '';
+  return { valor, descricao: `${nome} — ${mesExtenso(c.mes)}${sufixo}` };
 }
 
 // Calculadora de sobreaviso. Mesma régua da de hora extra: não grava nada,
@@ -3447,9 +3473,7 @@ function calculadoraSobreavisoHTML() {
             </div>
             ${
               c.total > 0
-                ? `<div class="acoes-alerta">
-                    <button type="button" id="btn-lancar-sobreaviso">Lançar ${brl(c.total)} como serviço extra pago</button>
-                  </div>`
+                ? botoesLancarComSemDSR(c, 'btn-lancar-sobreaviso')
                 : ''
             }`
           : ''
@@ -6647,14 +6671,12 @@ function bind() {
   const formCalculo = root.querySelector('[data-action="calculo-horas"]');
   if (formCalculo) formCalculo.addEventListener('submit', onCalcularHoras);
 
-  const btnLancarCalculo = root.querySelector('#btn-lancar-calculo');
-  if (btnLancarCalculo) btnLancarCalculo.addEventListener('click', onLancarCalculo);
+  root.querySelectorAll('.btn-lancar-calculo').forEach((b) => b.addEventListener('click', onLancarCalculo));
 
   const formSobreaviso = root.querySelector('[data-action="calculo-sobreaviso"]');
   if (formSobreaviso) formSobreaviso.addEventListener('submit', onCalcularSobreaviso);
 
-  const btnLancarSobreaviso = root.querySelector('#btn-lancar-sobreaviso');
-  if (btnLancarSobreaviso) btnLancarSobreaviso.addEventListener('click', onLancarSobreaviso);
+  root.querySelectorAll('.btn-lancar-sobreaviso').forEach((b) => b.addEventListener('click', onLancarSobreaviso));
 
   const formFerias = root.querySelector('[data-action="calculo-ferias"]');
   if (formFerias) {
@@ -7519,10 +7541,11 @@ async function onCalcularSobreaviso(ev) {
 }
 
 // Mesmo caminho da hora extra: serviço extra pago, que nasce quitado.
-async function onLancarSobreaviso() {
+async function onLancarSobreaviso(ev) {
   const c = state.calculoSobreaviso;
   if (!c) return;
-  if (!confirm(`Lançar ${brl(c.total)} para ${c.funcionario.nome} como serviço extra pago?`)) return;
+  const { valor, descricao } = escolhaDoLancamento(c, ev, 'Sobreaviso');
+  if (!confirm(`Lançar ${brl(valor)} para ${c.funcionario.nome} como serviço extra pago?\n${descricao}`)) return;
   try {
     await apiFetch('/folha/extras', {
       method: 'POST',
@@ -7530,9 +7553,9 @@ async function onLancarSobreaviso() {
         funcionario_id: c.funcionario.id,
         codigo: c.funcionario.codigo || undefined,
         tipo: 'servico',
-        valor: c.total,
+        valor,
         data: todayISO(),
-        observacoes: `Sobreaviso — ${mesExtenso(c.mes)}`,
+        observacoes: descricao,
       }),
     });
     state.calculoSobreaviso = null;
@@ -7827,11 +7850,11 @@ async function onLancarFerias() {
 
 // O cálculo vira lançamento pelo caminho que já existe: serviço extra pago é
 // dinheiro que saiu e não volta, que é exatamente o caso da hora extra.
-async function onLancarCalculo() {
+async function onLancarCalculo(ev) {
   const c = state.calculoHoras;
   if (!c) return;
-  const descricao = `Hora extra e feriado — ${mesExtenso(c.mes)}`;
-  if (!confirm(`Lançar ${brl(c.total)} para ${c.funcionario.nome} como serviço extra pago?`)) return;
+  const { valor, descricao } = escolhaDoLancamento(c, ev, 'Hora extra e feriado');
+  if (!confirm(`Lançar ${brl(valor)} para ${c.funcionario.nome} como serviço extra pago?\n${descricao}`)) return;
   try {
     await apiFetch('/folha/extras', {
       method: 'POST',
@@ -7839,7 +7862,7 @@ async function onLancarCalculo() {
         funcionario_id: c.funcionario.id,
         codigo: c.funcionario.codigo || undefined,
         tipo: 'servico',
-        valor: c.total,
+        valor,
         data: todayISO(),
         observacoes: descricao,
       }),

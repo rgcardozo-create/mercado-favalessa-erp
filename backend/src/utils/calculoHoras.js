@@ -111,6 +111,8 @@ function calcularHoras({
     valor_dia: valorDia,
     base_do_mes: base,
     linhas,
+    // O DSR separado, para quem lança poder escolher pagar com ou sem ele.
+    dsr,
     total,
   };
 }
