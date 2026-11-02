@@ -3,6 +3,7 @@ const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 const { assinarTokenFolha } = require('../middleware/folha');
 const { calcularHoras } = require('../utils/calculoHoras');
+const { calcularSobreaviso } = require('../utils/calculoSobreaviso');
 const { calcularFerias, diasDeDireito } = require('../utils/calculoFerias');
 const { calcularRescisao, MOTIVOS } = require('../utils/calculoRescisao');
 const { lerParametros } = require('./parametrosController');
@@ -525,6 +526,68 @@ async function calculoHoras(req, res) {
   });
 }
 
+// Sobreaviso, pela mesma régua: calcula e não grava, devolve o bruto.
+async function calculoSobreaviso(req, res) {
+  const id = Number(req.body.funcionario_id);
+  const mes = String(req.body.mes || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) {
+    return res.status(400).json({ error: 'Informe o mês no formato AAAA-MM.' });
+  }
+
+  const { rows } = await pool.query(
+    'SELECT id, nome, codigo, salario_base FROM funcionarios WHERE id = $1',
+    [id]
+  );
+  const funcionario = rows[0];
+  if (!funcionario) return res.status(404).json({ error: 'Funcionário não encontrado.' });
+
+  const salario = Number(funcionario.salario_base);
+  if (!salario) {
+    return res.status(400).json({
+      error: `${funcionario.nome} está sem salário base no cadastro. Sem ele não dá para calcular o valor da hora.`,
+    });
+  }
+
+  const p = await lerParametros();
+  const numero = (v, padrao = 0) => (v === undefined || v === '' ? padrao : Number(v));
+
+  const entrada = {
+    horasSobreaviso: numero(req.body.horas_sobreaviso),
+    horasAcionado: numero(req.body.horas_acionado),
+    horasAcionadoDomingo: numero(req.body.horas_acionado_domingo),
+    feriadosNoMes: numero(req.body.feriados_no_mes),
+  };
+  if (Object.values(entrada).some((v) => !Number.isFinite(v) || v < 0)) {
+    return res.status(400).json({ error: 'As horas e os feriados precisam ser números, zero ou mais.' });
+  }
+  if (!entrada.horasSobreaviso) {
+    return res.status(400).json({ error: 'Informe quantas horas ele ficou de sobreaviso no mês.' });
+  }
+
+  let resultado;
+  try {
+    resultado = calcularSobreaviso({
+      salarioBase: salario,
+      mes,
+      divisorHoras: p.divisor_horas,
+      percentualSobreaviso: numero(req.body.percentual_sobreaviso, p.sobreaviso_percentual),
+      percentualAcionado: numero(req.body.percentual_acionado, p.he_percentual),
+      percentualDomingo: numero(req.body.percentual_domingo, p.he_percentual_domingo),
+      ...entrada,
+    });
+  } catch (err) {
+    if (err.status === 400) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+
+  return res.json({
+    funcionario: { id: funcionario.id, nome: funcionario.nome, codigo: funcionario.codigo, salario_base: salario },
+    mes,
+    parametros: p,
+    ...resultado,
+  });
+}
+
 // Férias, pela mesma régua da calculadora de hora extra: calcula e não grava.
 // O número que sai é bruto — INSS e imposto de renda dependem do mês inteiro e
 // quem fecha isso é o contador.
@@ -680,6 +743,7 @@ async function calculoRescisao(req, res) {
 module.exports = {
   desbloquear,
   calculoHoras,
+  calculoSobreaviso,
   calculoFerias,
   calculoRescisao,
   pendencias,
