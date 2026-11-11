@@ -12,6 +12,7 @@ router.use(exigirTela('contas'));
 router.get('/', asyncHandler(contasController.listar));
 // Antes do /:id, senão "descricoes" seria lido como id de conta.
 router.get('/descricoes', asyncHandler(contasController.descricoesUsuais));
+router.get('/boleto', asyncHandler(contasController.lerBoleto));
 router.get('/:id', asyncHandler(contasController.obter));
 router.post('/', authorize('master', 'gerente', 'loja'), asyncHandler(contasController.criar));
 // Antes do /:id para "mover" não ser lido como id de conta.
