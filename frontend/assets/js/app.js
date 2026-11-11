@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.71.0';
+const VERSAO = '1.72.0';
 
 const state = {
   sessao: getSessao(),
@@ -204,6 +204,7 @@ function limparBuscaContas() {
   clearTimeout(timerBusca);
   state.buscaContas = '';
   state.duplicidade = null;
+  state.novaContaComErro = null;
   state.edicaoContaId = null;
   state.pagamentoEditandoId = null;
   state.detalheConta = null;
@@ -478,6 +479,14 @@ function linhaConta(conta) {
       <td>${(ehContaDeFornecedor(conta.tipo) ? conta.fornecedor_nome : conta.categoria) || '—'}</td>
       <td>${escapar(conta.descricao)}${
         conta.total_parcelas > 1 ? ` <small class="parcela">${conta.parcela}/${conta.total_parcelas}</small>` : ''
+      }${
+        conta.codigo_barras || conta.nosso_numero
+          ? ` <small class="parcela" title="${
+              conta.codigo_barras ? 'Código de barras cadastrado' : 'Nosso número cadastrado'
+            }${conta.nosso_numero ? ` · nosso número ${escapar(conta.nosso_numero)}` : ''}">${
+              conta.codigo_barras ? '▮▯▮ código' : 'nº ' + escapar(conta.nosso_numero)
+            }</small>`
+          : ''
       }</td>
       <td>${dateBR(conta.vencimento)}</td>
       <td>${conta.ultimo_pagamento ? dateBR(conta.ultimo_pagamento) : '—'}</td>
@@ -558,6 +567,7 @@ function formEditarContaHTML(conta) {
             : ''
         }
         <label>Descrição <input type="text" name="descricao" required value="${escapar(conta.descricao)}" /></label>
+        ${campoCodigoBoletoHTML(conta.codigo_barras || conta.nosso_numero || '')}
         ${ehDespesa ? `<label>Categoria <input type="text" name="categoria" value="${escapar(conta.categoria || '')}" /></label>` : ''}
         <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${conta.valor}" /></label>
         <label>${ehDespesa ? 'Data' : 'Vencimento'}
@@ -5124,7 +5134,11 @@ function contasHTML() {
 
   // Quando o lançamento foi barrado por duplicidade, o formulário volta
   // preenchido com o que foi digitado — normalmente só o valor precisa mudar.
-  const pendente = (state.duplicidade && state.duplicidade.payload) || {};
+  // O que estava digitado volta para o formulário depois de um aviso: seja a
+  // duplicidade (que pede confirmação), seja um erro como o valor que não bate
+  // com o código de barras. Perder tudo por causa de um campo é o que faz a
+  // pessoa desistir de usar o leitor.
+  const pendente = (state.duplicidade && state.duplicidade.payload) || state.novaContaComErro || {};
   const aviso = state.duplicidade
     ? `<div class="alerta aviso">
         <p>${escapar(state.duplicidade.mensagem)}</p>
@@ -5169,6 +5183,7 @@ function contasHTML() {
 
       <form data-action="nova-conta" class="form-inline">
         <h2>Novo lançamento &middot; ${rotuloTipo(state.tipo)}</h2>
+        ${campoCodigoBoletoHTML(pendente.codigo_boleto || '')}
         ${
           ehFornecedor
             ? `<label>Fornecedor
@@ -6098,6 +6113,7 @@ function bind() {
   // clicar em cada campo é o que faz o lançamento demorar. No último campo o
   // foco cai no botão, e aí o Enter cadastra.
   root.querySelectorAll('form.form-inline').forEach(ligarEnterQueAvanca);
+  root.querySelectorAll('input[name="codigo_boleto"]').forEach(ligarLeituraDeBoleto);
 
   ligarMaiusculas(root);
 
@@ -8604,6 +8620,75 @@ async function onMoverContas() {
   }
 }
 
+// Campo do código do boleto. O leitor de código de barras do caixa funciona
+// como um teclado: digita os 44 números e aperta Enter. O Enter já anda para o
+// próximo campo, então ler o boleto e escolher o fornecedor é o fluxo inteiro —
+// valor e vencimento saem do próprio código.
+function campoCodigoBoletoHTML(valor) {
+  return `
+    <label class="campo-largo">Código do boleto
+      <input type="text" name="codigo_boleto" inputmode="numeric" autocomplete="off"
+             placeholder="Passe o leitor no código de barras — ou cole a linha digitável, ou digite o nosso número"
+             value="${escapar(valor || '')}" />
+      <small class="info-boleto neutro-campo">${
+        valor ? '' : 'Opcional. Com o código, o valor e o vencimento se preenchem sozinhos.'
+      }</small>
+    </label>`;
+}
+
+function ligarLeituraDeBoleto(campo) {
+  const form = campo.form;
+  const info = campo.parentElement.querySelector('.info-boleto');
+  const mostrar = (texto, classe) => {
+    if (!info) return;
+    info.className = `info-boleto ${classe}`;
+    info.innerHTML = texto;
+  };
+
+  async function ler() {
+    const codigo = campo.value.replace(/\D/g, '');
+    if (!codigo) {
+      mostrar('', 'neutro-campo');
+      return;
+    }
+    try {
+      const fornecedor = form.querySelector('[name="fornecedor_id"]');
+      const consulta = new URLSearchParams({ codigo });
+      if (fornecedor && fornecedor.value) consulta.set('fornecedor_id', fornecedor.value);
+      // Na edição, a própria conta não conta como "já cadastrado".
+      if (form.dataset.action === 'form-editar-conta' && form.dataset.id) consulta.set('ignorar', form.dataset.id);
+      const b = await apiFetch(`/contas/boleto?${consulta}`);
+
+      // Só preenche o que está vazio ou diferente do boleto: o que o papel diz
+      // é o certo, e quem leu o código quer exatamente isso.
+      const valor = form.querySelector('[name="valor"]');
+      const venc = form.querySelector('[name="vencimento"]');
+      if (b.valor && valor) valor.value = Number(b.valor).toFixed(2);
+      if (b.vencimento && venc) venc.value = b.vencimento;
+
+      const partes = [];
+      if (b.banco_nome || b.banco) partes.push(escapar(b.banco_nome || `banco ${b.banco}`));
+      if (b.tipo === 'arrecadacao') partes.push('conta de consumo / tributo');
+      if (b.vencimento) partes.push(`vence ${dateBR(b.vencimento)}`);
+      if (b.valor) partes.push(brl(b.valor));
+      if (b.nosso_numero) partes.push(`nosso número ${escapar(b.nosso_numero)}`);
+      if (b.tipo === 'nosso_numero') partes.push('sem leitor: valor e vencimento ficam como digitados');
+
+      if (b.ja_cadastrado) {
+        mostrar(`⚠️ ${escapar(b.ja_cadastrado.mensagem)}`, 'erro-campo');
+      } else {
+        mostrar(`✓ ${partes.join(' &middot; ')}`, 'ok-campo');
+      }
+    } catch (err) {
+      mostrar(`⚠️ ${escapar(err.message)}`, 'erro-campo');
+    }
+  }
+
+  campo.addEventListener('change', ler);
+  // Mostrar o que já está gravado ao abrir a edição.
+  if (campo.value) ler();
+}
+
 function ligarEnterQueAvanca(form) {
   form.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Enter' || ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return;
@@ -8649,6 +8734,7 @@ async function onNovaConta(ev) {
     valor: fd.get('valor'),
     vencimento: fd.get('vencimento'),
     forma_prevista: fd.get('forma_prevista') || null,
+    codigo_boleto: fd.get('codigo_boleto') || null,
     parcelas: fd.get('parcelas') || 1,
     intervalo: fd.get('intervalo_tipo') === 'dias' ? fd.get('intervalo_dias') || '30' : 'mensal',
   };
@@ -8662,12 +8748,14 @@ async function enviarNovaConta(payload) {
   try {
     await apiFetch('/contas', { method: 'POST', body: JSON.stringify(payload) });
     state.duplicidade = null;
+    state.novaContaComErro = null;
     carregarDados();
   } catch (err) {
     if (err.status === 409) {
       state.duplicidade = { mensagem: err.message, payload, existente: err.dados && err.dados.duplicada };
     } else {
       state.erro = err.message;
+      state.novaContaComErro = payload;
     }
     render();
   }
@@ -8703,6 +8791,7 @@ async function onEditarConta(ev) {
         valor: fd.get('valor'),
         vencimento: fd.get('vencimento'),
         forma_prevista: fd.get('forma_prevista') || null,
+        codigo_boleto: fd.get('codigo_boleto') || '',
       }),
     });
     state.edicaoContaId = null;

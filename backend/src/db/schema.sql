@@ -558,3 +558,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_taxas_contratadas_chave
 -- havia como cruzar depois com o extrato do banco ou da adquirente — e é
 -- justamente esse cruzamento que o dono quer fazer.
 ALTER TABLE mov_prazo ADD COLUMN IF NOT EXISTS forma_pagamento VARCHAR(40);
+
+-- Código do boleto, lido pelo leitor de código de barras no cadastro (ou a
+-- linha digitável colada). É a chave que cruza o boleto cadastrado com o
+-- pagamento no relatório do banco: nome e valor não bastam quando o mesmo
+-- fornecedor manda três parcelas iguais e uma é paga atrasada, com juros.
+--
+-- `nosso_numero` sai do próprio código quando o banco é conhecido, ou é o
+-- final do nosso número digitado à mão, quando não há leitor. Sem zeros à
+-- esquerda: "0000040273" e "40273" são o mesmo boleto.
+ALTER TABLE contas ADD COLUMN IF NOT EXISTS codigo_barras VARCHAR(44);
+ALTER TABLE contas ADD COLUMN IF NOT EXISTS nosso_numero VARCHAR(30);
+
+-- Um boleto é um só: o mesmo código em duas contas é cadastro repetido.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contas_codigo_barras
+  ON contas (codigo_barras) WHERE codigo_barras IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_contas_nosso_numero
+  ON contas (nosso_numero) WHERE nosso_numero IS NOT NULL;

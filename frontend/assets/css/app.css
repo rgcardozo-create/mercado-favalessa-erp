@@ -760,3 +760,9 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 .cartao-cliente-linha.linha-mes:first-child { border-top: none; }
 
 /* Painel de ação sem volta: a cor avisa antes de o texto ser lido. */
+
+/* Retorno da leitura do código do boleto, logo abaixo do campo. */
+.info-boleto { display: block; margin-top: 4px; font-size: 12px; font-weight: normal; }
+.info-boleto.neutro-campo { color: var(--texto-suave, #667085); }
+.info-boleto.ok-campo { color: #04785C; }
+.info-boleto.erro-campo { color: #912018; }

@@ -1,6 +1,74 @@
 const pool = require('../db/pool');
 const { registrarAuditoria } = require('../utils/auditoria');
 const { SELECT_CONTAS_COM_SALDO, SEM_ACENTO, HOJE_SP, TIPOS_VALIDOS } = require('../db/contasQuery');
+const { lerCodigoBoleto } = require('../utils/boleto');
+
+// ── Código do boleto ─────────────────────────────────────────────────────────
+//
+// O campo aceita o que o leitor de código de barras devolve, a linha digitável
+// colada ou o final do nosso número digitado. Ver utils/boleto.js.
+
+const semZerosAEsquerda = (n) => (n ? String(n).replace(/^0+(?=\d)/, '') : null);
+const dataBR = (iso) => (iso ? iso.split('-').reverse().join('/') : '');
+const reais = (n) => `R$ ${Number(n).toFixed(2).replace('.', ',')}`;
+
+// O que do boleto vai para a conta, ou o motivo de recusar. `valor` e
+// `vencimento` são os que a conta vai ter: se o código diz outra coisa, alguém
+// leu o boleto errado ou digitou errado, e isso precisa aparecer agora, não
+// quando o pagamento não bater.
+function dadosDoCodigo(texto, { valor, vencimento }) {
+  const lido = lerCodigoBoleto(texto);
+  if (!lido) return { codigo_barras: null, nosso_numero: null };
+  if (lido.erro) return { erro: lido.erro };
+
+  if (lido.valor && valor !== undefined && valor !== null && valor !== '' &&
+      Math.abs(Number(valor) - lido.valor) > 0.004) {
+    return {
+      erro: `O código de barras diz ${reais(lido.valor)}, e o valor digitado é ${reais(valor)}. ` +
+        'Confira o boleto: o valor da conta precisa ser o do documento.',
+    };
+  }
+  const venc = vencimento ? String(vencimento).slice(0, 10) : null;
+  if (lido.vencimento && venc && venc !== lido.vencimento) {
+    return {
+      erro: `O código de barras diz vencimento ${dataBR(lido.vencimento)}, e o digitado é ${dataBR(venc)}. ` +
+        'Confira o boleto.',
+    };
+  }
+
+  return {
+    codigo_barras: lido.codigo_barras,
+    nosso_numero: semZerosAEsquerda(lido.nosso_numero),
+    lido,
+  };
+}
+
+// Conta que já tem este boleto. O código de barras é exato; o nosso número
+// digitado só conta como repetido dentro do mesmo fornecedor, porque números
+// curtos se repetem entre bancos diferentes.
+async function contaComOMesmoBoleto({ codigoBarras, nossoNumero, fornecedorId, ignorarId = null }) {
+  if (!codigoBarras && !nossoNumero) return null;
+  const { rows } = await pool.query(
+    `SELECT c.id, c.descricao, c.valor, f.nome AS fornecedor_nome,
+            to_char(c.vencimento, 'DD/MM/YYYY') AS vencimento_br
+       FROM contas c
+       LEFT JOIN fornecedores f ON f.id = c.fornecedor_id
+      WHERE ($4::bigint IS NULL OR c.id <> $4)
+        AND (($1::text IS NOT NULL AND c.codigo_barras = $1)
+          OR ($1::text IS NULL AND $2::text IS NOT NULL AND c.nosso_numero = $2
+              AND c.fornecedor_id IS NOT DISTINCT FROM $3))
+      ORDER BY c.id
+      LIMIT 1`,
+    [codigoBarras, nossoNumero, fornecedorId || null, ignorarId]
+  );
+  return rows[0] || null;
+}
+
+function mensagemBoletoRepetido(existente) {
+  const quem = existente.fornecedor_nome ? `${existente.fornecedor_nome} — ` : '';
+  return `Este boleto já está cadastrado: ${quem}${existente.descricao}, vencimento ` +
+    `${existente.vencimento_br}, ${reais(existente.valor)}.`;
+}
 
 // O mesmo boleto lançado duas vezes é: mesmo fornecedor, mesmo valor, mesmo
 // vencimento. A descrição fica de fora — é texto livre, muda a cada digitação
@@ -89,7 +157,23 @@ async function listar(req, res) {
     // `%` e `_` digitados são texto, não curinga — quem busca "100%" quer 100%.
     params.push(`%${termo.replace(/([\\%_])/g, '\\$1')}%`);
     const alvo = `coalesce(t.fornecedor_nome, '') || ' ' || t.descricao || ' ' || coalesce(t.categoria, '')`;
-    filtros.push(`${SEM_ACENTO(alvo)} LIKE ${SEM_ACENTO(`$${params.length}`)} ESCAPE '\\'`);
+    const porTexto = `${SEM_ACENTO(alvo)} LIKE ${SEM_ACENTO(`$${params.length}`)} ESCAPE '\\'`;
+
+    // Passar o leitor no campo de busca acha o boleto: com o papel na mão, é
+    // o jeito mais rápido de chegar na conta para dar baixa. Número curto
+    // procura no nosso número, que é o que se lê no papel sem leitor.
+    const lido = lerCodigoBoleto(termo);
+    if (lido && !lido.erro && /^[\d\s.\-]+$/.test(termo)) {
+      if (lido.codigo_barras) {
+        params.push(lido.codigo_barras);
+        filtros.push(`(${porTexto} OR t.codigo_barras = $${params.length})`);
+      } else {
+        params.push(`%${lido.nosso_numero}`);
+        filtros.push(`(${porTexto} OR t.nosso_numero LIKE $${params.length})`);
+      }
+    } else {
+      filtros.push(porTexto);
+    }
   }
 
   // `mes` só escolhe uma expressão de uma lista fixa; valor desconhecido vira
@@ -188,6 +272,31 @@ async function descricoesUsuais(req, res) {
   return res.json(porFornecedor);
 }
 
+function soDigitosDe(texto) {
+  return String(texto ?? '').replace(/\D/g, '');
+}
+
+// Lê o código assim que o leitor termina, para a tela preencher valor e
+// vencimento e avisar, antes de cadastrar, se o boleto já está no sistema.
+async function lerBoleto(req, res) {
+  const lido = lerCodigoBoleto(req.query.codigo);
+  if (!lido) return res.status(400).json({ error: 'Informe o código do boleto.' });
+  if (lido.erro) return res.status(400).json({ error: lido.erro });
+
+  const existente = await contaComOMesmoBoleto({
+    codigoBarras: lido.codigo_barras,
+    nossoNumero: lido.codigo_barras ? null : semZerosAEsquerda(lido.nosso_numero),
+    fornecedorId: req.query.fornecedor_id || null,
+    ignorarId: Number(req.query.ignorar) || null,
+  });
+
+  return res.json({
+    ...lido,
+    nosso_numero: semZerosAEsquerda(lido.nosso_numero),
+    ja_cadastrado: existente ? { ...existente, mensagem: mensagemBoletoRepetido(existente) } : null,
+  });
+}
+
 async function obter(req, res) {
   const { id } = req.params;
   const { rows } = await pool.query(`${SELECT_CONTAS_COM_SALDO} WHERE c.id = $1`, [id]);
@@ -240,8 +349,18 @@ async function datasDasParcelas({ vencimento, parcelas, intervalo }) {
 }
 
 async function criar(req, res) {
-  const { fornecedor_id, descricao, valor, vencimento, categoria, forma_prevista } = req.body;
+  const { fornecedor_id, descricao, categoria, forma_prevista } = req.body;
+  let { valor, vencimento } = req.body;
   const tipo = req.body.tipo || 'fornecedor';
+
+  // O código do boleto vem antes de tudo porque ele pode preencher o valor e o
+  // vencimento que faltarem.
+  const boleto = dadosDoCodigo(req.body.codigo_boleto, { valor, vencimento });
+  if (boleto.erro) return res.status(400).json({ error: boleto.erro });
+  if (boleto.lido) {
+    if ((valor === undefined || valor === null || valor === '') && boleto.lido.valor) valor = boleto.lido.valor;
+    if (!vencimento && boleto.lido.vencimento) vencimento = boleto.lido.vencimento;
+  }
 
   if (!descricao || valor === undefined || !vencimento) {
     return res.status(400).json({ error: 'descricao, valor e vencimento são obrigatórios.' });
@@ -278,6 +397,21 @@ async function criar(req, res) {
     });
   }
 
+  // Cada parcela tem o seu boleto, com o seu código. Um código para três
+  // parcelas deixaria duas sem chave — ou com a chave errada.
+  if ((boleto.codigo_barras || boleto.nosso_numero) && parcelas > 1) {
+    return res.status(400).json({
+      error: 'O código é de um boleto só. Cadastre cada parcela com o código do boleto dela, com 1 parcela.',
+    });
+  }
+
+  const repetido = await contaComOMesmoBoleto({
+    codigoBarras: boleto.codigo_barras,
+    nossoNumero: boleto.nosso_numero,
+    fornecedorId,
+  });
+  if (repetido) return res.status(400).json({ error: mensagemBoletoRepetido(repetido) });
+
   const datas = await datasDasParcelas({ vencimento, parcelas, intervalo });
 
   if (!req.body.permitir_duplicado) {
@@ -298,8 +432,8 @@ async function criar(req, res) {
       const { rows } = await cliente.query(
         `INSERT INTO contas
            (tipo, categoria, fornecedor_id, descricao, valor, vencimento, forma_prevista,
-            parcela, total_parcelas, criado_por)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+            parcela, total_parcelas, criado_por, codigo_barras, nosso_numero)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
         [
           tipo,
           categoria || null,
@@ -311,6 +445,8 @@ async function criar(req, res) {
           parcelas > 1 ? i + 1 : null,
           parcelas > 1 ? parcelas : null,
           req.user.id,
+          boleto.codigo_barras,
+          boleto.nosso_numero,
         ]
       );
       inseridas.push(rows[0]);
@@ -486,6 +622,33 @@ async function atualizar(req, res) {
     if (existente) return respostaDuplicada(res, existente);
   }
 
+  // Código do boleto: só mexe se o campo veio no corpo. Vazio apaga — quem leu
+  // o boleto errado precisa conseguir desfazer. Conferido contra o valor e o
+  // vencimento que a conta vai ter depois desta edição.
+  const mexeuNoCodigo = Object.prototype.hasOwnProperty.call(req.body, 'codigo_boleto');
+  let boleto = { codigo_barras: null, nosso_numero: null };
+  if (mexeuNoCodigo && soDigitosDe(req.body.codigo_boleto)) {
+    const { rows: atuais } = await pool.query('SELECT * FROM contas WHERE id = $1', [id]);
+    if (!atuais[0]) return res.status(404).json({ error: 'Conta não encontrada.' });
+    const atual = atuais[0];
+    const vencAtual = atual.vencimento instanceof Date
+      ? atual.vencimento.toISOString().slice(0, 10)
+      : String(atual.vencimento).slice(0, 10);
+    boleto = dadosDoCodigo(req.body.codigo_boleto, {
+      valor: valor ?? atual.valor,
+      vencimento: vencimento || vencAtual,
+    });
+    if (boleto.erro) return res.status(400).json({ error: boleto.erro });
+
+    const repetido = await contaComOMesmoBoleto({
+      codigoBarras: boleto.codigo_barras,
+      nossoNumero: boleto.nosso_numero,
+      fornecedorId: fornecedor_id === undefined ? atual.fornecedor_id : fornecedor_id || null,
+      ignorarId: atual.id,
+    });
+    if (repetido) return res.status(400).json({ error: mensagemBoletoRepetido(repetido) });
+  }
+
   // `tipo` não é editável: mudar o tipo de uma conta já lançada bagunçaria o
   // histórico e os totais por tela. Para trocar, exclua e lance de novo.
   //
@@ -502,10 +665,15 @@ async function atualizar(req, res) {
          vencimento = COALESCE($4, vencimento),
          categoria = COALESCE($5, categoria),
          forma_prevista = CASE WHEN $6 THEN $7 ELSE forma_prevista END,
+         codigo_barras = CASE WHEN $9 THEN $10 ELSE codigo_barras END,
+         nosso_numero = CASE WHEN $9 THEN $11 ELSE nosso_numero END,
          atualizado_em = now()
      WHERE id = $8
      RETURNING *`,
-    [fornecedor_id, descricao, valor, vencimento, categoria, mexeuNaForma, forma_prevista || null, id]
+    [
+      fornecedor_id, descricao, valor, vencimento, categoria, mexeuNaForma, forma_prevista || null, id,
+      mexeuNoCodigo, boleto.codigo_barras, boleto.nosso_numero,
+    ]
   );
 
   if (!rows[0]) {
@@ -662,6 +830,7 @@ module.exports = {
   listar,
   descricoesUsuais,
   obter,
+  lerBoleto,
   criar,
   atualizar,
   deletar,
