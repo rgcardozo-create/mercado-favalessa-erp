@@ -99,6 +99,24 @@ function normalizarForma(forma) {
   return normalizar(texto).includes('pix') ? 'Pix' : texto;
 }
 
+// Venda que o cartão recusou não é venda: o dinheiro nunca entrou.
+//
+// A partir de 13/10/2026 o relatório da Cielo filtrado por "Todos os status"
+// passou a trazer as tentativas "Não aprovada" junto com as vendas: valor bruto
+// cheio, taxa zero e líquido zero. Lidas como venda, cada recusa virava 100% de
+// taxa — R$ 5.357,28 de "despesa com maquininha" num único mês, quase tudo
+// cliente que teve o cartão negado e pagou de novo minutos depois.
+//
+// Cancelada e desfeita entram junto: também não viram dinheiro na conta.
+const STATUS_RECUSADO = [
+  'nao aprovad', 'reprovad', 'negad', 'recusad', 'nao autorizad', 'desfeit', 'cancelad',
+];
+
+function ehRecusada(status) {
+  const s = normalizar(status);
+  return Boolean(s) && STATUS_RECUSADO.some((m) => s.includes(m));
+}
+
 function valorDe(linha, mapa, campo) {
   const i = mapa[campo];
   return i === undefined || i === null ? '' : linha[i];
@@ -106,10 +124,16 @@ function valorDe(linha, mapa, campo) {
 
 // Transforma as linhas do arquivo em transações prontas para gravar.
 // `adquirente` é o que o usuário escolheu; linhas de voucher são desviadas
-// para 'tickets'.
+// para 'tickets'. Vendas recusadas não entram em `transacoes`: saem contadas
+// em `recusadas`, e `recusadasLista` guarda cada uma para a gravação apagar o
+// que uma importação anterior tenha gravado delas. `naOrdem` tem as duas, na
+// ordem do arquivo: é nessa ordem que a impressão digital numera vendas iguais,
+// e só assim ela sai igual à de quando o mesmo arquivo foi gravado antes.
 function converterLinhas(linhas, mapa, adquirente, nomeArquivo) {
   const transacoes = [];
   const ignoradas = [];
+  const recusadasLista = [];
+  const naOrdem = [];
 
   for (const linha of linhas) {
     const data = paraDataISO(valorDe(linha, mapa, 'data'));
@@ -148,8 +172,9 @@ function converterLinhas(linhas, mapa, adquirente, nomeArquivo) {
     const liquido = Number((bruto - tarifa).toFixed(6));
 
     const ticket = ehTicket(forma, bandeira);
+    const status = String(valorDe(linha, mapa, 'status') ?? '').trim() || 'Aprovada';
 
-    transacoes.push({
+    const transacao = {
       adquirente: ticket ? 'tickets' : adquirente,
       data,
       // Extrato que junta data e hora numa coluna só (Stone: "28/07/2026 10:08")
@@ -161,12 +186,28 @@ function converterLinhas(linhas, mapa, adquirente, nomeArquivo) {
       tarifa,
       valorLiquido: liquido,
       categoria: ticket ? 'ticket' : 'cartao',
-      status: String(valorDe(linha, mapa, 'status') ?? '').trim() || 'Aprovada',
+      status,
       arquivo: nomeArquivo || null,
-    });
+    };
+
+    naOrdem.push(transacao);
+    if (ehRecusada(status)) recusadasLista.push(transacao);
+    else transacoes.push(transacao);
   }
 
-  return { transacoes, ignoradas: ignoradas.length };
+  const brutoRecusado = recusadasLista.reduce((a, t) => a + t.valorBruto, 0);
+
+  return {
+    transacoes,
+    ignoradas: ignoradas.length,
+    recusadas: recusadasLista.length
+      ? { quantidade: recusadasLista.length, bruto: Number(brutoRecusado.toFixed(2)) }
+      : null,
+    recusadasLista,
+    naOrdem,
+  };
 }
 
-module.exports = { converterLinhas, paraDataISO, paraHora, paraValor, ehTicket, normalizarForma };
+module.exports = {
+  converterLinhas, paraDataISO, paraHora, paraValor, ehTicket, normalizarForma, ehRecusada,
+};
