@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.70.0';
+const VERSAO = '1.71.0';
 
 const state = {
   sessao: getSessao(),
@@ -1185,7 +1185,7 @@ function avisoSemTaxaHTML(s) {
     </div>`;
 }
 
-function avisoTaxasSuspeitasHTML(s) {
+function avisoTaxasSuspeitasHTML(s, semStatus) {
   if (!s) return '';
 
   return `
@@ -1206,8 +1206,32 @@ function avisoTaxasSuspeitasHTML(s) {
           )
           .join('')}
       </ul>
+      ${
+        semStatus
+          ? `<strong>Este arquivo não tem a coluna de status da venda.</strong> O “Calendário de vendas” da
+             Cielo soma no valor bruto as tentativas que o cartão <strong>recusou</strong>, que não têm taxa nem
+             líquido — e isso aparece aqui como taxa alta. Baixe o <strong>“Detalhado de vendas”</strong>, que
+             traz o status: com ele o sistema deixa as recusadas de fora sozinho.<br><br>`
+          : ''
+      }
       Se esses números não fizerem sentido no seu extrato, <strong>não importe</strong> — me mande o
       arquivo que eu acerto a leitura.
+    </div>`;
+}
+
+// Vendas que o cartão recusou e ficaram de fora da importação.
+//
+// Desde 13/10/2026 o relatório da Cielo com "Todos os status" traz as tentativas
+// "Não aprovada". O sistema não grava essas linhas — o dinheiro não entrou —,
+// mas mostra quantas e quanto, para o bruto do arquivo bater com o do portal.
+function avisoRecusadasHTML(r) {
+  if (!r) return '';
+
+  return `
+    <div class="alerta aviso">
+      <strong>${r.quantidade} venda(s) recusada(s) ficam de fora</strong>, somando ${brl(r.bruto)}.
+      São tentativas que o cartão não aprovou (ou que foram canceladas): o dinheiro não entrou, então não
+      contam como venda nem como taxa. Por isso o bruto aqui fica abaixo do total do portal da adquirente.
     </div>`;
 }
 
@@ -1323,7 +1347,8 @@ function importarExtratoHTML() {
                   .join('')}
               </tbody>
             </table>
-            ${avisoTaxasSuspeitasHTML(e.previa.taxas_suspeitas)}
+            ${avisoRecusadasHTML(e.previa.recusadas)}
+            ${avisoTaxasSuspeitasHTML(e.previa.taxas_suspeitas, e.previa.sem_status)}
             ${avisoSemTaxaHTML(e.previa.sem_taxa)}
             <button id="btn-extrato-importar">Importar de verdade</button>`
           : ''
@@ -1335,6 +1360,18 @@ function importarExtratoHTML() {
               <strong>Importado.</strong>
               ${state.extratoResultado.novas} nova(s) e
               ${state.extratoResultado.atualizadas} já existente(s) atualizada(s).
+              ${
+                state.extratoResultado.recusadas
+                  ? `<br>${state.extratoResultado.recusadas.quantidade} venda(s) recusada(s) ficaram de fora
+                     (${brl(state.extratoResultado.recusadas.bruto)}).`
+                  : ''
+              }
+              ${
+                state.extratoResultado.recusadas_apagadas
+                  ? `<br>${state.extratoResultado.recusadas_apagadas} recusada(s) que uma importação anterior
+                     tinha gravado como venda foram apagadas.`
+                  : ''
+              }
             </div>`
           : ''
       }

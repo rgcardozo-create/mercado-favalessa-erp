@@ -19,16 +19,26 @@ const ERRO_TROCOU_QUADRO = {
 // Grava as transações lidas de um extrato. Usa a mesma impressão digital da
 // importação de backup, então reimportar o mesmo período (ou um extrato que se
 // sobrepõe a outro já carregado) atualiza em vez de duplicar.
-async function gravarTransacoes(transacoes) {
+//
+// `naOrdem` traz as vendas recusadas junto, na ordem do arquivo. Elas não são
+// gravadas, mas contam na numeração da impressão digital — uma recusa e a venda
+// aprovada logo depois podem ter mesma hora, valor e bandeira — e o que houver
+// delas no banco, de uma importação feita antes desta correção, é apagado.
+async function gravarTransacoes(transacoes, naOrdem = transacoes) {
   const client = await pool.connect();
   const vistos = new Map();
 
-  const impressoes = transacoes.map((t) =>
-    impressaoDigital(vistos, [
+  const impressaoDe = new Map();
+  for (const t of naOrdem) {
+    impressaoDe.set(t, impressaoDigital(vistos, [
       t.adquirente, t.data, t.hora, Number(t.valorBruto).toFixed(2), t.bandeira, t.forma,
-    ])
-  );
+    ]));
+  }
+  const impressoes = transacoes.map((t) => impressaoDe.get(t));
+  const aceitas = new Set(transacoes);
+  const impressoesRecusadas = naOrdem.filter((t) => !aceitas.has(t)).map((t) => impressaoDe.get(t));
   let jaExistiam = new Set();
+  let recusadasApagadas = 0;
 
   try {
     await client.query('BEGIN');
@@ -61,6 +71,14 @@ async function gravarTransacoes(transacoes) {
       );
     }
 
+    if (impressoesRecusadas.length) {
+      const apagadas = await client.query(
+        'DELETE FROM conciliacao_transacoes WHERE impressao_digital = ANY($1)',
+        [impressoesRecusadas]
+      );
+      recusadasApagadas = apagadas.rowCount;
+    }
+
     await client.query('COMMIT');
   } catch (err) {
     await client.query('ROLLBACK');
@@ -82,7 +100,9 @@ async function gravarTransacoes(transacoes) {
     else novas += 1;
   });
 
-  return { total: transacoes.length, novas, atualizadas, por_tipo: porTipo };
+  return {
+    total: transacoes.length, novas, atualizadas, por_tipo: porTipo, recusadas_apagadas: recusadasApagadas,
+  };
 }
 
 const ROTULOS = {
@@ -377,7 +397,7 @@ async function analisarExtratoEnviado(req, res) {
   if (analise.reconhecido && adquirente) {
     const linhas = await lerArquivo(arquivo.buffer, arquivo.nome);
     const dados = linhas.slice(analise.linha_cabecalho + 1);
-    const { transacoes, ignoradas } = converterLinhas(dados, mapa, adquirente, arquivo.nome);
+    const { transacoes, ignoradas, recusadas } = converterLinhas(dados, mapa, adquirente, arquivo.nome);
 
     const porTipo = {};
     for (const t of transacoes) {
@@ -389,6 +409,12 @@ async function analisarExtratoEnviado(req, res) {
     previa = {
       total: transacoes.length,
       ignoradas,
+      // Tentativas que o cartão recusou: ficam de fora, mas a tela mostra
+      // quantas e quanto, para o total bater com o do portal da adquirente.
+      recusadas,
+      // Sem coluna de status não dá para separar recusa de venda. O "Calendário
+      // de vendas" da Cielo é assim; o "Detalhado de vendas" tem a coluna.
+      sem_status: mapa.status === undefined || mapa.status === null,
       por_tipo: porTipo,
       periodo: transacoes.length
         ? { de: transacoes.reduce((a, t) => (t.data < a ? t.data : a), transacoes[0].data),
@@ -433,23 +459,28 @@ async function importarExtrato(req, res) {
 
   const linhas = await lerArquivo(arquivo.buffer, arquivo.nome);
   const dados = linhas.slice((analise.linha_cabecalho ?? -1) + 1);
-  const { transacoes, ignoradas } = converterLinhas(dados, mapa, adquirente, arquivo.nome);
+  const { transacoes, ignoradas, recusadas, naOrdem } =
+    converterLinhas(dados, mapa, adquirente, arquivo.nome);
 
   if (!transacoes.length) {
-    return res.status(400).json({ error: 'Nenhuma transação encontrada no arquivo.' });
+    return res.status(400).json({
+      error: recusadas
+        ? 'O arquivo só tem vendas recusadas: nada para importar.'
+        : 'Nenhuma transação encontrada no arquivo.',
+    });
   }
 
-  const resultado = await gravarTransacoes(transacoes);
+  const resultado = await gravarTransacoes(transacoes, naOrdem);
 
   await registrarAuditoria({
     usuarioId: req.user.id,
     acao: 'importacao',
     entidade: 'conciliacao',
     entidadeId: 0,
-    dados: { arquivo: arquivo.nome, adquirente, ...resultado },
+    dados: { arquivo: arquivo.nome, adquirente, ...resultado, recusadas },
   });
 
-  return res.json({ ...resultado, ignoradas });
+  return res.json({ ...resultado, ignoradas, recusadas });
 }
 
 // ── Vendas por caixa (dinheiro do PDV) ───────────────────────────────────────
