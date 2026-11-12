@@ -575,3 +575,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_contas_codigo_barras
   ON contas (codigo_barras) WHERE codigo_barras IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_contas_nosso_numero
   ON contas (nosso_numero) WHERE nosso_numero IS NOT NULL;
+
+-- Baixa que veio de um relatório do banco: a referência do pagamento lá
+-- (data, nosso número ou CNPJ, valor). Reimportar o mesmo relatório, ou um
+-- período que se sobrepõe, encontra a referência e não dá baixa duas vezes.
+ALTER TABLE contas_pagamentos ADD COLUMN IF NOT EXISTS ref_externa VARCHAR(160);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contas_pagamentos_ref_externa
+  ON contas_pagamentos (ref_externa) WHERE ref_externa IS NOT NULL;
