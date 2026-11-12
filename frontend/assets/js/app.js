@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.72.0';
+const VERSAO = '1.73.0';
 
 const state = {
   sessao: getSessao(),
@@ -5231,6 +5231,8 @@ function contasHTML() {
       </form>
     </section>
 
+    ${podeGerir ? pagamentosBancoHTML() : ''}
+
     ${barraMoverContasHTML()}
 
     <div class="filtros">
@@ -6114,6 +6116,7 @@ function bind() {
   // foco cai no botão, e aí o Enter cadastra.
   root.querySelectorAll('form.form-inline').forEach(ligarEnterQueAvanca);
   root.querySelectorAll('input[name="codigo_boleto"]').forEach(ligarLeituraDeBoleto);
+  ligarPagamentosBanco(root);
 
   ligarMaiusculas(root);
 
@@ -8616,6 +8619,274 @@ async function onMoverContas() {
     carregarDados();
   } catch (err) {
     state.erro = err.message;
+    render();
+  }
+}
+
+// ── Baixa pelo relatório de pagamentos do banco ─────────────────────────────
+//
+// O dono paga no banco e não lança nada aqui. Depois baixa o "Relatório de
+// Pagamentos Realizados" do BB em PDF e envia: o sistema acha cada boleto e
+// mostra a proposta. Ele confere, troca o que precisar e só então grava.
+
+const SITUACAO_PAGAMENTO_BANCO = {
+  codigo: ['✓ Código de barras', 'ok'],
+  nosso_numero: ['✓ Nosso número', 'ok'],
+  cnpj_valor: ['✓ CNPJ e valor', 'ok'],
+  juros: ['Pago com juros', 'atencao'],
+  escolher: ['Escolha o boleto', 'atencao'],
+  pelo_nome: ['Pelo nome — confirme', 'atencao'],
+  sem_cadastro: ['Não cadastrado', 'neutro'],
+  ja_importado: ['Já importado', 'neutro'],
+  ja_baixado: ['Já baixado', 'neutro'],
+};
+
+// Já vem marcado o que o sistema achou com segurança. "Pelo nome" vem
+// desmarcado de propósito: nome engana, e quem confirma é o dono.
+const MARCADO_DE_INICIO = new Set(['codigo', 'nosso_numero', 'cnpj_valor', 'juros', 'escolher']);
+const PODE_GRAVAR = new Set(['codigo', 'nosso_numero', 'cnpj_valor', 'juros', 'escolher', 'pelo_nome']);
+
+function escolhasIniciais(itens) {
+  const escolhas = {};
+  for (const i of itens) {
+    escolhas[i.ref] = {
+      marcado: MARCADO_DE_INICIO.has(i.situacao) && Boolean(i.conta_id),
+      conta_id: i.conta_id ? String(i.conta_id) : '',
+    };
+  }
+  return escolhas;
+}
+
+function marcadosPagamentoBanco() {
+  const pb = state.pagBanco;
+  if (!pb || !pb.analise) return [];
+  return pb.analise.itens.filter((i) => {
+    const e = pb.escolhas[i.ref];
+    return PODE_GRAVAR.has(i.situacao) && e && e.marcado && e.conta_id;
+  });
+}
+
+function opcaoContaTexto(o) {
+  const juros = o.diferenca > 0.004 ? ` · +${brl(o.diferenca)} de juros` : '';
+  const desconto = o.diferenca < -0.004 ? ` · ${brl(-o.diferenca)} a menos` : '';
+  return `${dateBR(o.vencimento)} · ${o.fornecedor || '—'} · ${o.descricao} · saldo ${brl(o.saldo)}${juros}${desconto}`;
+}
+
+function linhaPagamentoBancoHTML(i) {
+  const pb = state.pagBanco;
+  const e = pb.escolhas[i.ref] || {};
+  const [rotulo, classe] = SITUACAO_PAGAMENTO_BANCO[i.situacao] || [i.situacao, 'neutro'];
+  const grava = PODE_GRAVAR.has(i.situacao);
+  const p = i.pagamento;
+
+  let conta = '—';
+  if (grava && (i.opcoes.length > 1 || !i.conta_id)) {
+    conta = `<select data-pb-conta="${escapar(i.ref)}">
+      <option value="">— escolha o boleto —</option>
+      ${i.opcoes
+        .map((o) => `<option value="${o.id}" ${String(o.id) === String(e.conta_id) ? 'selected' : ''}>${escapar(opcaoContaTexto(o))}</option>`)
+        .join('')}
+    </select>`;
+  } else if (i.opcoes.length) {
+    conta = escapar(opcaoContaTexto(i.opcoes[0]));
+  }
+
+  const escolhida = i.opcoes.find((o) => String(o.id) === String(e.conta_id));
+  const extra = i.situacao === 'juros' && escolhida ? ` +${brl(escolhida.diferenca)}` : '';
+
+  return `
+    <tr class="${grava && e.marcado ? 'marcada' : ''}">
+      <td class="col-marca">${
+        grava
+          ? `<input type="checkbox" data-pb-marca="${escapar(i.ref)}" ${e.marcado ? 'checked' : ''} ${e.conta_id ? '' : 'disabled'} />`
+          : ''
+      }</td>
+      <td>${dateBR(p.data)}</td>
+      <td>${escapar(p.nome || p.descricao || '—')}${
+        p.nome && p.descricao ? `<br><small class="vazio-texto">${escapar(p.descricao)}</small>` : ''
+      }</td>
+      <td>${brl(p.valor)}</td>
+      <td>${conta}</td>
+      <td><span class="badge pb-${classe}" title="${escapar(i.motivo || '')}">${rotulo}${extra}</span>
+        ${i.motivo ? `<br><small class="vazio-texto">${escapar(i.motivo)}</small>` : ''}</td>
+    </tr>`;
+}
+
+function pagamentosBancoHTML() {
+  const pb = state.pagBanco || {};
+  const a = pb.analise;
+  const marcados = marcadosPagamentoBanco();
+  const totalMarcado = marcados.reduce((s, i) => s + i.pagamento.valor, 0);
+  const bancoEscolhido = pb.banco_id || (a && a.banco_sugerido) || '';
+
+  const contagem = a
+    ? Object.entries(a.resumo)
+        .map(([sit, r]) => `${r.quantidade} ${(SITUACAO_PAGAMENTO_BANCO[sit] || [sit])[0].replace('✓ ', '').toLowerCase()}`)
+        .join(' &middot; ')
+    : '';
+
+  return `
+    <details class="cartao-pagamentos-banco" ${pb.aberto ? 'open' : ''}>
+      <summary><strong>Dar baixa pelo relatório do banco</strong>
+        <small class="vazio-texto">— envie o "Relatório de Pagamentos Realizados" do BB (PDF) e o sistema acha os boletos</small>
+      </summary>
+
+      <div class="form-inline">
+        <label class="campo-largo">PDF do relatório
+          <input type="file" id="pb-arquivo" accept="application/pdf,.pdf" />
+        </label>
+        <button type="button" id="pb-conferir" ${pb.arquivo && !pb.carregando ? '' : 'disabled'}>
+          ${pb.carregando ? 'Lendo…' : 'Conferir'}
+        </button>
+        <p class="vazio campo-largo">
+          No site do BB, baixe o relatório pelo botão de <strong>PDF</strong> (não use "imprimir").
+          Nada é gravado ao conferir: você vê o que o sistema achou e escolhe o que dar baixa.
+        </p>
+      </div>
+
+      ${
+        pb.resultado
+          ? `<div class="alerta sucesso"><strong>Baixa feita.</strong> ${pb.resultado.gravados} pagamento(s), ${brl(pb.resultado.valor)}.${
+              pb.resultado.recusados.length
+                ? `<br>${pb.resultado.recusados.length} não gravado(s): ${pb.resultado.recusados.map((r) => escapar(r.motivo)).join('; ')}`
+                : ''
+            }</div>`
+          : ''
+      }
+
+      ${
+        a
+          ? `<p class="vazio-texto">
+              <strong>${a.total.quantidade}</strong> pagamento(s)${
+                a.periodo ? ` de ${dateBR(a.periodo.de)} a ${dateBR(a.periodo.ate)}` : ''
+              }, ${brl(a.total.valor)} &middot; ${contagem}
+            </p>
+            <div class="tabela-rolagem">
+            <table class="tabela-contas">
+              <thead><tr><th></th><th>Pago em</th><th>No relatório</th><th>Valor pago</th><th>Boleto no sistema</th><th>Situação</th></tr></thead>
+              <tbody>${a.itens.map(linhaPagamentoBancoHTML).join('')}</tbody>
+            </table>
+            </div>
+            <div class="form-inline">
+              <label>Banco do pagamento
+                <select id="pb-banco">
+                  <option value="">— sem banco —</option>
+                  ${(state.bancos || [])
+                    .map((b) => `<option value="${b.id}" ${String(b.id) === String(bancoEscolhido) ? 'selected' : ''}>${escapar(b.nome)}</option>`)
+                    .join('')}
+                </select>
+              </label>
+              <button type="button" id="pb-importar" ${marcados.length && !pb.carregando ? '' : 'disabled'}>
+                Dar baixa nos marcados (${marcados.length} &middot; ${brl(totalMarcado)})
+              </button>
+              <button type="button" id="pb-limpar" class="secundario">Cancelar</button>
+            </div>`
+          : ''
+      }
+    </details>`;
+}
+
+function ligarPagamentosBanco(root) {
+  const quadro = root.querySelector('.cartao-pagamentos-banco');
+  if (!quadro) return;
+  state.pagBanco = state.pagBanco || {};
+  const pb = state.pagBanco;
+
+  quadro.addEventListener('toggle', () => { pb.aberto = quadro.open; });
+
+  const arquivo = root.querySelector('#pb-arquivo');
+  if (arquivo) {
+    arquivo.addEventListener('change', async () => {
+      const f = arquivo.files && arquivo.files[0];
+      if (!f) return;
+      pb.arquivo = { nome: f.name, base64: await paraBase64(f) };
+      pb.analise = null;
+      pb.resultado = null;
+      await onConferirPagamentosBanco();
+    });
+  }
+  const conferir = root.querySelector('#pb-conferir');
+  if (conferir) conferir.addEventListener('click', onConferirPagamentosBanco);
+
+  root.querySelectorAll('[data-pb-marca]').forEach((caixa) => {
+    caixa.addEventListener('change', () => {
+      pb.escolhas[caixa.dataset.pbMarca].marcado = caixa.checked;
+      render();
+    });
+  });
+  root.querySelectorAll('[data-pb-conta]').forEach((sel) => {
+    sel.addEventListener('change', () => {
+      const e = pb.escolhas[sel.dataset.pbConta];
+      e.conta_id = sel.value;
+      // Escolher a conta já é a confirmação; tirar a escolha desmarca.
+      e.marcado = Boolean(sel.value);
+      render();
+    });
+  });
+  const banco = root.querySelector('#pb-banco');
+  if (banco) banco.addEventListener('change', () => { pb.banco_id = banco.value; });
+
+  const importar = root.querySelector('#pb-importar');
+  if (importar) importar.addEventListener('click', onImportarPagamentosBanco);
+  const limpar = root.querySelector('#pb-limpar');
+  if (limpar) {
+    limpar.addEventListener('click', () => {
+      state.pagBanco = { aberto: true };
+      render();
+    });
+  }
+}
+
+async function onConferirPagamentosBanco() {
+  const pb = state.pagBanco;
+  if (!pb || !pb.arquivo) return;
+  pb.carregando = true;
+  pb.resultado = null;
+  state.erro = null;
+  render();
+  try {
+    pb.analise = await apiFetch('/contas/pagamentos-banco/analisar', {
+      method: 'POST',
+      body: JSON.stringify({ arquivo_base64: pb.arquivo.base64 }),
+    });
+    pb.escolhas = escolhasIniciais(pb.analise.itens);
+    pb.banco_id = pb.banco_id || (pb.analise.banco_sugerido ? String(pb.analise.banco_sugerido) : '');
+  } catch (err) {
+    state.erro = err.message;
+    pb.analise = null;
+  } finally {
+    pb.carregando = false;
+    render();
+  }
+}
+
+async function onImportarPagamentosBanco() {
+  const pb = state.pagBanco;
+  const marcados = marcadosPagamentoBanco();
+  if (!marcados.length) return;
+  const total = marcados.reduce((s, i) => s + i.pagamento.valor, 0);
+  if (!confirm(`Dar baixa em ${marcados.length} boleto(s), somando ${brl(total)}?`)) return;
+
+  pb.carregando = true;
+  render();
+  try {
+    const banco = document.querySelector('#pb-banco');
+    pb.resultado = await apiFetch('/contas/pagamentos-banco', {
+      method: 'POST',
+      body: JSON.stringify({
+        arquivo_base64: pb.arquivo.base64,
+        banco_id: (banco && banco.value) || pb.banco_id || null,
+        escolhas: marcados.map((i) => ({ ref: i.ref, conta_id: Number(pb.escolhas[i.ref].conta_id) })),
+      }),
+    });
+    pb.analise = null;
+    pb.arquivo = null;
+    state.erro = null;
+    carregarDados();
+  } catch (err) {
+    state.erro = err.message;
+  } finally {
+    pb.carregando = false;
     render();
   }
 }

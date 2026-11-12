@@ -766,3 +766,17 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 .info-boleto.neutro-campo { color: var(--texto-suave, #667085); }
 .info-boleto.ok-campo { color: #04785C; }
 .info-boleto.erro-campo { color: #912018; }
+
+/* Baixa pelo relatório de pagamentos do banco. */
+.cartao-pagamentos-banco {
+  background: var(--card); border: 1px solid var(--borda); border-radius: 12px;
+  padding: 14px 16px; margin: 16px 0;
+}
+.cartao-pagamentos-banco > summary { cursor: pointer; list-style-position: inside; }
+.cartao-pagamentos-banco[open] > summary { margin-bottom: 12px; }
+.cartao-pagamentos-banco select { max-width: 360px; }
+.vazio-texto { color: var(--texto-suave); font-size: 12px; font-weight: normal; }
+.tabela-rolagem { overflow-x: auto; }
+.badge.pb-ok { background: var(--verde-suave); color: #04785C; }
+.badge.pb-atencao { background: #FFF8E1; color: #7A5C00; }
+.badge.pb-neutro { background: var(--azul-suave); color: var(--texto-suave); }
