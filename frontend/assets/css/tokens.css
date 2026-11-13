@@ -112,3 +112,46 @@
   --sombra-leve: 0 1px 3px rgba(0, 0, 0, 0.35);
   --anel-edicao: 0 0 0 2px rgba(230, 194, 0, 0.30);
 }
+
+/* Papel é sempre claro: no tema escuro, a impressão volta para as cores claras. */
+@media print {
+  [data-theme="dark"] {
+    color-scheme: light;
+    --azul: #123c8b;
+    --azul-escuro: #0c2b66;
+    --azul-claro: #1e56c0;
+    --azul-suave: #e8eefa;
+    --azul-borda: #c9daf6;
+    --sobre-azul: #ffffff;
+    --amarelo-escuro: #d9b400;
+    --amarelo-suave: #fff8e1;
+    --amarelo-texto: #7a5c00;
+    --fundo: #f4f6fb;
+    --card: #ffffff;
+    --borda: #dce3f0;
+    --borda-campo: #7f8ca7;
+    --grade: #edf1f8;
+    --linha-hover: #fafcff;
+    --texto: #17233d;
+    --texto-suave: #5b6b8c;
+    --texto-fraco: #7f8ca7;
+    --desabilitado: #b9c4da;
+    --vermelho: #d92d20;
+    --vermelho-escuro: #b42318;
+    --sobre-vermelho: #ffffff;
+    --vermelho-suave: #fdecea;
+    --vermelho-borda: #f6c9c4;
+    --vermelho-texto: #912018;
+    --verde: #059669;
+    --verde-suave: #e7f6f0;
+    --verde-borda: #a7e5cf;
+    --verde-texto: #04785c;
+    --roxo: #7c3aed;
+    --roxo-suave: #f3e8ff;
+    --roxo-texto: #6b21a8;
+    --celeste: #0ea5e9;
+    --sombra-flutuante: 0 8px 30px rgba(18, 60, 139, 0.12);
+    --sombra-leve: 0 1px 3px rgba(26, 63, 170, 0.07);
+    --anel-edicao: 0 0 0 2px rgba(224, 161, 0, 0.18);
+  }
+}

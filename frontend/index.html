@@ -10,6 +10,12 @@
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="apple-touch-icon" href="assets/icons/icone-192.png" />
   <link rel="icon" href="assets/icons/icone-192.png" />
+  <script>
+    // Aplica o tema salvo antes da primeira pintura, para a tela não piscar.
+    try {
+      if (localStorage.getItem('mf-tema') === 'dark') document.documentElement.dataset.theme = 'dark';
+    } catch (err) {}
+  </script>
   <link rel="stylesheet" href="assets/css/tokens.css" />
   <link rel="stylesheet" href="assets/css/app.css" />
 </head>
