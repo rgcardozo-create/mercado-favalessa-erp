@@ -6078,11 +6078,13 @@ function trocarTema() {
   }
 }
 
-// Colunas de dinheiro alinhadas à direita. Em vez de marcar cada uma das
-// dezenas de tabelas à mão (e arriscar o cabeçalho ficar de um lado e o valor
-// do outro), olha o que está escrito: se toda célula preenchida da coluna é um
-// valor em R$, a coluna inteira, cabeçalho incluído, ganha a classe "num".
+// Colunas de dinheiro e de porcentagem alinhadas à direita. Em vez de marcar
+// cada uma das dezenas de tabelas à mão (e arriscar o cabeçalho ficar de um
+// lado e o valor do outro), olha o que está escrito: se toda célula preenchida
+// da coluna é um valor em R$ ou uma porcentagem, a coluna inteira, cabeçalho
+// incluído, ganha a classe "num". Contagens e códigos (PDV 01) ficam onde estão.
 const VALOR_EM_REAIS = /^[-−]?\s*R\$/;
+const PORCENTAGEM = /^[-−+]?\d{1,3}(\.\d{3})*(,\d+)?\s?%$/;
 const CELULA_VAZIA = /^[—–-]?$/;
 function alinharValores(raiz) {
   raiz.querySelectorAll('table.tabela-contas').forEach((tabela) => {
@@ -6094,7 +6096,7 @@ function alinharValores(raiz) {
       celulas.forEach((td, i) => {
         const texto = td.textContent.trim();
         const c = colunas.get(i) || { reais: 0, outros: 0 };
-        if (VALOR_EM_REAIS.test(texto)) c.reais += 1;
+        if (VALOR_EM_REAIS.test(texto) || PORCENTAGEM.test(texto)) c.reais += 1;
         else if (!CELULA_VAZIA.test(texto)) c.outros += 1;
         colunas.set(i, c);
       });
