@@ -3996,7 +3996,8 @@ function folhaHTML() {
         </select>
         <button id="btn-trancar-folha">Trancar folha</button>
       </div>
-      <table class="tabela-contas">
+      <div class="rolagem-x">
+      <table class="tabela-contas tabela-densa">
         <thead><tr>
           <th class="col-marca"><input type="checkbox" class="marcar-todas-folha"
             ${lancamentos.length && lancamentos.every((l) => state.folhaMarcadas.has(l.id)) ? 'checked' : ''}
@@ -4037,6 +4038,7 @@ function folhaHTML() {
           }
         </tbody>
       </table>
+      </div>
       ${barraSomaFolhaHTML(lancamentos)}
     </section>
 

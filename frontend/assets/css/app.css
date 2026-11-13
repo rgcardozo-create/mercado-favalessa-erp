@@ -571,6 +571,14 @@ small.parcela { color: var(--azul); background: var(--azul-suave); border-radius
 .rolagem-x { overflow-x: auto; }
 .rolagem-x .tabela-contas { min-width: 620px; }
 
+/* Tabela com muitas colunas (a folha tem doze): menos folga dos lados de cada
+   célula, para caber na largura do app sem cortar a coluna de ações. Se ainda
+   assim não couber, quem rola é a caixa .rolagem-x, nunca a página. */
+.tabela-contas.tabela-densa th, .tabela-contas.tabela-densa td { padding-left: 6px; padding-right: 6px; }
+.rolagem-x .tabela-contas.tabela-densa { min-width: 0; }
+.tabela-contas.tabela-densa .acoes-linha { gap: 4px; }
+.tabela-contas.tabela-densa .acoes-linha button { padding: 4px 7px; }
+
 /* Últimos fechamentos: coluna de marcação para excluir vários dias de uma vez. */
 .tabela-fechamentos .col-marca { width: 1%; text-align: center; padding-right: 0; }
 .tabela-fechamentos .col-marca input { width: 16px; height: 16px; margin: 0; accent-color: var(--azul); }
