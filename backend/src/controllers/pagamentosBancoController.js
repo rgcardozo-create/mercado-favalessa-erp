@@ -1,5 +1,5 @@
 const pool = require('../db/pool');
-const { SELECT_CONTAS_COM_SALDO } = require('../db/contasQuery');
+const { SELECT_CONTAS_COM_SALDO, TIPOS_VALIDOS } = require('../db/contasQuery');
 const { lerRelatorioPagamentosBB } = require('../utils/relatorioPagamentosBB');
 const { casarPagamentos } = require('../utils/casarPagamentos');
 const { registrarAuditoria } = require('../utils/auditoria');
@@ -133,6 +133,75 @@ async function analisar(req, res) {
 
 const SITUACOES_QUE_GRAVAM = new Set(['codigo', 'nosso_numero', 'cnpj_valor', 'juros', 'escolher', 'pelo_nome']);
 
+// Pagamento sem boleto no sistema pode virar boleto ali mesmo: a funcionária
+// esqueceu de cadastrar, o dono pagou, e o relatório já tem quase tudo —
+// fornecedor, CNPJ, nosso número, valor e data. Também vale quando o
+// fornecedor tem outros boletos em aberto, mas nenhum é este ("escolher").
+const SITUACOES_QUE_CADASTRAM = new Set(['sem_cadastro', 'escolher', 'pelo_nome']);
+const TIPOS_CADASTRO = TIPOS_VALIDOS.filter((t) => t !== 'ceasa');
+
+const DATA_ISO = /^\d{4}-\d{2}-\d{2}$/;
+
+// O fornecedor do pagamento: pelo CNPJ; senão pelo nome igual, ainda sem CNPJ
+// (e aí ele aprende o CNPJ); senão é criado com o nome e o CNPJ do relatório.
+async function fornecedorDoPagamento(cliente, p) {
+  const cnpj = soDigitos(p.cnpj);
+  if (cnpj) {
+    const { rows } = await cliente.query(
+      `SELECT id FROM fornecedores
+        WHERE regexp_replace(coalesce(cnpj_cpf, ''), '\\D', '', 'g') = $1
+        ORDER BY id LIMIT 1`,
+      [cnpj]
+    );
+    if (rows[0]) return { id: rows[0].id, criado: false };
+  }
+
+  const nome = String(p.nome || '').trim();
+  if (!nome) return { id: null, criado: false };
+
+  const { rows: mesmoNome } = await cliente.query(
+    `SELECT id, cnpj_cpf FROM fornecedores
+      WHERE upper(btrim(nome)) = upper($1) AND coalesce(ceasa, false) = false
+      ORDER BY id LIMIT 1`,
+    [nome]
+  );
+  if (mesmoNome[0]) {
+    if (cnpj.length === 14 && !soDigitos(mesmoNome[0].cnpj_cpf)) {
+      await cliente.query('UPDATE fornecedores SET cnpj_cpf = $2 WHERE id = $1', [mesmoNome[0].id, formatarCnpj(cnpj)]);
+    }
+    return { id: mesmoNome[0].id, criado: false };
+  }
+
+  const { rows: novo } = await cliente.query(
+    'INSERT INTO fornecedores (nome, cnpj_cpf) VALUES ($1, $2) RETURNING id',
+    [nome, cnpj ? formatarCnpj(cnpj) : null]
+  );
+  return { id: novo[0].id, criado: true };
+}
+
+// Cria o boleto que faltava. O valor do boleto é o que o dono informar — se
+// ele souber o original, a diferença para o pago vira juros; se não souber,
+// fica o valor pago. Sem vencimento conhecido, vale o dia do pagamento.
+async function cadastrarConta(cliente, p, novo, usuarioId) {
+  const tipo = TIPOS_CADASTRO.includes(novo.tipo) ? novo.tipo : 'fornecedor';
+  const valor = novo.valor !== undefined && novo.valor !== null && novo.valor !== '' ? Number(novo.valor) : p.valor;
+  if (!Number.isFinite(valor) || valor <= 0) throw new Error('Valor do boleto inválido.');
+  const vencimento = DATA_ISO.test(String(novo.vencimento || '')) ? novo.vencimento : p.data;
+  const descricao = String(novo.descricao || p.nome || p.descricao || 'Pagamento do relatório do banco').trim().slice(0, 200);
+
+  const fornecedor = tipo === 'fornecedor' ? await fornecedorDoPagamento(cliente, p) : { id: null, criado: false };
+  // O nosso número do relatório é o campo livre do código de barras: guardado,
+  // acha este boleto pela busca e casa com ele se o relatório vier de novo.
+  const nossoNumero = p.nosso_numero ? soDigitos(p.nosso_numero).replace(/^0+(?=\d)/, '').slice(0, 30) : null;
+
+  const { rows } = await cliente.query(
+    `INSERT INTO contas (tipo, fornecedor_id, descricao, valor, vencimento, forma_prevista, nosso_numero, criado_por)
+     VALUES ($1, $2, $3, $4, $5, 'Boleto', $6, $7) RETURNING *`,
+    [tipo, fornecedor.id, descricao, valor, vencimento, nossoNumero || null, usuarioId]
+  );
+  return { conta: rows[0], fornecedorCriado: fornecedor.criado };
+}
+
 async function importar(req, res) {
   const buffer = lerOuResponder(req, res);
   if (!buffer) return undefined;
@@ -149,6 +218,8 @@ async function importar(req, res) {
   const cliente = await pool.connect();
   const gravados = [];
   const recusados = [];
+  const cadastradas = [];
+  let fornecedoresCriados = 0;
   try {
     await cliente.query('BEGIN');
 
@@ -165,11 +236,28 @@ async function importar(req, res) {
 
     for (const escolha of escolhas) {
       const item = porRef.get(escolha.ref);
-      const contaId = Number(escolha.conta_id);
+      let contaId = Number(escolha.conta_id);
       const recusar = (motivo) => recusados.push({ ref: escolha.ref, motivo });
 
       if (!item) { recusar('Pagamento não encontrado no relatório.'); continue; }
-      if (!SITUACOES_QUE_GRAVAM.has(item.situacao)) { recusar(item.motivo); continue; }
+
+      if (escolha.conta_id === 'novo') {
+        if (!SITUACOES_QUE_CADASTRAM.has(item.situacao)) { recusar(item.motivo || 'Este pagamento não pode virar boleto novo.'); continue; }
+        // Ponto de retorno: se a baixa não entrar, o boleto criado sai junto.
+        await cliente.query('SAVEPOINT novo_boleto');
+        try {
+          const { conta, fornecedorCriado } = await cadastrarConta(cliente, item.pagamento, escolha.novo || {}, req.user.id);
+          contaId = conta.id;
+          cadastradas.push(conta);
+          if (fornecedorCriado) fornecedoresCriados += 1;
+          item.opcoes = [{ id: conta.id }];
+        } catch (err) {
+          await cliente.query('ROLLBACK TO SAVEPOINT novo_boleto');
+          if (err.code) throw err;
+          recusar(err.message);
+          continue;
+        }
+      } else if (!SITUACOES_QUE_GRAVAM.has(item.situacao)) { recusar(item.motivo); continue; }
       // Só as contas que o casamento ofereceu: a tela não pode mandar baixar
       // um boleto qualquer com o dinheiro deste pagamento.
       if (!item.opcoes.some((o) => o.id === contaId)) { recusar('Conta fora das opções deste pagamento.'); continue; }
@@ -199,7 +287,14 @@ async function importar(req, res) {
          RETURNING *`,
         [contaId, p.valor, p.data, p.tipo === 'Boleto' ? 'Boleto' : p.tipo, bancoId, observacao, req.user.id, item.ref]
       );
-      if (!rows[0]) { recusar('Já importado.'); continue; }
+      if (!rows[0]) {
+        if (escolha.conta_id === 'novo') {
+          await cliente.query('ROLLBACK TO SAVEPOINT novo_boleto');
+          cadastradas.pop();
+        }
+        recusar('Já importado.');
+        continue;
+      }
       gravados.push({ ...rows[0], fornecedor_nome: p.nome });
 
       // O fornecedor sem CNPJ aprende o CNPJ na primeira baixa confirmada: da
@@ -222,6 +317,16 @@ async function importar(req, res) {
     cliente.release();
   }
 
+  for (const conta of cadastradas) {
+    await registrarAuditoria({
+      usuarioId: req.user.id,
+      acao: 'create',
+      entidade: 'contas',
+      entidadeId: conta.id,
+      dados: { ...conta, origem: 'relatorio-bb' },
+    });
+  }
+
   if (gravados.length) {
     await registrarAuditoria({
       usuarioId: req.user.id,
@@ -241,6 +346,8 @@ async function importar(req, res) {
     gravados: gravados.length,
     valor: Number(gravados.reduce((a, g) => a + Number(g.valor), 0).toFixed(2)),
     recusados,
+    cadastradas: cadastradas.length,
+    fornecedores_criados: fornecedoresCriados,
   });
 }
 

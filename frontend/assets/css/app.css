@@ -780,3 +780,5 @@ code { background: var(--azul-suave); padding: 2px 6px; border-radius: 4px; font
 .badge.pb-ok { background: var(--verde-suave); color: #04785C; }
 .badge.pb-atencao { background: #FFF8E1; color: #7A5C00; }
 .badge.pb-neutro { background: var(--azul-suave); color: var(--texto-suave); }
+
+.pb-novo { background: var(--azul-suave); border-radius: 8px; padding: 10px 12px; }
