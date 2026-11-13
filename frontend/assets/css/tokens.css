@@ -1,0 +1,157 @@
+/* Favalessa — tokens do sistema de design.
+   Gerado a partir do tokens.json do sistema de design "Favalessa". Para mudar uma
+   cor, um espaço ou um raio, mude aqui: o app.css só lê estas variáveis.
+   O tema escuro existe, mas é opcional: só vale com data-theme="dark" no <html>.
+   Os gráficos ainda desenham algumas cores direto no app.js e não acompanham o tema escuro. */
+
+:root {
+  --azul: #123c8b;
+  --azul-escuro: #0c2b66;
+  --azul-claro: #1e56c0;
+  --azul-suave: #e8eefa;
+  --azul-borda: #c9daf6;
+  --marca-azul: #123c8b;
+  --sobre-azul: #ffffff;
+  --amarelo: #ffd400;
+  --amarelo-escuro: #d9b400;
+  --amarelo-suave: #fff8e1;
+  --amarelo-texto: #7a5c00;
+  --sobre-amarelo: #4a3b00;
+  --fundo: #f4f6fb;
+  --card: #ffffff;
+  --borda: #dce3f0;
+  --borda-campo: #7f8ca7;
+  --grade: #edf1f8;
+  --linha-hover: #fafcff;
+  --texto: #17233d;
+  --texto-suave: #5b6b8c;
+  --texto-fraco: #7f8ca7;
+  --desabilitado: #b9c4da;
+  --vermelho: #d92d20;
+  --vermelho-escuro: #b42318;
+  --sobre-vermelho: #ffffff;
+  --vermelho-suave: #fdecea;
+  --vermelho-borda: #f6c9c4;
+  --vermelho-texto: #912018;
+  --verde: #059669;
+  --verde-suave: #e7f6f0;
+  --verde-borda: #a7e5cf;
+  --verde-texto: #04785c;
+  --roxo: #7c3aed;
+  --roxo-suave: #f3e8ff;
+  --roxo-texto: #6b21a8;
+  --celeste: #0ea5e9;
+
+  --sombra-flutuante: 0 8px 30px rgba(18, 60, 139, 0.12);
+  --sombra-leve: 0 1px 3px rgba(26, 63, 170, 0.07);
+  --anel-edicao: 0 0 0 2px rgba(224, 161, 0, 0.18);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+
+  --espaco-4: 4px;
+  --espaco-6: 6px;
+  --espaco-8: 8px;
+  --espaco-10: 10px;
+  --espaco-12: 12px;
+  --espaco-14: 14px;
+  --espaco-16: 16px;
+  --espaco-20: 20px;
+  --espaco-24: 24px;
+  --espaco-32: 32px;
+
+  --raio-4: 4px;
+  --raio-6: 6px;
+  --raio-8: 8px;
+  --raio-10: 10px;
+  --raio-12: 12px;
+  --raio-pill: 999px;
+
+  --largura-app: 1100px;
+  --quebra-celular: 700px;
+  --quebra-colunas: 1000px;
+  --faixa-status: 3px;
+  --faixa-metrica: 4px;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --azul: #8db0f5;
+  --azul-escuro: #c3d5fa;
+  --azul-claro: #6e9cf2;
+  --azul-suave: #1a2b55;
+  --azul-borda: #2f4a85;
+  --sobre-azul: #0b1530;
+  --amarelo-escuro: #e6c200;
+  --amarelo-suave: #2e2810;
+  --amarelo-texto: #f2d675;
+  --fundo: #0b1530;
+  --card: #121f40;
+  --borda: #2a3c66;
+  --borda-campo: #6a7dac;
+  --grade: #1c2a4d;
+  --linha-hover: #16244a;
+  --texto: #e6ecf8;
+  --texto-suave: #a3b2d1;
+  --texto-fraco: #8593b0;
+  --desabilitado: #34446b;
+  --vermelho: #f0705f;
+  --vermelho-escuro: #ff8a7a;
+  --sobre-vermelho: #2a0a06;
+  --vermelho-suave: #3a1a1c;
+  --vermelho-borda: #6b2a26;
+  --vermelho-texto: #ffb4a8;
+  --verde: #34c496;
+  --verde-suave: #0f2f28;
+  --verde-borda: #1e5a48;
+  --verde-texto: #7ddbb8;
+  --roxo: #a78bfa;
+  --roxo-suave: #2a1f4a;
+  --roxo-texto: #d4c2ff;
+  --celeste: #38bdf8;
+  --sombra-flutuante: 0 8px 30px rgba(0, 0, 0, 0.45);
+  --sombra-leve: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --anel-edicao: 0 0 0 2px rgba(230, 194, 0, 0.30);
+}
+
+/* Papel é sempre claro: no tema escuro, a impressão volta para as cores claras. */
+@media print {
+  [data-theme="dark"] {
+    color-scheme: light;
+    --azul: #123c8b;
+    --azul-escuro: #0c2b66;
+    --azul-claro: #1e56c0;
+    --azul-suave: #e8eefa;
+    --azul-borda: #c9daf6;
+    --sobre-azul: #ffffff;
+    --amarelo-escuro: #d9b400;
+    --amarelo-suave: #fff8e1;
+    --amarelo-texto: #7a5c00;
+    --fundo: #f4f6fb;
+    --card: #ffffff;
+    --borda: #dce3f0;
+    --borda-campo: #7f8ca7;
+    --grade: #edf1f8;
+    --linha-hover: #fafcff;
+    --texto: #17233d;
+    --texto-suave: #5b6b8c;
+    --texto-fraco: #7f8ca7;
+    --desabilitado: #b9c4da;
+    --vermelho: #d92d20;
+    --vermelho-escuro: #b42318;
+    --sobre-vermelho: #ffffff;
+    --vermelho-suave: #fdecea;
+    --vermelho-borda: #f6c9c4;
+    --vermelho-texto: #912018;
+    --verde: #059669;
+    --verde-suave: #e7f6f0;
+    --verde-borda: #a7e5cf;
+    --verde-texto: #04785c;
+    --roxo: #7c3aed;
+    --roxo-suave: #f3e8ff;
+    --roxo-texto: #6b21a8;
+    --celeste: #0ea5e9;
+    --sombra-flutuante: 0 8px 30px rgba(18, 60, 139, 0.12);
+    --sombra-leve: 0 1px 3px rgba(26, 63, 170, 0.07);
+    --anel-edicao: 0 0 0 2px rgba(224, 161, 0, 0.18);
+  }
+}

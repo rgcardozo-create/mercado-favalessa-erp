@@ -653,7 +653,12 @@ function cabecalhoHTML(titulo) {
         <h1>${titulo}</h1>
         <p class="usuario-atual">${usuario.nome} <span class="badge role">${usuario.role}</span> <span class="versao">v${VERSAO}</span></p>
       </div>
-      <button id="btn-logout">Sair</button>
+      <div class="topo-acoes">
+        <button id="btn-tema" class="secundario" title="Trocar entre tema claro e escuro">${
+          temaAtual() === 'dark' ? 'Tema claro' : 'Tema escuro'
+        }</button>
+        <button id="btn-logout">Sair</button>
+      </div>
     </div>
 
     <nav class="abas">
@@ -1894,7 +1899,7 @@ function graficoBarrasComMediaSVG(
   const linhasGuia = [0.25, 0.5, 0.75, 1]
     .map((f) => {
       const y = base - f * (base - topo);
-      return `<line x1="${L}" y1="${y}" x2="${largura}" y2="${y}" stroke="#EDF1F8" stroke-width="1" />
+      return `<line x1="${L}" y1="${y}" x2="${largura}" y2="${y}" style="stroke:var(--grade)" stroke-width="1" />
               <text x="${L - 6}" y="${y + 3}" text-anchor="end" class="eixo">${brlCurto(maior * f)}</text>`;
     })
     .join('');
@@ -2040,7 +2045,7 @@ function graficoDiaADiaSVG(principal, comparacao) {
   const linhasGuia = [0.25, 0.5, 0.75, 1]
     .map((f) => {
       const y = base - f * (base - topo);
-      return `<line x1="${L}" y1="${y}" x2="${largura}" y2="${y}" stroke="#EDF1F8" stroke-width="1" />
+      return `<line x1="${L}" y1="${y}" x2="${largura}" y2="${y}" style="stroke:var(--grade)" stroke-width="1" />
               <text x="${L - 6}" y="${y + 3}" text-anchor="end" class="eixo">${brlCurto(maior * f)}</text>`;
     })
     .join('');
@@ -3991,7 +3996,8 @@ function folhaHTML() {
         </select>
         <button id="btn-trancar-folha">Trancar folha</button>
       </div>
-      <table class="tabela-contas">
+      <div class="rolagem-x">
+      <table class="tabela-contas tabela-densa">
         <thead><tr>
           <th class="col-marca"><input type="checkbox" class="marcar-todas-folha"
             ${lancamentos.length && lancamentos.every((l) => state.folhaMarcadas.has(l.id)) ? 'checked' : ''}
@@ -4032,6 +4038,7 @@ function folhaHTML() {
           }
         </tbody>
       </table>
+      </div>
       ${barraSomaFolhaHTML(lancamentos)}
     </section>
 
@@ -4101,7 +4108,10 @@ function folhaHTML() {
 // embaixo. Os gráficos são SVG escrito à mão — nenhuma biblioteca, nada que
 // precise baixar, e o desenho continua funcionando com a conexão da loja caindo.
 
-const CORES_GRAFICO = ['#123C8B', '#FFD400', '#059669', '#D92D20', '#7C3AED', '#0EA5E9'];
+// As cores vêm dos tokens (tokens.css), na ordem do sistema de design, para o
+// gráfico acompanhar o tema. Em SVG elas entram por style="fill:…": o atributo
+// fill não entende var().
+const CORES_GRAFICO = ['var(--azul)', 'var(--amarelo)', 'var(--verde)', 'var(--vermelho)', 'var(--roxo)', 'var(--celeste)'];
 const MESES_CURTOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 
 // Barras de receita e despesa lado a lado, 12 meses. A régua horizontal existe
@@ -4119,7 +4129,7 @@ function graficoReceitaDespesaSVG(meses) {
   const linhas = [0, 0.25, 0.5, 0.75, 1]
     .map((f) => {
       const y = base - f * (base - 14);
-      return `<line x1="${L}" y1="${y}" x2="${larguraTotal}" y2="${y}" stroke="#E3E8F2" stroke-width="1" />
+      return `<line x1="${L}" y1="${y}" x2="${larguraTotal}" y2="${y}" style="stroke:var(--grade)" stroke-width="1" />
               <text x="${L - 6}" y="${y + 3}" text-anchor="end" class="eixo">${f ? brlCurto(maior * f) : '0'}</text>`;
     })
     .join('');
@@ -4131,10 +4141,10 @@ function graficoReceitaDespesaSVG(meses) {
       const hd = escala(m.despesas);
       return `
         <g>
-          <rect x="${x}" y="${base - hv}" width="${largBarra}" height="${hv}" rx="2" fill="${CORES_GRAFICO[0]}">
+          <rect x="${x}" y="${base - hv}" width="${largBarra}" height="${hv}" rx="2" style="fill:${CORES_GRAFICO[0]}">
             <title>${MESES_CURTOS[i]}: vendas ${brl(m.vendas)}</title>
           </rect>
-          <rect x="${x + largBarra + 2}" y="${base - hd}" width="${largBarra}" height="${hd}" rx="2" fill="${CORES_GRAFICO[3]}">
+          <rect x="${x + largBarra + 2}" y="${base - hd}" width="${largBarra}" height="${hd}" rx="2" style="fill:${CORES_GRAFICO[3]}">
             <title>${MESES_CURTOS[i]}: despesas ${brl(m.despesas)}</title>
           </rect>
           <text x="${x + largBarra + 1}" y="${base + 14}" text-anchor="middle" class="eixo">${MESES_CURTOS[i]}</text>
@@ -4176,16 +4186,16 @@ function graficoResultadoSVG(meses) {
 
   return `
     <svg viewBox="0 0 ${larguraTotal} ${altura}" class="grafico-svg" role="img" aria-label="Resultado por mês">
-      <line x1="${L}" y1="${y(0)}" x2="${larguraTotal}" y2="${y(0)}" stroke="#98A2B3" stroke-width="1" />
+      <line x1="${L}" y1="${y(0)}" x2="${larguraTotal}" y2="${y(0)}" style="stroke:var(--texto-fraco)" stroke-width="1" />
       <text x="${L - 6}" y="${y(0) + 3}" text-anchor="end" class="eixo">0</text>
-      <path d="${area}" fill="rgba(18,60,139,.10)" />
-      <polyline points="${pontos}" fill="none" stroke="${CORES_GRAFICO[0]}" stroke-width="2.5"
+      <path d="${area}" style="fill:var(--azul);fill-opacity:.1" />
+      <polyline points="${pontos}" fill="none" style="stroke:${CORES_GRAFICO[0]}" stroke-width="2.5"
         stroke-linejoin="round" stroke-linecap="round" />
       ${meses
         .map(
           (m, i) => `
           <circle cx="${x(i)}" cy="${y(m.resultado)}" r="4"
-            fill="${m.resultado >= 0 ? CORES_GRAFICO[2] : CORES_GRAFICO[3]}">
+            style="fill:${m.resultado >= 0 ? CORES_GRAFICO[2] : CORES_GRAFICO[3]}">
             <title>${MESES_CURTOS[i]}: ${brl(m.resultado)}${
               m.margem === null ? '' : ` (margem ${m.margem.toFixed(1).replace('.', ',')}%)`
             }</title>
@@ -4222,7 +4232,7 @@ function graficoRoscaSVG(itens, centroRotulo, centroValor) {
       const parte = (item.valor / total) * Math.PI * 2;
       const d = fatiaRosca(90, 90, 84, 52, angulo, angulo + parte - 0.012);
       angulo += parte;
-      return `<path d="${d}" fill="${CORES_GRAFICO[i % CORES_GRAFICO.length]}">
+      return `<path d="${d}" style="fill:${CORES_GRAFICO[i % CORES_GRAFICO.length]}">
         <title>${escapar(item.rotulo)}: ${brl(item.valor)} (${((item.valor / total) * 100).toFixed(1)}%)</title>
       </path>`;
     })
@@ -6054,11 +6064,71 @@ function render() {
   bind();
 }
 
+// Tema claro ou escuro. A escolha fica neste aparelho; o index.html já aplica
+// a escolha salva antes da primeira pintura, para a tela não piscar.
+const CHAVE_TEMA = 'mf-tema';
+function temaAtual() {
+  return document.documentElement.dataset.theme === 'dark' ? 'dark' : 'light';
+}
+function trocarTema() {
+  const novo = temaAtual() === 'dark' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = novo;
+  try {
+    localStorage.setItem(CHAVE_TEMA, novo);
+  } catch (err) {
+    /* sem armazenamento (aba anônima): vale só até fechar */
+  }
+}
+
+// Colunas de dinheiro e de porcentagem alinhadas à direita. Em vez de marcar
+// cada uma das dezenas de tabelas à mão (e arriscar o cabeçalho ficar de um
+// lado e o valor do outro), olha o que está escrito: se toda célula preenchida
+// da coluna é um valor em R$ ou uma porcentagem, a coluna inteira, cabeçalho
+// incluído, ganha a classe "num". Contagens e códigos (PDV 01) ficam onde estão.
+const VALOR_EM_REAIS = /^[-−]?\s*R\$/;
+const PORCENTAGEM = /^[-−+]?\d{1,3}(\.\d{3})*(,\d+)?\s?%$/;
+const CELULA_VAZIA = /^[—–-]?$/;
+function alinharValores(raiz) {
+  raiz.querySelectorAll('table.tabela-contas').forEach((tabela) => {
+    const linhas = [...tabela.querySelectorAll(':scope > tbody > tr')];
+    const colunas = new Map();
+    linhas.forEach((tr) => {
+      const celulas = [...tr.children];
+      if (celulas.some((td) => td.colSpan > 1)) return; // linha de detalhe aberta
+      celulas.forEach((td, i) => {
+        const texto = td.textContent.trim();
+        const c = colunas.get(i) || { reais: 0, outros: 0 };
+        if (VALOR_EM_REAIS.test(texto) || PORCENTAGEM.test(texto)) c.reais += 1;
+        else if (!CELULA_VAZIA.test(texto)) c.outros += 1;
+        colunas.set(i, c);
+      });
+    });
+    colunas.forEach((c, i) => {
+      if (!c.reais || c.outros) return;
+      const th = tabela.querySelector(`:scope > thead > tr > :nth-child(${i + 1})`);
+      if (th) th.classList.add('num');
+      linhas.forEach((tr) => {
+        if ([...tr.children].some((td) => td.colSpan > 1)) return;
+        tr.children[i]?.classList.add('num');
+      });
+    });
+  });
+}
+
+// Partes da tela também são redesenhadas fora do render() (listas que abrem,
+// resultados de importação); o observador alinha essas também.
+new MutationObserver(() => alinharValores(root)).observe(root, { childList: true, subtree: true });
+
 function bind() {
   if (!state.sessao) {
     root.querySelector('#form-login').addEventListener('submit', onLogin);
     return;
   }
+
+  root.querySelector('#btn-tema').addEventListener('click', () => {
+    trocarTema();
+    render();
+  });
 
   root.querySelector('#btn-logout').addEventListener('click', () => {
     limparSessao();
