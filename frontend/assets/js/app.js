@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.73.0';
+const VERSAO = '1.74.0';
 
 const state = {
   sessao: getSessao(),
@@ -8645,6 +8645,40 @@ const SITUACAO_PAGAMENTO_BANCO = {
 // desmarcado de propósito: nome engana, e quem confirma é o dono.
 const MARCADO_DE_INICIO = new Set(['codigo', 'nosso_numero', 'cnpj_valor', 'juros', 'escolher']);
 const PODE_GRAVAR = new Set(['codigo', 'nosso_numero', 'cnpj_valor', 'juros', 'escolher', 'pelo_nome']);
+// Onde dá para cadastrar o boleto que faltou: não achou nada, ou o fornecedor
+// tem outros boletos em aberto mas nenhum é este.
+const PODE_CADASTRAR = new Set(['sem_cadastro', 'escolher', 'pelo_nome']);
+
+const TIPOS_NOVO_BOLETO = [
+  ['fornecedor', 'Fornecedores'],
+  ['fixa', 'Despesas fixas'],
+  ['imposto', 'Impostos'],
+  ['operacional', 'Custos operacionais'],
+  ['despesa', 'Outras despesas'],
+];
+
+// Palpite do tipo pelo que o relatório diz: DARF e órgãos de governo são
+// imposto; boleto com CNPJ é fornecedor; o resto, outra despesa.
+function tipoProvavel(p) {
+  const texto = `${p.nome || ''} ${p.descricao || ''}`.toUpperCase();
+  if (/DARF|FAZENDA|RECEITA FEDERAL|SIMPLES|INSS|FGTS|PREFEITURA|SEFAZ|ESTADO D/.test(texto)) return 'imposto';
+  if (p.tipo === 'Boleto' && p.cnpj) return 'fornecedor';
+  return 'despesa';
+}
+
+function cnpjFormatado(d) {
+  const n = String(d || '').replace(/\D/g, '');
+  return n.length === 14 ? `${n.slice(0, 2)}.${n.slice(2, 5)}.${n.slice(5, 8)}/${n.slice(8, 12)}-${n.slice(12)}` : n;
+}
+
+function novoBoletoInicial(p) {
+  return {
+    tipo: tipoProvavel(p),
+    descricao: p.nome || p.descricao || '',
+    valor: p.valor.toFixed(2),
+    vencimento: p.data,
+  };
+}
 
 function escolhasIniciais(itens) {
   const escolhas = {};
@@ -8662,12 +8696,18 @@ function marcadosPagamentoBanco() {
   if (!pb || !pb.analise) return [];
   return pb.analise.itens.filter((i) => {
     const e = pb.escolhas[i.ref];
-    return PODE_GRAVAR.has(i.situacao) && e && e.marcado && e.conta_id;
+    if (!e || !e.marcado || !e.conta_id) return false;
+    return e.conta_id === 'novo' ? PODE_CADASTRAR.has(i.situacao) : PODE_GRAVAR.has(i.situacao);
   });
 }
 
 function opcaoContaTexto(o) {
-  const juros = o.diferenca > 0.004 ? ` · +${brl(o.diferenca)} de juros` : '';
+  // Até 25% acima do saldo é juros e multa (a mesma régua do servidor); acima
+  // disso o valor é de outra coisa, e chamar de juros confundiria.
+  const ehJuros = o.diferenca > 0.004 && o.diferenca <= o.saldo * 0.25;
+  const juros = ehJuros
+    ? ` · +${brl(o.diferenca)} de juros`
+    : o.diferenca > 0.004 ? ` · pago ${brl(o.diferenca)} a mais` : '';
   const desconto = o.diferenca < -0.004 ? ` · ${brl(-o.diferenca)} a menos` : '';
   return `${dateBR(o.vencimento)} · ${o.fornecedor || '—'} · ${o.descricao} · saldo ${brl(o.saldo)}${juros}${desconto}`;
 }
@@ -8676,16 +8716,19 @@ function linhaPagamentoBancoHTML(i) {
   const pb = state.pagBanco;
   const e = pb.escolhas[i.ref] || {};
   const [rotulo, classe] = SITUACAO_PAGAMENTO_BANCO[i.situacao] || [i.situacao, 'neutro'];
-  const grava = PODE_GRAVAR.has(i.situacao);
+  const cadastra = PODE_CADASTRAR.has(i.situacao);
+  const grava = PODE_GRAVAR.has(i.situacao) || cadastra;
   const p = i.pagamento;
+  const novo = e.conta_id === 'novo';
 
   let conta = '—';
-  if (grava && (i.opcoes.length > 1 || !i.conta_id)) {
+  if (grava && (i.opcoes.length > 1 || !i.conta_id || cadastra)) {
     conta = `<select data-pb-conta="${escapar(i.ref)}">
-      <option value="">— escolha o boleto —</option>
+      <option value="">${i.opcoes.length ? '— escolha o boleto —' : '— não lançar —'}</option>
       ${i.opcoes
         .map((o) => `<option value="${o.id}" ${String(o.id) === String(e.conta_id) ? 'selected' : ''}>${escapar(opcaoContaTexto(o))}</option>`)
         .join('')}
+      ${cadastra ? `<option value="novo" ${novo ? 'selected' : ''}>+ Cadastrar como boleto novo</option>` : ''}
     </select>`;
   } else if (i.opcoes.length) {
     conta = escapar(opcaoContaTexto(i.opcoes[0]));
@@ -8709,7 +8752,38 @@ function linhaPagamentoBancoHTML(i) {
       <td>${conta}</td>
       <td><span class="badge pb-${classe}" title="${escapar(i.motivo || '')}">${rotulo}${extra}</span>
         ${i.motivo ? `<br><small class="vazio-texto">${escapar(i.motivo)}</small>` : ''}</td>
-    </tr>`;
+    </tr>
+    ${novo ? linhaNovoBoletoHTML(i, e.novo) : ''}`;
+}
+
+// O boleto que faltou, com o que o relatório já diz. O valor vem como o pago:
+// se o dono souber o valor original (pagou com juros), corrige aqui e a
+// diferença aparece como juros na conta.
+function linhaNovoBoletoHTML(i, n) {
+  const ref = escapar(i.ref);
+  const p = i.pagamento;
+  return `
+    <tr class="linha-baixa"><td></td><td colspan="5">
+      <div class="form-inline pb-novo">
+        <label>Lançar em
+          <select data-pb-novo="${ref}" data-campo="tipo">
+            ${TIPOS_NOVO_BOLETO.map(([v, r]) => `<option value="${v}" ${n.tipo === v ? 'selected' : ''}>${r}</option>`).join('')}
+          </select>
+        </label>
+        <label>Descrição <input type="text" data-pb-novo="${ref}" data-campo="descricao" value="${escapar(n.descricao)}" /></label>
+        <label>Valor do boleto <input type="number" step="0.01" min="0.01" data-pb-novo="${ref}" data-campo="valor" value="${escapar(n.valor)}" /></label>
+        <label>Vencimento <input type="date" data-pb-novo="${ref}" data-campo="vencimento" value="${escapar(n.vencimento)}" /></label>
+        <p class="vazio-texto campo-largo">
+          ${
+            n.tipo === 'fornecedor'
+              ? `Fornecedor: <strong>${escapar(p.nome || '—')}</strong>${p.cnpj ? ` (CNPJ ${escapar(cnpjFormatado(p.cnpj))})` : ''} — se não existir no cadastro, é criado.`
+              : 'Sem fornecedor: entra pela descrição.'
+          }
+          ${p.nosso_numero ? `Nosso número ${escapar(p.nosso_numero)} fica guardado no boleto.` : ''}
+          Não sabe o valor original ou o vencimento? Deixe como está: fica o valor pago e o dia do pagamento.
+        </p>
+      </div>
+    </td></tr>`;
 }
 
 function pagamentosBancoHTML() {
@@ -8747,6 +8821,12 @@ function pagamentosBancoHTML() {
       ${
         pb.resultado
           ? `<div class="alerta sucesso"><strong>Baixa feita.</strong> ${pb.resultado.gravados} pagamento(s), ${brl(pb.resultado.valor)}.${
+              pb.resultado.cadastradas
+                ? ` ${pb.resultado.cadastradas} boleto(s) cadastrado(s) agora${
+                    pb.resultado.fornecedores_criados ? `, ${pb.resultado.fornecedores_criados} fornecedor(es) novo(s)` : ''
+                  }.`
+                : ''
+            }${
               pb.resultado.recusados.length
                 ? `<br>${pb.resultado.recusados.length} não gravado(s): ${pb.resultado.recusados.map((r) => escapar(r.motivo)).join('; ')}`
                 : ''
@@ -8814,10 +8894,21 @@ function ligarPagamentosBanco(root) {
       render();
     });
   });
+  root.querySelectorAll('[data-pb-novo]').forEach((campo) => {
+    // Sem render a cada tecla: o campo perderia o foco no meio da digitação.
+    campo.addEventListener('input', () => {
+      pb.escolhas[campo.dataset.pbNovo].novo[campo.dataset.campo] = campo.value;
+    });
+    if (campo.tagName === 'SELECT') campo.addEventListener('change', render);
+  });
   root.querySelectorAll('[data-pb-conta]').forEach((sel) => {
     sel.addEventListener('change', () => {
       const e = pb.escolhas[sel.dataset.pbConta];
       e.conta_id = sel.value;
+      if (sel.value === 'novo' && !e.novo) {
+        const item = pb.analise.itens.find((i) => i.ref === sel.dataset.pbConta);
+        e.novo = novoBoletoInicial(item.pagamento);
+      }
       // Escolher a conta já é a confirmação; tirar a escolha desmarca.
       e.marcado = Boolean(sel.value);
       render();
@@ -8865,7 +8956,11 @@ async function onImportarPagamentosBanco() {
   const marcados = marcadosPagamentoBanco();
   if (!marcados.length) return;
   const total = marcados.reduce((s, i) => s + i.pagamento.valor, 0);
-  if (!confirm(`Dar baixa em ${marcados.length} boleto(s), somando ${brl(total)}?`)) return;
+  const novos = marcados.filter((i) => pb.escolhas[i.ref].conta_id === 'novo').length;
+  if (!confirm(
+    `Dar baixa em ${marcados.length} boleto(s), somando ${brl(total)}?` +
+      (novos ? `\n${novos} deles será(ão) cadastrado(s) agora.` : '')
+  )) return;
 
   pb.carregando = true;
   render();
@@ -8876,7 +8971,12 @@ async function onImportarPagamentosBanco() {
       body: JSON.stringify({
         arquivo_base64: pb.arquivo.base64,
         banco_id: (banco && banco.value) || pb.banco_id || null,
-        escolhas: marcados.map((i) => ({ ref: i.ref, conta_id: Number(pb.escolhas[i.ref].conta_id) })),
+        escolhas: marcados.map((i) => {
+          const e = pb.escolhas[i.ref];
+          return e.conta_id === 'novo'
+            ? { ref: i.ref, conta_id: 'novo', novo: e.novo }
+            : { ref: i.ref, conta_id: Number(e.conta_id) };
+        }),
       }),
     });
     pb.analise = null;
