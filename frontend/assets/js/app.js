@@ -13,7 +13,7 @@ const TIPOS = [
 
 // Versão do casco, mostrada no topo da tela. Serve para saber, olhando, se o
 // navegador já está com a última atualização ou ainda com uma cópia em cache.
-const VERSAO = '1.74.0';
+const VERSAO = '1.75.0';
 
 const state = {
   sessao: getSessao(),
@@ -8691,6 +8691,11 @@ function escolhasIniciais(itens) {
   return escolhas;
 }
 
+// O que já está no sistema: veio de uma importação anterior ou já tinha baixa.
+// Aparece por padrão — é a prova de que nada ficou de fora —, mas num relatório
+// do mês inteiro, reimportado toda semana, afoga o que ainda falta.
+const JA_NO_SISTEMA = new Set(['ja_importado', 'ja_baixado']);
+
 function marcadosPagamentoBanco() {
   const pb = state.pagBanco;
   if (!pb || !pb.analise) return [];
@@ -8792,6 +8797,7 @@ function pagamentosBancoHTML() {
   const marcados = marcadosPagamentoBanco();
   const totalMarcado = marcados.reduce((s, i) => s + i.pagamento.valor, 0);
   const bancoEscolhido = pb.banco_id || (a && a.banco_sugerido) || '';
+  const jaNoSistema = a ? a.itens.filter((i) => JA_NO_SISTEMA.has(i.situacao)).length : 0;
 
   const contagem = a
     ? Object.entries(a.resumo)
@@ -8841,10 +8847,24 @@ function pagamentosBancoHTML() {
                 a.periodo ? ` de ${dateBR(a.periodo.de)} a ${dateBR(a.periodo.ate)}` : ''
               }, ${brl(a.total.valor)} &middot; ${contagem}
             </p>
+            ${
+              jaNoSistema
+                ? `<label class="campo-marca pb-filtro">
+                    <input type="checkbox" id="pb-ocultar" ${pb.ocultarFeitos ? 'checked' : ''} />
+                    Ocultar o que já está no sistema (${jaNoSistema} de ${a.itens.length})
+                  </label>`
+                : ''
+            }
             <div class="tabela-rolagem">
             <table class="tabela-contas">
               <thead><tr><th></th><th>Pago em</th><th>No relatório</th><th>Valor pago</th><th>Boleto no sistema</th><th>Situação</th></tr></thead>
-              <tbody>${a.itens.map(linhaPagamentoBancoHTML).join('')}</tbody>
+              <tbody>${
+                a.itens
+                  .filter((i) => !(pb.ocultarFeitos && JA_NO_SISTEMA.has(i.situacao)))
+                  .map(linhaPagamentoBancoHTML)
+                  .join('') ||
+                '<tr><td colspan="6" class="vazio-texto">Tudo deste relatório já está no sistema.</td></tr>'
+              }</tbody>
             </table>
             </div>
             <div class="form-inline">
@@ -8917,12 +8937,20 @@ function ligarPagamentosBanco(root) {
   const banco = root.querySelector('#pb-banco');
   if (banco) banco.addEventListener('change', () => { pb.banco_id = banco.value; });
 
+  const ocultar = root.querySelector('#pb-ocultar');
+  if (ocultar) {
+    ocultar.addEventListener('change', () => {
+      pb.ocultarFeitos = ocultar.checked;
+      render();
+    });
+  }
+
   const importar = root.querySelector('#pb-importar');
   if (importar) importar.addEventListener('click', onImportarPagamentosBanco);
   const limpar = root.querySelector('#pb-limpar');
   if (limpar) {
     limpar.addEventListener('click', () => {
-      state.pagBanco = { aberto: true };
+      state.pagBanco = { aberto: true, ocultarFeitos: pb.ocultarFeitos };
       render();
     });
   }
