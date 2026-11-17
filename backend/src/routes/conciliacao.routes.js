@@ -74,6 +74,11 @@ router.post('/extrato-banco', authorize('master', 'gerente'), corpoGrande, async
 router.get('/extrato-banco/regras', asyncHandler(banco.listarRegras));
 router.delete('/extrato-banco/regras/:id', authorize('master', 'gerente'), asyncHandler(banco.deletarRegra));
 
+// Integração com a API Extratos do Banco do Brasil: a situação (configurada ou
+// não, últimas buscas) e o "buscar agora", que faz a mesma busca da agenda diária.
+router.get('/extrato-banco/api', authorize('master', 'gerente'), asyncHandler(banco.statusApi));
+router.post('/extrato-banco/api/buscar', authorize('master', 'gerente'), asyncHandler(banco.buscarAgora));
+
 router.caminhosComArquivo = CAMINHOS_COM_ARQUIVO;
 
 module.exports = router;
