@@ -184,6 +184,14 @@ const state = {
   extratoBancoResultado: null,
   // De qual conta é o extrato do banco. Cada uma tem as próprias regras.
   extratoBancoId: '',
+  // De onde vem o extrato do banco: o arquivo baixado, ou a busca direta na API
+  // do Banco do Brasil (só para a conta configurada no servidor).
+  extratoFonte: 'arquivo',
+  extratoApiDe: '',
+  extratoApiAte: '',
+  // Situação da integração com a API do BB e o "buscar agora" em andamento.
+  bbApi: null,
+  bbApiBuscando: false,
   carregando: false,
   erro: null,
   loginErro: null,
@@ -335,6 +343,9 @@ async function carregarDados() {
       state.fornecedores = fornecedoresConc;
       state.bancos = bancosConc;
       state.dinheiroPDV = await apiFetch('/conciliacao/dinheiro');
+      // A situação da busca pela API do banco. Falhar aqui não pode derrubar a
+      // tela: sem ela, o importador por arquivo continua funcionando igual.
+      state.bbApi = podeGerenciar() ? await apiFetch('/conciliacao/extrato-banco/api').catch(() => null) : null;
       if (state.conciliacaoAba === 'taxas') state.taxas = await buscarTaxas();
     } else if (state.tab === 'acumulado') {
       const [acumulados, resumo, diaADia] = await Promise.all([
@@ -992,6 +1003,72 @@ const ADQUIRENTES_UI = [
 const ehImportacaoDoSistema = () => state.extratoAdquirente === ORIGEM_SISTEMA;
 const ehImportacaoDoBanco = () => state.extratoAdquirente === ORIGEM_BANCO;
 
+// A busca direta no banco vale só para a conta configurada no servidor: a API
+// devolve o extrato de UMA conta, e as regras dela são as dessa conta.
+const contaDaApi = () => (state.bbApi && state.bbApi.configurado && state.bbApi.banco) || null;
+const ehContaDaApi = () => !!contaDaApi() && String(contaDaApi().id) === String(state.extratoBancoId);
+const usaApiBB = () => ehImportacaoDoBanco() && state.extratoFonte === 'api' && ehContaDaApi();
+
+// O que vai no pedido de análise e de importação, conforme a origem escolhida.
+function corpoExtratoBanco() {
+  if (usaApiBB()) {
+    return { origem: 'api', de: state.extratoApiDe, ate: state.extratoApiAte, banco_id: state.extratoBancoId };
+  }
+  return {
+    arquivo_base64: state.extratoArquivo.base64,
+    nome_arquivo: state.extratoArquivo.nome,
+    banco_id: state.extratoBancoId,
+  };
+}
+
+// Faixa com a situação da busca pela API: configurada ou não, se roda sozinha
+// todo dia, e o que a última busca fez. Uma falha de madrugada (certificado
+// vencido, banco fora do ar) aparece aqui, em vez de passar em silêncio.
+function painelApiBBHTML() {
+  const s = state.bbApi;
+  if (!s) return '';
+  if (!s.configurado) {
+    return `<p class="vazio"><strong>Buscar o extrato direto no Banco do Brasil:</strong> ainda não está
+      configurado no servidor. Falta: ${s.faltando.map((f) => `<code>${escapar(f)}</code>`).join(', ')}.</p>`;
+  }
+  const ult = (s.execucoes || [])[0];
+  const r = (ult && ult.resultado) || {};
+  const quando = ult
+    ? new Date(ult.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })
+    : '';
+  const como = ult && ult.origem === 'automatica' ? 'automática' : 'feita na tela';
+  const ultima = !ult
+    ? 'Nenhuma busca feita ainda.'
+    : ult.sucesso
+    ? `Última busca (${como}) em ${quando}, de ${dateBR(ult.de)} a ${dateBR(ult.ate)}:
+       <strong>${r.lancadas || 0}</strong> lançada(s) somando ${brl(r.valor_lancado || 0)},
+       ${r.ja_existiam || 0} já estava(m) lançada(s), ${r.ignoradas || 0} ignorada(s)${
+         r.sem_regra
+           ? `, e <strong>${r.sem_regra} sem regra</strong> (${brl(r.valor_sem_regra || 0)}) esperando você
+              dizer o que são — em "Como trazer", escolha "Buscar no banco" com esse período para classificar`
+           : ''
+       }.`
+    : '';
+  const pendente = ult && (!ult.sucesso || r.sem_regra);
+  return `
+    <div class="faixa-vendas ${pendente ? 'pendente' : ''}">
+      <div>
+        <strong>Banco do Brasil pela API · ${escapar((s.banco && s.banco.nome) || '')} · ${escapar(s.conta || '')}${
+          s.ambiente === 'producao' ? '' : ' · ambiente de TESTES'
+        }</strong>
+        <small>${
+          s.automatico.ativo
+            ? `Busca sozinha todo dia às ${escapar(s.automatico.hora)}, olhando os últimos ${s.automatico.dias} dias, e lança o que já tem regra.`
+            : 'A busca automática está desligada: só busca quando você pedir.'
+        } ${ultima}</small>
+      </div>
+      <button type="button" id="btn-bb-buscar-agora" class="secundario" ${state.bbApiBuscando ? 'disabled' : ''}>${
+        state.bbApiBuscando ? 'Buscando…' : 'Buscar agora'
+      }</button>
+    </div>
+    ${ult && !ult.sucesso ? `<div class="alerta erro"><strong>A última busca, em ${quando}, falhou.</strong> ${escapar(ult.erro || '')}</div>` : ''}`;
+}
+
 // Prévia do relatório de vendas por caixa. O dinheiro e a venda a prazo vêm
 // separados: somados numa coluna só, a venda a prazo entraria como dinheiro em
 // caixa que ninguém recebeu.
@@ -1119,14 +1196,22 @@ function previaExtratoBancoHTML() {
       <strong>${b.total_saidas}</strong> saída(s) somando <strong>${brl(b.total_valor)}</strong>, em
       <strong>${b.grupos.length}</strong> tipo(s) diferentes.
       Conta: <strong>${escapar((b.banco && b.banco.nome) || '—')}</strong>.
-      Extrato <strong>${b.modo === 'agrupado' ? 'agrupado' : 'sem agrupar'}</strong>.${
-        b.modo === 'agrupado'
+      ${
+        b.origem === 'api'
+          ? 'Buscado <strong>direto no Banco do Brasil</strong>, lançamento a lançamento.'
+          : `Extrato <strong>${b.modo === 'agrupado' ? 'agrupado' : 'sem agrupar'}</strong>.`
+      }${
+        b.origem === 'api'
+          ? ''
+          : b.modo === 'agrupado'
           ? ' <strong>Prefira baixar sem agrupar:</strong> no agrupado o banco junta os Pix enviados do dia numa linha só e sem número de documento, então dois pagamentos diferentes viram um e o sistema perde a única marca segura contra lançar em dobro.'
           : ' É o formato recomendado — cada pagamento com o próprio número de documento.'
       }
       Fora da conta ficaram
       ${b.ignoradas.entrada} recebimento(s), ${b.ignoradas.saldo} linha(s) de saldo${
         b.ignoradas.rodape ? ` e ${b.ignoradas.rodape} do rodapé do extrato` : ''
+      }${
+        b.ignoradas.futuro ? `, ${b.ignoradas.futuro} lançamento(s) futuro(s) ou em processamento, que entram quando o banco contabilizar` : ''
       }${
         b.ignoradas.invalida
           ? ` — e <strong>${b.ignoradas.invalida} linha(s) que não consegui ler</strong>, confira se elas importam`
@@ -1277,6 +1362,7 @@ function importarExtratoHTML() {
     <section class="grupo-painel">
       <div class="grupo-cabecalho"><h2>Importar arquivo</h2></div>
       <p class="vazio">${explicacao}</p>
+      ${doBanco ? painelApiBBHTML() : ''}
 
       <form data-action="extrato-analisar" class="form-inline">
         <label>De onde veio
@@ -1298,12 +1384,35 @@ function importarExtratoHTML() {
               </label>`
             : ''
         }
-        <label>Arquivo <input type="file" name="arquivo" accept=".xls,.xlsx,.csv" /></label>
-        <button type="submit" ${state.extratoArquivo && (!doBanco || state.extratoBancoId) ? '' : 'disabled'}>Conferir antes de importar</button>
+        ${
+          doBanco && ehContaDaApi()
+            ? `<label>Como trazer
+                <select id="fonte-extrato-banco">
+                  <option value="arquivo" ${state.extratoFonte !== 'api' ? 'selected' : ''}>Enviar o arquivo</option>
+                  <option value="api" ${state.extratoFonte === 'api' ? 'selected' : ''}>Buscar no banco</option>
+                </select>
+              </label>`
+            : ''
+        }
+        ${
+          usaApiBB()
+            ? `<label>De <input type="date" id="api-extrato-de" value="${escapar(state.extratoApiDe)}" max="${todayISO()}" /></label>
+               <label>Até <input type="date" id="api-extrato-ate" value="${escapar(state.extratoApiAte)}" max="${todayISO()}" /></label>`
+            : '<label>Arquivo <input type="file" name="arquivo" accept=".xls,.xlsx,.csv" /></label>'
+        }
+        <button type="submit" ${
+          usaApiBB()
+            ? state.extratoApiDe && state.extratoApiAte ? '' : 'disabled'
+            : state.extratoArquivo && (!doBanco || state.extratoBancoId) ? '' : 'disabled'
+        }>Conferir antes de importar</button>
       </form>
 
-      ${state.extratoArquivo ? `<p class="vazio">Arquivo: <strong>${escapar(state.extratoArquivo.nome)}</strong></p>` : ''}
-      ${state.extratoCarregando || state.caixaCarregando ? '<p>Lendo a planilha…</p>' : ''}
+      ${state.extratoArquivo && !usaApiBB() ? `<p class="vazio">Arquivo: <strong>${escapar(state.extratoArquivo.nome)}</strong></p>` : ''}
+      ${
+        state.extratoCarregando || state.caixaCarregando
+          ? `<p>${usaApiBB() ? 'Buscando o extrato no Banco do Brasil…' : 'Lendo a planilha…'}</p>`
+          : ''
+      }
 
       ${doSistema ? previaVendasCaixaHTML() : ''}
       ${doBanco ? previaExtratoBancoHTML() : ''}
@@ -7022,7 +7131,9 @@ function bind() {
 
   const formExtrato = root.querySelector('[data-action="extrato-analisar"]');
   if (formExtrato) {
-    formExtrato.querySelector('input[name=arquivo]').addEventListener('change', onEscolherExtrato);
+    // No modo de busca pela API do banco não há campo de arquivo.
+    const campoArquivo = formExtrato.querySelector('input[name=arquivo]');
+    if (campoArquivo) campoArquivo.addEventListener('change', onEscolherExtrato);
     formExtrato.querySelector('select[name=adquirente]').addEventListener('change', (ev) => {
       state.extratoAdquirente = ev.target.value;
       // Trocar a origem descarta a prévia: ela foi lida com outra regra e não
@@ -7062,6 +7173,35 @@ function bind() {
       render();
     });
   }
+
+  const fonteExtrato = root.querySelector('#fonte-extrato-banco');
+  if (fonteExtrato) {
+    fonteExtrato.addEventListener('change', () => {
+      state.extratoFonte = fonteExtrato.value;
+      // Período padrão: os últimos 30 dias até ontem — o dia de hoje ainda não fechou.
+      if (state.extratoFonte === 'api' && !state.extratoApiDe) {
+        state.extratoApiAte = somarDiasISO(todayISO(), -1);
+        state.extratoApiDe = somarDiasISO(todayISO(), -30);
+      }
+      state.extratoBanco = null;
+      state.extratoBancoEscolhas = {};
+      state.extratoBancoResultado = null;
+      render();
+    });
+  }
+  [['#api-extrato-de', 'extratoApiDe'], ['#api-extrato-ate', 'extratoApiAte']].forEach(([sel, campo]) => {
+    const campoData = root.querySelector(sel);
+    if (campoData) {
+      campoData.addEventListener('change', () => {
+        state[campo] = campoData.value;
+        state.extratoBanco = null;
+        state.extratoBancoResultado = null;
+        render();
+      });
+    }
+  });
+  const btnBuscarAgora = root.querySelector('#btn-bb-buscar-agora');
+  if (btnBuscarAgora) btnBuscarAgora.addEventListener('click', onBuscarAgoraBB);
 
   const btnBancoImportar = root.querySelector('#btn-banco-importar');
   if (btnBancoImportar) btnBancoImportar.addEventListener('click', onImportarExtratoBanco);
@@ -8276,11 +8416,7 @@ async function onAnalisarExtratoBanco() {
   try {
     state.extratoBanco = await apiFetch('/conciliacao/extrato-banco/analisar', {
       method: 'POST',
-      body: JSON.stringify({
-        arquivo_base64: state.extratoArquivo.base64,
-        nome_arquivo: state.extratoArquivo.nome,
-        banco_id: state.extratoBancoId,
-      }),
+      body: JSON.stringify(corpoExtratoBanco()),
     });
   } catch (err) {
     state.erro = err.message;
@@ -8327,23 +8463,14 @@ async function onImportarExtratoBanco() {
   try {
     state.extratoBancoResultado = await apiFetch('/conciliacao/extrato-banco', {
       method: 'POST',
-      body: JSON.stringify({
-        arquivo_base64: state.extratoArquivo.base64,
-        nome_arquivo: state.extratoArquivo.nome,
-        banco_id: state.extratoBancoId,
-        regras,
-      }),
+      body: JSON.stringify({ ...corpoExtratoBanco(), regras }),
     });
     state.erro = null;
     // Reanalisa para a lista já mostrar o que passou a ser sabido e o que já foi
     // lançado — a pessoa vê o efeito, não precisa acreditar.
     state.extratoBanco = await apiFetch('/conciliacao/extrato-banco/analisar', {
       method: 'POST',
-      body: JSON.stringify({
-        arquivo_base64: state.extratoArquivo.base64,
-        nome_arquivo: state.extratoArquivo.nome,
-        banco_id: state.extratoBancoId,
-      }),
+      body: JSON.stringify(corpoExtratoBanco()),
     });
     state.extratoBancoEscolhas = {};
   } catch (err) {
@@ -8354,8 +8481,29 @@ async function onImportarExtratoBanco() {
   }
 }
 
+// A mesma busca da agenda diária, disparada da tela: lança o que já tem regra e
+// devolve o resumo. Serve também para conferir se a configuração está certa.
+async function onBuscarAgoraBB() {
+  state.bbApiBuscando = true;
+  state.erro = null;
+  render();
+  try {
+    await apiFetch('/conciliacao/extrato-banco/api/buscar', { method: 'POST', body: '{}' });
+  } catch (err) {
+    state.erro = err.message;
+  }
+  try {
+    state.bbApi = await apiFetch('/conciliacao/extrato-banco/api');
+  } catch (err) {
+    /* a faixa fica como estava */
+  }
+  state.bbApiBuscando = false;
+  render();
+}
+
 async function onAnalisarExtrato(ev) {
   ev.preventDefault();
+  if (usaApiBB()) return onAnalisarExtratoBanco();
   if (!state.extratoArquivo) return;
   if (ehImportacaoDoSistema()) return onAnalisarVendasCaixa();
   if (ehImportacaoDoBanco()) return onAnalisarExtratoBanco();

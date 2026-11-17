@@ -582,3 +582,20 @@ CREATE INDEX IF NOT EXISTS idx_contas_nosso_numero
 ALTER TABLE contas_pagamentos ADD COLUMN IF NOT EXISTS ref_externa VARCHAR(160);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_contas_pagamentos_ref_externa
   ON contas_pagamentos (ref_externa) WHERE ref_externa IS NOT NULL;
+
+-- Cada busca do extrato pela API do Banco do Brasil, automática ou disparada da
+-- tela, certa ou errada. É daqui que a tela de Conciliação mostra se a busca de
+-- hoje rodou e o que ela fez; sem isso, uma falha de madrugada (certificado
+-- vencido, banco fora do ar) passaria em silêncio por dias.
+CREATE TABLE IF NOT EXISTS extrato_api_execucoes (
+  id          SERIAL PRIMARY KEY,
+  origem      VARCHAR(20) NOT NULL,          -- automatica | manual
+  de          DATE,
+  ate         DATE,
+  sucesso     BOOLEAN NOT NULL,
+  resultado   JSONB,
+  erro        TEXT,
+  usuario_id  INTEGER REFERENCES usuarios(id),
+  criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_extrato_api_execucoes_criado ON extrato_api_execucoes (criado_em DESC);

@@ -1,6 +1,7 @@
 require('dotenv').config();
 const app = require('./app');
 const { prepararBanco } = require('./db/bootstrap');
+const { agendar: agendarExtratoBB } = require('./jobs/extratoBbDiario');
 
 const PORT = process.env.PORT || 3000;
 
@@ -29,6 +30,9 @@ async function subir() {
       app.listen(PORT, () => {
         console.log(`Mercado Favalessa ERP rodando na porta ${PORT}`);
       });
+      // Busca diária do extrato do Banco do Brasil, quando ligada nas variáveis
+      // de ambiente. Sem configuração, só avisa no log e segue.
+      agendarExtratoBB();
       return;
     } catch (err) {
       const espera = ESPERAS[tentativa];
