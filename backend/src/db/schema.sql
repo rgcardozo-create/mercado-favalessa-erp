@@ -599,3 +599,33 @@ CREATE TABLE IF NOT EXISTS extrato_api_execucoes (
   criado_em   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_extrato_api_execucoes_criado ON extrato_api_execucoes (criado_em DESC);
+
+-- Juros e desconto de cada pagamento, como o comprovante do banco mostra.
+-- `valor` continua sendo o dinheiro que saiu de verdade. O desconto entra no
+-- saldo da conta: um boleto de R$ 271,19 pago com R$ 8,29 de abatimento fica
+-- quitado com R$ 262,90, e não com R$ 8,29 "em aberto" para sempre. Os juros
+-- ficam registrados para o relatório saber quanto se pagou de atraso.
+ALTER TABLE contas_pagamentos ADD COLUMN IF NOT EXISTS juros NUMERIC(12,2) NOT NULL DEFAULT 0;
+ALTER TABLE contas_pagamentos ADD COLUMN IF NOT EXISTS desconto NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+-- Onde entra o boleto de cada beneficiário, aprendido nas importações dos
+-- comprovantes e relatórios do banco. A GV-BUS é despesa fixa todo mês, a BRF
+-- é fornecedor, a Receita é imposto: o dono diz uma vez, e da próxima o boleto
+-- já vem com o lugar certo marcado.
+CREATE TABLE IF NOT EXISTS regras_beneficiario (
+  cnpj           VARCHAR(14) PRIMARY KEY,
+  nome           VARCHAR(160),
+  tipo           conta_tipo NOT NULL,
+  categoria      VARCHAR(60),
+  vezes          INTEGER NOT NULL DEFAULT 0,
+  atualizado_em  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Boleto cadastrado sem "como costuma pagar": quem tem código de barras ou
+-- nosso número, ou já foi pago por boleto, é boleto. Roda a cada subida, mas
+-- só mexe em quem está sem forma — nunca troca uma forma escolhida.
+UPDATE contas SET forma_prevista = 'Boleto'
+ WHERE (forma_prevista IS NULL OR btrim(forma_prevista) = '')
+   AND (codigo_barras IS NOT NULL
+        OR nosso_numero IS NOT NULL
+        OR id IN (SELECT conta_id FROM contas_pagamentos WHERE forma_pagamento = 'Boleto'));

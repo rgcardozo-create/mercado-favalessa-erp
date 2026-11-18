@@ -261,7 +261,7 @@ async function gerencial(req, res) {
     `SELECT count(*)::int AS lancamentos, COALESCE(sum(saldo), 0) AS total
        FROM (SELECT c.valor - COALESCE(p.total, 0) AS saldo
                FROM contas c
-               LEFT JOIN (SELECT conta_id, sum(valor) AS total FROM contas_pagamentos GROUP BY conta_id) p
+               LEFT JOIN (SELECT conta_id, sum(valor - juros + desconto) AS total FROM contas_pagamentos GROUP BY conta_id) p
                  ON p.conta_id = c.id) t
       WHERE saldo > 0`
   );

@@ -179,4 +179,4 @@ function lerRelatorioPagamentosBB(buffer) {
   };
 }
 
-module.exports = { lerRelatorioPagamentosBB, textosDoPdf };
+module.exports = { lerRelatorioPagamentosBB, textosDoPdf, streamsDoPdf, decodificarString, ERRO_IMAGEM };
