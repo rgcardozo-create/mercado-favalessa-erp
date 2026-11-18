@@ -183,8 +183,8 @@ async function gravarSaidas({ lido, banco, regras, usuarioId = null, salvarRegra
       // legado_id é UNIQUE: é ele que faz reimportar o mesmo extrato não duplicar.
       const { rows } = await cliente.query(
         `INSERT INTO contas (tipo, categoria, fornecedor_id, descricao, valor, vencimento,
-                             observacoes, legado_id, criado_por)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                             observacoes, legado_id, criado_por, forma_prevista)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (legado_id) DO NOTHING
          RETURNING id`,
         [
@@ -197,6 +197,8 @@ async function gravarSaidas({ lido, banco, regras, usuarioId = null, salvarRegra
           `Do extrato do banco [${banco.nome}]${origem} — ${s.lancamento}`,
           s.impressao,
           usuarioId,
+          // A forma que o extrato diz (Pix, Boleto...): a conta já nasce com ela.
+          s.forma || null,
         ]
       );
 

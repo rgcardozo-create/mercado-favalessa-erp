@@ -393,6 +393,14 @@ async function importar(req, res) {
       }
       await aprenderBeneficiario(cliente, p, conta[0]);
 
+      // O banco diz como foi pago: a conta sem "como costuma pagar" ganha a forma.
+      if (p.tipo === 'Boleto') {
+        await cliente.query(
+          "UPDATE contas SET forma_prevista = 'Boleto' WHERE id = $1 AND (forma_prevista IS NULL OR btrim(forma_prevista) = '')",
+          [contaId]
+        );
+      }
+
       // O fornecedor sem CNPJ aprende o CNPJ na primeira baixa confirmada: da
       // próxima vez, o casamento é pelo CNPJ, e não mais pelo nome.
       const cnpj = soDigitos(p.cnpj);

@@ -743,6 +743,20 @@ function linhaPainelHTML(conta) {
 
 // Como esse lançamento costuma ser pago. É previsão, não baixa: serve para
 // separar as listas e para já vir escolhido na hora de pagar.
+// Forma com que cada tipo de conta nasce no "Novo lançamento": fornecedor é
+// quase sempre boleto; Ceasa, quase sempre Pix para pessoa física. Dá para
+// trocar, mas o comum já vem escolhido.
+const FORMA_PADRAO_DO_TIPO = { fornecedor: 'Boleto', ceasa: 'PIX' };
+
+const mesmaForma = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+
+// Escolhe a forma num <select> pelo nome, sem ligar para maiúsculas.
+function escolherForma(select, nome) {
+  if (!select) return;
+  const opcao = [...select.options].find((o) => o.value && mesmaForma(o.value, nome));
+  if (opcao) select.value = opcao.value;
+}
+
 function campoFormaPrevistaHTML(atual) {
   return `
     <label>Como costuma pagar
@@ -751,7 +765,7 @@ function campoFormaPrevistaHTML(atual) {
         ${state.formasPagamento
           .map(
             (f) =>
-              `<option value="${escapar(f.nome)}" ${f.nome === atual ? 'selected' : ''}>${escapar(f.nome)}</option>`
+              `<option value="${escapar(f.nome)}" ${mesmaForma(f.nome, atual) ? 'selected' : ''}>${escapar(f.nome)}</option>`
           )
           .join('')}
       </select>
@@ -5327,7 +5341,9 @@ function contasHTML() {
         ${ehDespesa ? `<label>Categoria <input type="text" name="categoria" placeholder="Manutenção, Outros..." value="${escapar(pendente.categoria || '')}" /></label>` : ''}
         <label>Valor <input type="number" step="0.01" min="0" name="valor" required value="${escapar(pendente.valor || '')}" /></label>
         <label>${ehDespesa ? 'Data' : 'Vencimento'} <input type="date" name="vencimento" required value="${escapar(pendente.vencimento || '')}" /></label>
-        ${campoFormaPrevistaHTML(pendente.forma_prevista)}
+        ${campoFormaPrevistaHTML(
+          'forma_prevista' in pendente ? pendente.forma_prevista : FORMA_PADRAO_DO_TIPO[state.tipo] || ''
+        )}
         <label>Parcelas
           <input type="number" min="1" max="60" step="1" name="parcelas" value="${escapar(pendente.parcelas || 1)}" />
         </label>
@@ -9353,6 +9369,10 @@ function ligarLeituraDeBoleto(campo) {
       if (b.valor) partes.push(brl(b.valor));
       if (b.nosso_numero) partes.push(`nosso número ${escapar(b.nosso_numero)}`);
       if (b.tipo === 'nosso_numero') partes.push('sem leitor: valor e vencimento ficam como digitados');
+
+      // Leu um código de boleto: a forma é boleto, se ninguém escolheu outra.
+      const forma = form.querySelector('[name="forma_prevista"]');
+      if (forma && !forma.value) escolherForma(forma, 'Boleto');
 
       if (b.ja_cadastrado) {
         mostrar(`⚠️ ${escapar(b.ja_cadastrado.mensagem)}`, 'erro-campo');

@@ -620,3 +620,12 @@ CREATE TABLE IF NOT EXISTS regras_beneficiario (
   vezes          INTEGER NOT NULL DEFAULT 0,
   atualizado_em  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Boleto cadastrado sem "como costuma pagar": quem tem código de barras ou
+-- nosso número, ou já foi pago por boleto, é boleto. Roda a cada subida, mas
+-- só mexe em quem está sem forma — nunca troca uma forma escolhida.
+UPDATE contas SET forma_prevista = 'Boleto'
+ WHERE (forma_prevista IS NULL OR btrim(forma_prevista) = '')
+   AND (codigo_barras IS NOT NULL
+        OR nosso_numero IS NOT NULL
+        OR id IN (SELECT conta_id FROM contas_pagamentos WHERE forma_pagamento = 'Boleto'));

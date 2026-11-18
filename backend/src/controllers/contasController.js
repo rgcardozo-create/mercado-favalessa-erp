@@ -412,6 +412,10 @@ async function criar(req, res) {
   });
   if (repetido) return res.status(400).json({ error: mensagemBoletoRepetido(repetido) });
 
+  // Lançamento com código de boleto é pago por boleto: sem a forma escolhida,
+  // ela vem do próprio código, em vez de ficar "não definida".
+  const formaPrevista = forma_prevista || (boleto.codigo_barras || boleto.nosso_numero ? 'Boleto' : null);
+
   const datas = await datasDasParcelas({ vencimento, parcelas, intervalo });
 
   if (!req.body.permitir_duplicado) {
@@ -441,7 +445,7 @@ async function criar(req, res) {
           descricao,
           valor,
           datas[i],
-          forma_prevista || null,
+          formaPrevista,
           parcelas > 1 ? i + 1 : null,
           parcelas > 1 ? parcelas : null,
           req.user.id,
@@ -462,7 +466,7 @@ async function criar(req, res) {
             rows[0].id,
             valor,
             req.body.data_pagamento || datas[i],
-            req.body.forma_pagamento || forma_prevista || null,
+            req.body.forma_pagamento || formaPrevista || null,
             req.body.banco_id || null,
             req.user.id,
           ]
