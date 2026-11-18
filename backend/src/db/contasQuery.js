@@ -9,12 +9,20 @@ const SELECT_CONTAS_COM_SALDO = `
     f.nome AS fornecedor_nome,
     COALESCE(p.total_pago, 0) AS total_pago,
     to_char(p.ultimo_pagamento, 'YYYY-MM-DD') AS ultimo_pagamento,
-    c.valor - COALESCE(p.total_pago, 0) AS saldo,
-    (COALESCE(p.total_pago, 0) > 0 AND c.valor - COALESCE(p.total_pago, 0) <= 0) AS quitado
+    COALESCE(p.total_desconto, 0) AS total_desconto,
+    COALESCE(p.total_juros, 0) AS total_juros,
+    -- O que abate o saldo é o que foi pago da conta em si: o pago menos os juros
+    -- (que são do atraso, não do boleto), mais o desconto do banco. Assim o
+    -- boleto pago com juros ou com abatimento fecha em zero, e não fica com
+    -- saldo negativo ou com a diferença "em aberto".
+    c.valor - (COALESCE(p.total_pago, 0) - COALESCE(p.total_juros, 0)) - COALESCE(p.total_desconto, 0) AS saldo,
+    (COALESCE(p.total_pago, 0) > 0
+      AND c.valor - (COALESCE(p.total_pago, 0) - COALESCE(p.total_juros, 0)) - COALESCE(p.total_desconto, 0) <= 0) AS quitado
   FROM contas c
   LEFT JOIN fornecedores f ON f.id = c.fornecedor_id
   LEFT JOIN (
-    SELECT conta_id, SUM(valor) AS total_pago, MAX(data_pagamento) AS ultimo_pagamento
+    SELECT conta_id, SUM(valor) AS total_pago, SUM(desconto) AS total_desconto, SUM(juros) AS total_juros,
+           MAX(data_pagamento) AS ultimo_pagamento
     FROM contas_pagamentos
     GROUP BY conta_id
   ) p ON p.conta_id = c.id

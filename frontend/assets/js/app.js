@@ -8869,6 +8869,7 @@ const PODE_CADASTRAR = new Set(['sem_cadastro', 'escolher', 'pelo_nome']);
 
 const TIPOS_NOVO_BOLETO = [
   ['fornecedor', 'Fornecedores'],
+  ['ceasa', 'Ceasa'],
   ['fixa', 'Despesas fixas'],
   ['imposto', 'Impostos'],
   ['operacional', 'Custos operacionais'],
@@ -8889,14 +8890,41 @@ function cnpjFormatado(d) {
   return n.length === 14 ? `${n.slice(0, 2)}.${n.slice(2, 5)}.${n.slice(5, 8)}/${n.slice(8, 12)}-${n.slice(12)}` : n;
 }
 
-function novoBoletoInicial(p) {
+// O boleto novo já vem preenchido com o que o PDF diz. O comprovante traz o
+// valor do boleto (sem juros nem desconto) e o vencimento; o relatório, só o
+// valor pago e a data. Onde lançar: o que o sistema aprendeu deste CNPJ, ou o
+// palpite pelo nome.
+function novoBoletoInicial(item) {
+  const p = item.pagamento;
+  const s = item.sugestao || {};
   return {
-    tipo: tipoProvavel(p),
+    tipo: s.tipo || tipoProvavel(p),
+    categoria: s.categoria || '',
     descricao: p.nome || p.descricao || '',
-    valor: p.valor.toFixed(2),
-    vencimento: p.data,
+    valor: (p.valor_documento || p.valor).toFixed(2),
+    vencimento: p.vencimento || p.data,
   };
 }
+
+// Vencimento × pagamento, juros e desconto, do jeito que o comprovante mostra.
+function detalheComprovanteHTML(p) {
+  if (!p.vencimento && !p.juros && !p.desconto) return '';
+  const partes = [];
+  if (p.vencimento) {
+    const dias = Math.round((new Date(`${p.data}T12:00:00Z`) - new Date(`${p.vencimento}T12:00:00Z`)) / 86400000);
+    partes.push(
+      `vence ${dateBR(p.vencimento)}${
+        dias < 0 ? ` · pago ${-dias} dia(s) antes` : dias > 0 ? ` · <strong>pago ${dias} dia(s) depois</strong>` : ' · pago no dia'
+      }`
+    );
+  }
+  if (p.valor_documento && Math.abs(p.valor_documento - p.valor) > 0.004) partes.push(`boleto de ${brl(p.valor_documento)}`);
+  if (p.juros) partes.push(`<strong>${brl(p.juros)} de juros/multa</strong>`);
+  if (p.desconto) partes.push(`${brl(p.desconto)} de desconto`);
+  return `<br><small class="vazio-texto">${partes.join(' · ')}</small>`;
+}
+
+const ROTULO_TIPO_NOVO = Object.fromEntries(TIPOS_NOVO_BOLETO);
 
 function escolhasIniciais(itens) {
   const escolhas = {};
@@ -8905,6 +8933,16 @@ function escolhasIniciais(itens) {
       marcado: MARCADO_DE_INICIO.has(i.situacao) && Boolean(i.conta_id),
       conta_id: i.conta_id ? String(i.conta_id) : '',
     };
+    // Boleto que não está no sistema já vem como "cadastrar como novo",
+    // preenchido. Se o sistema já sabe onde este CNPJ entra, vem marcado para
+    // gravar; se não sabe, espera a pessoa conferir o lugar.
+    if (i.situacao === 'sem_cadastro') {
+      escolhas[i.ref] = {
+        conta_id: 'novo',
+        novo: novoBoletoInicial(i),
+        marcado: Boolean(i.sugestao && i.sugestao.aprendido),
+      };
+    }
   }
   return escolhas;
 }
@@ -8970,6 +9008,10 @@ function linhaPagamentoBancoHTML(i) {
       <td>${dateBR(p.data)}</td>
       <td>${escapar(p.nome || p.descricao || '—')}${
         p.nome && p.descricao ? `<br><small class="vazio-texto">${escapar(p.descricao)}</small>` : ''
+      }${detalheComprovanteHTML(p)}${
+        i.sugestao && i.sugestao.aprendido
+          ? `<br><small class="vazio-texto">Costuma entrar em <strong>${escapar(ROTULO_TIPO_NOVO[i.sugestao.tipo] || i.sugestao.tipo)}</strong></small>`
+          : ''
       }</td>
       <td>${brl(p.valor)}</td>
       <td>${conta}</td>
@@ -8993,17 +9035,31 @@ function linhaNovoBoletoHTML(i, n) {
             ${TIPOS_NOVO_BOLETO.map(([v, r]) => `<option value="${v}" ${n.tipo === v ? 'selected' : ''}>${r}</option>`).join('')}
           </select>
         </label>
+        ${
+          n.tipo === 'fornecedor' || n.tipo === 'ceasa'
+            ? ''
+            : `<label>Categoria <input type="text" data-pb-novo="${ref}" data-campo="categoria" value="${escapar(n.categoria || '')}" placeholder="opcional" /></label>`
+        }
         <label>Descrição <input type="text" data-pb-novo="${ref}" data-campo="descricao" value="${escapar(n.descricao)}" /></label>
         <label>Valor do boleto <input type="number" step="0.01" min="0.01" data-pb-novo="${ref}" data-campo="valor" value="${escapar(n.valor)}" /></label>
         <label>Vencimento <input type="date" data-pb-novo="${ref}" data-campo="vencimento" value="${escapar(n.vencimento)}" /></label>
         <p class="vazio-texto campo-largo">
           ${
-            n.tipo === 'fornecedor'
+            n.tipo === 'fornecedor' || n.tipo === 'ceasa'
               ? `Fornecedor: <strong>${escapar(p.nome || '—')}</strong>${p.cnpj ? ` (CNPJ ${escapar(cnpjFormatado(p.cnpj))})` : ''} — se não existir no cadastro, é criado.`
               : 'Sem fornecedor: entra pela descrição.'
           }
-          ${p.nosso_numero ? `Nosso número ${escapar(p.nosso_numero)} fica guardado no boleto.` : ''}
-          Não sabe o valor original ou o vencimento? Deixe como está: fica o valor pago e o dia do pagamento.
+          ${
+            p.codigo_barras
+              ? 'O código de barras do comprovante fica guardado no boleto.'
+              : p.nosso_numero ? `Nosso número ${escapar(p.nosso_numero)} fica guardado no boleto.` : ''
+          }
+          ${
+            p.vencimento
+              ? 'Valor e vencimento vieram do comprovante.'
+              : 'Não sabe o valor original ou o vencimento? Deixe como está: fica o valor pago e o dia do pagamento.'
+          }
+          O lugar escolhido fica guardado para os próximos boletos deste CNPJ.
         </p>
       </div>
     </td></tr>`;
@@ -9026,18 +9082,20 @@ function pagamentosBancoHTML() {
   return `
     <details class="cartao-pagamentos-banco" ${pb.aberto ? 'open' : ''}>
       <summary><strong>Dar baixa pelo relatório do banco</strong>
-        <small class="vazio-texto">— envie o "Relatório de Pagamentos Realizados" do BB (PDF) e o sistema acha os boletos</small>
+        <small class="vazio-texto">— envie o PDF de pagamentos do BB e o sistema acha os boletos, ou cadastra os que faltam</small>
       </summary>
 
       <div class="form-inline">
-        <label class="campo-largo">PDF do relatório
+        <label class="campo-largo">PDF do banco
           <input type="file" id="pb-arquivo" accept="application/pdf,.pdf" />
         </label>
         <button type="button" id="pb-conferir" ${pb.arquivo && !pb.carregando ? '' : 'disabled'}>
           ${pb.carregando ? 'Lendo…' : 'Conferir'}
         </button>
         <p class="vazio campo-largo">
-          No site do BB, baixe o relatório pelo botão de <strong>PDF</strong> (não use "imprimir").
+          Vale o <strong>Extrato de pagamentos e transferências</strong> (um comprovante por boleto, o mais
+          completo: traz código de barras, vencimento, juros e desconto) ou o <strong>Relatório de Pagamentos
+          Realizados</strong>. Baixe pelo botão de <strong>PDF</strong>, não use "imprimir".
           Nada é gravado ao conferir: você vê o que o sistema achou e escolhe o que dar baixa.
         </p>
       </div>
@@ -9060,8 +9118,13 @@ function pagamentosBancoHTML() {
 
       ${
         a
-          ? `<p class="vazio-texto">
-              <strong>${a.total.quantidade}</strong> pagamento(s)${
+          ? `${
+              a.nao_lidos && a.nao_lidos.length
+                ? `<div class="alerta aviso">${a.nao_lidos.length} comprovante(s) que ainda não sei ler ficaram de fora:
+                    ${a.nao_lidos.map((n) => `${escapar(n.titulo)}${n.valor ? ` (${brl(n.valor)})` : ''}`).join('; ')}.</div>`
+                : ''
+            }<p class="vazio-texto">
+              ${a.formato === 'comprovantes' ? 'Comprovantes: ' : ''}<strong>${a.total.quantidade}</strong> pagamento(s)${
                 a.periodo ? ` de ${dateBR(a.periodo.de)} a ${dateBR(a.periodo.ate)}` : ''
               }, ${brl(a.total.valor)} &middot; ${contagem}
             </p>
@@ -9145,7 +9208,7 @@ function ligarPagamentosBanco(root) {
       e.conta_id = sel.value;
       if (sel.value === 'novo' && !e.novo) {
         const item = pb.analise.itens.find((i) => i.ref === sel.dataset.pbConta);
-        e.novo = novoBoletoInicial(item.pagamento);
+        e.novo = novoBoletoInicial(item);
       }
       // Escolher a conta já é a confirmação; tirar a escolha desmarca.
       e.marcado = Boolean(sel.value);

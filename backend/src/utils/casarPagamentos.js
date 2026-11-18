@@ -51,7 +51,8 @@ function nomesParecidos(a, b) {
 const porVencimento = (a, b) => String(a.vencimento).localeCompare(String(b.vencimento));
 
 function resumoConta(c, pagamento) {
-  const diferenca = Number((pagamento.valor - Number(c.saldo)).toFixed(2));
+  // O desconto do comprovante abate junto com o pago: não é diferença.
+  const diferenca = Number((pagamento.valor + (Number(pagamento.desconto) || 0) - Number(c.saldo)).toFixed(2));
   return {
     id: c.id,
     fornecedor: c.fornecedor_nome || null,
@@ -66,7 +67,12 @@ function resumoConta(c, pagamento) {
 // Entre contas possíveis, as que o valor pago explica: saldo igual, ou saldo
 // menor com o boleto vencido (juros). Ordenadas pelo vencimento.
 function explicadasPeloValor(pagamento, contas) {
-  const iguais = contas.filter((c) => Math.abs(Number(c.saldo) - pagamento.valor) < CENTAVO);
+  // O comprovante do banco traz o valor do boleto separado do cobrado: com ele,
+  // o boleto pago com desconto (ou com juros) casa pelo valor que tem no
+  // cadastro, sem precisar adivinhar a diferença.
+  const doDocumento = Number(pagamento.valor_documento) || null;
+  const iguais = contas.filter((c) => Math.abs(Number(c.saldo) - pagamento.valor) < CENTAVO ||
+    (doDocumento && Math.abs(Number(c.saldo) - doDocumento) < CENTAVO));
   if (iguais.length) return { contas: iguais.sort(porVencimento), juros: false };
 
   const comJuros = contas.filter((c) => {
@@ -192,7 +198,11 @@ function casarPagamentos(pagamentos, contas, jaImportadas = new Set()) {
 
     // 5. Pelo nome, quando o fornecedor não tem CNPJ no cadastro. Nunca
     // automático: nome engana.
-    const peloNome = abertas().filter((c) => !soDigitos(c.fornecedor_cnpj) && nomesParecidos(c.fornecedor_nome, p.nome));
+    // Conta sem fornecedor (despesa fixa, imposto) não tem CNPJ para casar:
+    // o nome do beneficiário é procurado na descrição dela. Sem isso, a Unimed
+    // cadastrada à mão como despesa fixa viraria um segundo boleto.
+    const peloNome = abertas().filter((c) => !soDigitos(c.fornecedor_cnpj) &&
+      (nomesParecidos(c.fornecedor_nome, p.nome) || (!c.fornecedor_id && nomesParecidos(c.descricao, p.nome))));
     if (peloNome.length) {
       const { contas: possiveis } = explicadasPeloValor(p, peloNome);
       const lista = possiveis.length ? possiveis : peloNome.sort(porVencimento);
