@@ -59,7 +59,19 @@ function linhasDoPdf(buffer) {
   return linhas;
 }
 
-const ehComprovante = (linhas) => linhas.some((l) => /^\s*COMPROVANTE DE /.test(l));
+// O BB entrega o "Extrato de pagamentos e transferências" em dois desenhos,
+// às vezes misturados no mesmo arquivo:
+// - comprovante completo, em texto corrido de largura fixa ("COMPROVANTE DE
+//   PAGAMENTO DE TITULOS", com beneficiário, CNPJ e vencimento), e o do SISBB
+//   (Pix, débito automático);
+// - ficha resumida, em duas colunas: "Agência", "Conta corrente", o tipo
+//   ("Títulos/Cobrança", "Convênio") e pares rótulo/valor. A ficha de boleto
+//   não traz o nome nem o CNPJ de quem recebeu.
+const ehFichaResumida = (linhas, i) =>
+  String(linhas[i] || '').trim() === 'Agência' && String(linhas[i + 2] || '').trim() === 'Conta corrente';
+
+const ehComprovante = (linhas) =>
+  linhas.some((l, i) => /^\s*COMPROVANTE DE /.test(l) || /^\s*SISBB\b/.test(l) || ehFichaResumida(linhas, i));
 
 // "NR. DOCUMENTO                             111.701" → ['NR. DOCUMENTO', '111.701'].
 // O rótulo e o valor são separados por dois ou mais espaços.
@@ -155,6 +167,107 @@ function lerTitulo(linhas) {
   };
 }
 
+// Rótulos das fichas resumidas, como o BB escreve. A leitura vai de rótulo em
+// rótulo: um valor vazio não desalinha o resto.
+const ROTULOS_FICHA = new Set([
+  'Banco', 'Código de barras', 'Documento', 'Data da arrecadação', 'Data do pagamento', 'Valor documento',
+  'Desc./abatimentos', 'Outras deduções', 'Juros/multa', 'Outros acréscimos', 'Valor cobrado', 'Convênio', 'Valor',
+]);
+
+function camposDaFicha(tokens) {
+  const campos = {};
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (ROTULOS_FICHA.has(tokens[i]) && i + 1 < tokens.length && !ROTULOS_FICHA.has(tokens[i + 1])) {
+      if (campos[tokens[i]] === undefined) campos[tokens[i]] = tokens[i + 1];
+      i += 1;
+    }
+  }
+  return campos;
+}
+
+// Ficha resumida de boleto ("Títulos/Cobrança"). Sem beneficiário: o que
+// identifica o boleto é o código de barras, de onde saem também o vencimento e
+// o valor original.
+function lerFichaTitulo(campos, conta) {
+  const codigo = lerCodigoBoleto(campos['Código de barras'] || '');
+  const valido = codigo && !codigo.erro ? codigo : null;
+  const valorDocumento = paraValor(campos['Valor documento']);
+  const desconto = Number(((paraValor(campos['Desc./abatimentos']) || 0) + (paraValor(campos['Outras deduções']) || 0)).toFixed(2));
+  const juros = Number(((paraValor(campos['Juros/multa']) || 0) + (paraValor(campos['Outros acréscimos']) || 0)).toFixed(2));
+  const banco = (campos.Banco || '').trim() || null;
+  return {
+    data: paraISO(campos['Data da arrecadação'] || campos['Data do pagamento']),
+    nome: '',
+    cnpj: null,
+    banco_beneficiario: banco,
+    nosso_numero: valido && valido.campo_livre ? valido.campo_livre : null,
+    codigo_barras: valido ? valido.codigo_barras : null,
+    linha_digitavel: soDigitos(campos['Código de barras']) || null,
+    linha_digitavel_invalida: Boolean(campos['Código de barras'] && !valido),
+    numero_documento: campos.Documento || null,
+    autenticacao: null,
+    // A ficha não traz o vencimento; o código de barras traz.
+    vencimento: valido ? valido.vencimento : null,
+    valor_documento: valorDocumento,
+    juros,
+    desconto,
+    valor: paraValor(campos['Valor cobrado']),
+    conta_pagadora: conta,
+    tipo: 'Boleto',
+    descricao: banco ? `Boleto ${banco}` : 'Boleto',
+  };
+}
+
+// Ficha resumida de convênio: DARF, conta de consumo, tributo. O nome do
+// convênio ("RFB-DARF CODIGO DE BARRAS") é quem recebe.
+function lerFichaConvenio(campos, conta) {
+  const codigo = lerCodigoBoleto(campos['Código de barras'] || '');
+  const valido = codigo && !codigo.erro ? codigo : null;
+  const nome = (campos['Convênio'] || '').trim();
+  const valor = paraValor(campos.Valor);
+  return {
+    data: paraISO(campos['Data do pagamento'] || campos['Data da arrecadação']),
+    nome,
+    cnpj: null,
+    banco_beneficiario: null,
+    nosso_numero: null,
+    codigo_barras: valido ? valido.codigo_barras : null,
+    linha_digitavel: soDigitos(campos['Código de barras']) || null,
+    linha_digitavel_invalida: Boolean(campos['Código de barras'] && !valido),
+    numero_documento: campos.Documento || null,
+    autenticacao: null,
+    vencimento: null,
+    valor_documento: valor,
+    juros: 0,
+    desconto: 0,
+    valor,
+    conta_pagadora: conta,
+    tipo: 'Convênio',
+    descricao: nome || 'Convênio',
+  };
+}
+
+// Comprovante Pix do SISBB. Ainda não vira lançamento: é contado à parte, e o
+// Pix para uma conta da própria empresa (o PagSeguro, por exemplo) é dito
+// como tal — é dinheiro mudando de lugar, não despesa.
+function lerPix(bloco) {
+  const texto = bloco.map((l) => l.trim());
+  const valorDe = (rotulo) => {
+    const l = texto.find((t) => t.toUpperCase().startsWith(rotulo));
+    return l ? l.slice(rotulo.length).replace(/^[:\s]+/, '').trim() : '';
+  };
+  const pagador = soDigitos(valorDe('CNPJ DO PAGADOR'));
+  const recebedor = soDigitos((texto.find((t) => /^(CNPJ|CPF):/i.test(t)) || '').replace(/^(CNPJ|CPF):/i, ''));
+  return {
+    valor: paraValor(valorDe('VALOR')),
+    tarifa: paraValor(valorDe('TARIFA')) || 0,
+    data: paraISO(valorDe('DATA')),
+    para: valorDe('PAGO PARA'),
+    instituicao: valorDe('INSTITUICAO').replace(/^\d+\s*/, ''),
+    propria_conta: Boolean(pagador && recebedor && pagador === recebedor),
+  };
+}
+
 function lerComprovantesPagamentoBB(buffer) {
   const linhas = linhasDoPdf(buffer);
   if (!linhas.length) throw new Error(ERRO_IMAGEM);
@@ -162,19 +275,60 @@ function lerComprovantesPagamentoBB(buffer) {
     throw new Error('Este PDF não é o extrato de comprovantes de pagamento do Banco do Brasil.');
   }
 
-  // Cada comprovante começa no título "COMPROVANTE DE ...". O cabeçalho dele
-  // (data e hora da emissão) fica na linha de cima, e não importa.
+  // Onde começa cada comprovante, em qualquer dos desenhos. O título que fica
+  // dentro de um comprovante do SISBB ("COMPROVANTE DE DEBITO AUTOMATICO") é
+  // parte dele, e não o começo de outro.
   const inicios = [];
-  linhas.forEach((l, i) => { if (/^\s*COMPROVANTE DE /.test(l)) inicios.push(i); });
+  let dentroSisbb = -1;
+  linhas.forEach((l, i) => {
+    if (/^\s*SISBB\b/.test(l)) { inicios.push({ i, tipo: 'sisbb' }); dentroSisbb = i; return; }
+    if (ehFichaResumida(linhas, i)) { inicios.push({ i, tipo: 'ficha' }); dentroSisbb = -1; return; }
+    if (/^\s*COMPROVANTE DE /.test(l) && !(dentroSisbb >= 0 && i - dentroSisbb < 8)) inicios.push({ i, tipo: 'completo' });
+  });
 
   const pagamentos = [];
   const naoLidos = [];
   inicios.forEach((inicio, k) => {
-    const bloco = linhas.slice(inicio, inicios[k + 1] === undefined ? linhas.length : inicios[k + 1]);
+    const bloco = linhas.slice(inicio.i, k + 1 < inicios.length ? inicios[k + 1].i : linhas.length);
+
+    if (inicio.tipo === 'ficha') {
+      const tokens = bloco.map((l) => l.trim()).filter(Boolean);
+      const contaTexto = tokens[3] || '';
+      const conta = { agencia: tokens[1] || null, conta: (contaTexto.match(/^[\d.-]+/) || [null])[0] };
+      const tipo = tokens[4] || '';
+      const campos = camposDaFicha(tokens.slice(5));
+      let p = null;
+      if (/T[ií]tulos|Cobran/i.test(tipo)) p = lerFichaTitulo(campos, conta);
+      else if (/Conv[eê]nio/i.test(tipo)) p = lerFichaConvenio(campos, conta);
+      if (!p) { naoLidos.push({ titulo: tipo || 'Ficha sem tipo', valor: paraValor(campos['Valor cobrado'] || campos.Valor) }); return; }
+      if (!p.data || !p.valor) { naoLidos.push({ titulo: tipo, valor: p.valor, motivo: 'Sem data ou valor do pagamento.' }); return; }
+      pagamentos.push(p);
+      return;
+    }
+
+    if (inicio.tipo === 'sisbb') {
+      const titulo = (bloco.slice(1, 8).map((l) => l.trim()).find((t) => /^comprovante/i.test(t)) || 'Comprovante').trim();
+      if (/pix/i.test(titulo)) {
+        const pix = lerPix(bloco);
+        naoLidos.push({
+          titulo: 'Pix',
+          valor: pix.valor,
+          data: pix.data,
+          para: pix.para,
+          motivo: pix.propria_conta
+            ? `transferência para conta da própria empresa${pix.instituicao ? ` (${pix.instituicao})` : ''} — não é despesa`
+            : 'Pix ainda não é lançado por aqui',
+        });
+      } else {
+        naoLidos.push({ titulo, valor: paraValor(bloco.find((l) => /VALOR/i.test(l))) });
+      }
+      return;
+    }
+
     const titulo = bloco[0].trim();
     if (!/PAGAMENTO DE TITULOS/.test(titulo)) {
-      // Pix, transferência, tributo, convênio: ainda sem leitura. Vai contado,
-      // para a pessoa saber que existe e não achar que se perdeu.
+      // Transferência, tributo, convênio em texto corrido: ainda sem leitura.
+      // Vai contado, para a pessoa saber que existe e não achar que se perdeu.
       naoLidos.push({ titulo, valor: paraValor(bloco.find((l) => /VALOR/.test(l))) });
       return;
     }
@@ -183,13 +337,13 @@ function lerComprovantesPagamentoBB(buffer) {
       naoLidos.push({ titulo, valor: p.valor, motivo: 'Sem data ou valor do pagamento.' });
       return;
     }
-    pagamentos.push({ seq: pagamentos.length + 1, ...p });
+    pagamentos.push(p);
   });
 
   if (!pagamentos.length) {
     throw new Error(
       naoLidos.length
-        ? `Li ${naoLidos.length} comprovante(s), mas nenhum é de pagamento de boleto (${naoLidos[0].titulo}).`
+        ? `Li ${naoLidos.length} comprovante(s), mas nenhum é de boleto ou convênio (${naoLidos[0].titulo}).`
         : 'Não encontrei nenhum comprovante de pagamento neste PDF.'
     );
   }
@@ -198,17 +352,18 @@ function lerComprovantesPagamentoBB(buffer) {
   // de dar o valor cobrado. Se não der, o layout mudou e algum número foi lido
   // da linha errada — melhor parar do que gravar conta errada.
   for (const p of pagamentos) {
-    if (p.valor_documento !== null) {
+    if (p.valor_documento !== null && p.valor_documento !== undefined) {
       const esperado = Number((p.valor_documento + p.juros - p.desconto).toFixed(2));
       if (Math.abs(esperado - p.valor) > 0.009) {
         throw new Error(
-          `No comprovante de ${p.nome || 'um boleto'} (${p.data}), documento + juros − desconto não dá o valor cobrado. ` +
+          `No comprovante de ${p.nome || p.descricao || 'um boleto'} (${p.data}), documento + juros − desconto não dá o valor cobrado. ` +
             'O layout do BB pode ter mudado: me mande o arquivo para eu ajustar a leitura.'
         );
       }
     }
   }
 
+  pagamentos.forEach((p, i) => { p.seq = i + 1; });
   const datas = pagamentos.map((p) => p.data).sort();
   const soma = Number(pagamentos.reduce((a, p) => a + p.valor, 0).toFixed(2));
   return {
