@@ -126,7 +126,7 @@ ok('documento + juros − desconto que não dá o cobrado: recusa', erro && /lay
 
 erro = null;
 try { lerComprovantesPagamentoBB(pdfDe([PAGINAS[3]])); } catch (e) { erro = e; }
-ok('só transferência: avisa que não há boleto', erro && /nenhum é de pagamento de boleto/.test(erro.message));
+ok('só transferência: avisa que não há boleto', erro && /nenhum é de boleto ou convênio/.test(erro.message));
 
 const digitada = PAGINAS[0].map((l) => (l === B1.linha ? `${B1.linha.slice(0, 5)}9${B1.linha.slice(6)}` : l));
 const lida = lerComprovantesPagamentoBB(pdfDe([digitada])).pagamentos[0];
