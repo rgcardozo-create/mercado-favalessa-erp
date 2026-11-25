@@ -7,6 +7,12 @@ const { calcularSobreaviso } = require('../utils/calculoSobreaviso');
 const { calcularFerias, diasDeDireito } = require('../utils/calculoFerias');
 const { calcularRescisao, MOTIVOS } = require('../utils/calculoRescisao');
 const { lerParametros } = require('./parametrosController');
+const { calcularDecimoTerceiro, TIPOS_DECIMO } = require('../utils/calculoDecimoTerceiro');
+
+// O que um lançamento da folha é. Vazio é o salário do mês, como sempre foi;
+// as parcelas do 13º são lançamentos à parte, com a própria baixa, para o 13º
+// não se misturar com o salário do mês em que é pago.
+const tipoValido = (tipo) => !tipo || Object.prototype.hasOwnProperty.call(TIPOS_DECIMO, tipo);
 
 // Líquido = salário + bonificação - compras - adiantamento - outras - descontos.
 // Mesma conta do sistema atual; nunca é armazenado, sempre derivado.
@@ -239,6 +245,9 @@ async function criar(req, res) {
   if (!nome) {
     return res.status(400).json({ error: 'nome é obrigatório.' });
   }
+  if (!tipoValido(tipo)) {
+    return res.status(400).json({ error: 'Tipo de lançamento inválido.' });
+  }
 
   const numeros = CAMPOS_VALOR.map((c) => Number(req.body[c] || 0));
   if (numeros.some((n) => !Number.isFinite(n))) {
@@ -326,6 +335,9 @@ async function atualizar(req, res) {
     req.body.funcionario_id === undefined ? atual.funcionario_id : req.body.funcionario_id || null;
   const dataRef = req.body.data_ref === undefined ? atual.data_ref : req.body.data_ref || null;
   const tipo = req.body.tipo === undefined ? atual.tipo : req.body.tipo || null;
+  if (req.body.tipo !== undefined && !tipoValido(req.body.tipo)) {
+    return res.status(400).json({ error: 'Tipo de lançamento inválido.' });
+  }
   const observacoes =
     req.body.observacoes === undefined ? atual.observacoes : req.body.observacoes || null;
 
@@ -740,7 +752,43 @@ async function calculoRescisao(req, res) {
   });
 }
 
+// Sugestão do 13º de um funcionário: salário base, meses trabalhados no ano e
+// o que já foi lançado de 13º neste ano (para a 2ª parcela ser o que falta).
+async function decimoTerceiro(req, res) {
+  const funcionarioId = Number(req.query.funcionario_id);
+  const ano = Number(req.query.ano) || Number(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 4));
+  if (!funcionarioId) return res.status(400).json({ error: 'Escolha o funcionário.' });
+
+  const { rows: func } = await pool.query(
+    `SELECT id, nome, salario_base, to_char(data_admissao, 'YYYY-MM-DD') AS data_admissao
+       FROM funcionarios WHERE id = $1`,
+    [funcionarioId]
+  );
+  if (!func[0]) return res.status(404).json({ error: 'Funcionário não encontrado.' });
+
+  const { rows: lancados } = await pool.query(
+    `SELECT tipo, COALESCE(sum(salario), 0) AS valor
+       FROM folha
+      WHERE funcionario_id = $1 AND tipo = ANY($2::text[])
+        AND extract(year FROM data_ref) = $3
+        AND ($4::int IS NULL OR id <> $4)
+      GROUP BY tipo`,
+    [funcionarioId, Object.keys(TIPOS_DECIMO), ano, Number(req.query.ignorar) || null]
+  );
+
+  return res.json({
+    funcionario: { id: func[0].id, nome: func[0].nome },
+    ...calcularDecimoTerceiro({
+      salario: func[0].salario_base,
+      admissao: func[0].data_admissao,
+      ano,
+      lancados: Object.fromEntries(lancados.map((l) => [l.tipo, Number(l.valor)])),
+    }),
+  });
+}
+
 module.exports = {
+  decimoTerceiro,
   desbloquear,
   calculoHoras,
   calculoSobreaviso,

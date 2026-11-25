@@ -3978,6 +3978,17 @@ function calculadoraRescisaoHTML() {
   `;
 }
 
+// O que um lançamento da folha é. Vazio é o salário do mês; as parcelas do 13º
+// são lançamentos à parte, com a própria baixa.
+const TIPOS_LANCAMENTO_FOLHA = [
+  ['', 'Salário do mês'],
+  ['13_1', '13º — 1ª parcela'],
+  ['13_2', '13º — 2ª parcela'],
+  ['13_unica', '13º — parcela única'],
+];
+const ROTULO_TIPO_FOLHA = Object.fromEntries(TIPOS_LANCAMENTO_FOLHA);
+const ehDecimo = (tipo) => String(tipo || '').startsWith('13_');
+
 function folhaHTML() {
   const cabecalho = cabecalhoHTML('Folha de pagamento');
 
@@ -4044,6 +4055,13 @@ function folhaHTML() {
     <section class="cartoes-form">
       <form data-action="novo-lancamento-folha" class="form-inline">
         <h2>${e ? `Corrigir folha de ${escapar(e.nome)}` : 'Lançar folha do mês'}</h2>
+        <label class="campo-largo">O que está lançando
+          <select name="tipo" id="tipo-folha">
+            ${TIPOS_LANCAMENTO_FOLHA.map(
+              ([v, r]) => `<option value="${v}" ${String((e && e.tipo) || '') === v ? 'selected' : ''}>${r}</option>`
+            ).join('')}
+          </select>
+        </label>
         <label>Funcionário
           <select name="funcionario_id" required>
             <option value="">— escolha —</option>
@@ -4056,7 +4074,8 @@ function folhaHTML() {
           </select>
         </label>
         <label>Referência <input type="date" name="data_ref" required value="${e ? (e.data_ref || '').slice(0, 10) : todayISO()}" /></label>
-        <label>Salário <input type="number" step="0.01" name="salario" required value="${e ? e.salario : ''}" /></label>
+        <label><span id="rotulo-salario-folha">${e && ehDecimo(e.tipo) ? 'Valor do 13º' : 'Salário'}</span>
+          <input type="number" step="0.01" name="salario" required value="${e ? e.salario : ''}" /></label>
         <label>Bonificação <input type="number" step="0.01" name="bonificacao" value="${e ? e.bonificacao : ''}" /></label>
         <label>Compras <input type="number" step="0.01" name="compras" value="${e ? e.compras : ''}" /></label>
         <label>Adiantamento <input type="number" step="0.01" name="adiantamento" value="${e ? e.adiantamento : ''}" /></label>
@@ -4136,7 +4155,9 @@ function folhaHTML() {
                 <td class="col-marca">
                   <input type="checkbox" data-marca-folha="${l.id}" ${state.folhaMarcadas.has(l.id) ? 'checked' : ''} />
                 </td>
-                <td>${escapar(l.nome)}</td>
+                <td>${escapar(l.nome)}${
+                  ehDecimo(l.tipo) ? `<br><span class="badge parcial" style="margin:0">${escapar(ROTULO_TIPO_FOLHA[l.tipo])}</span>` : ''
+                }</td>
                 <td>${l.data_ref ? dateBR(l.data_ref) : '—'}</td>
                 <td>${brl(l.salario)}</td>
                 <td>${brl(l.bonificacao)}</td>
@@ -6751,6 +6772,10 @@ function bind() {
     formFolha.querySelector('select[name=funcionario_id]').addEventListener('change', (ev) =>
       onEscolherFuncionarioFolha(ev.target.value, formFolha)
     );
+    // Trocar entre salário e 13º muda o que o formulário sugere.
+    formFolha.querySelector('select[name=tipo]').addEventListener('change', () =>
+      onEscolherFuncionarioFolha(formFolha.querySelector('select[name=funcionario_id]').value, formFolha)
+    );
   }
 
   root.querySelectorAll('[data-action="editar-folha"]').forEach((btn) => {
@@ -7708,6 +7733,16 @@ async function onExcluirCadastro(id) {
 // campos continuam editáveis — o dono é quem decide quanto descontar no mês.
 async function onEscolherFuncionarioFolha(id, form) {
   const aviso = form.querySelector('#aviso-adiantamento');
+  const tipo = form.querySelector('select[name=tipo]').value;
+  const rotulo = form.querySelector('#rotulo-salario-folha');
+  if (rotulo) rotulo.textContent = ehDecimo(tipo) ? 'Valor do 13º' : 'Salário';
+  if (ehDecimo(tipo)) return sugerirDecimoTerceiro(id, tipo, form);
+  // Voltou para o salário do mês: o valor que o 13º tinha sugerido não serve.
+  const campoValor = form.querySelector('input[name=salario]');
+  if (campoValor.dataset.sugeridoDecimo) {
+    campoValor.value = '';
+    delete campoValor.dataset.sugeridoDecimo;
+  }
 
   const abertos = ((state.extras && state.extras.extras) || []).filter(
     (e) => String(e.funcionario_id) === String(id) && Number(e.saldo) > 0
@@ -7745,6 +7780,62 @@ async function onEscolherFuncionarioFolha(id, form) {
       : 'Ao escolher o funcionário, adiantamento e compras vêm preenchidos com o que ele tem em aberto.';
 }
 
+// 13º: o valor vem sugerido pelo salário base e pelos meses trabalhados no ano,
+// e a 2ª parcela já desconta a 1ª lançada. Vale e fiado não entram sozinhos no
+// 13º — são descontados na folha do mês; se o dono quiser descontar aqui,
+// digita.
+async function sugerirDecimoTerceiro(id, tipo, form) {
+  const aviso = form.querySelector('#aviso-adiantamento');
+  const valor = form.querySelector('input[name=salario]');
+  form.querySelector('input[name=adiantamento]').value = '';
+  form.querySelector('input[name=compras]').value = '';
+  if (!id) {
+    if (aviso) aviso.innerHTML = 'Escolha o funcionário: o valor do 13º vem sugerido pelo salário base e pelos meses trabalhados no ano.';
+    return;
+  }
+  const ano = String(form.querySelector('input[name=data_ref]').value || todayISO()).slice(0, 4);
+  const editando = state.folhaEditando;
+  let d;
+  try {
+    const consulta = new URLSearchParams({ funcionario_id: id, ano });
+    if (editando) consulta.set('ignorar', editando.id);
+    d = await apiFetch(`/folha/decimo-terceiro?${consulta}`);
+  } catch (err) {
+    if (aviso) aviso.innerHTML = escapar(err.message);
+    return;
+  }
+  const sugestao = d.sugestao[tipo] || 0;
+  // Na correção, o valor gravado fica; a conta aparece só como referência.
+  if (!editando) {
+    valor.value = sugestao ? sugestao.toFixed(2) : '';
+    valor.dataset.sugeridoDecimo = '1';
+  }
+  if (!aviso) return;
+  if (!d.salario) {
+    aviso.innerHTML = `${escapar(d.funcionario.nome)} está sem <strong>salário base</strong> no cadastro: digite o valor do 13º. Para ele vir calculado, preencha o salário em Cadastros › Funcionários.`;
+    return;
+  }
+  const partes = [
+    `13º de ${d.ano}: salário ${brl(d.salario)} × ${d.meses}/12 = <strong>${brl(d.total)}</strong>${
+      d.meses < 12 && d.admissao ? ` (admitido em ${dateBR(d.admissao)})` : ''
+    }.`,
+  ];
+  if (d.lancado.total) {
+    partes.push(`Já lançado de 13º neste ano: ${brl(d.lancado.total)}.`);
+  }
+  if (tipo === '13_1') {
+    partes.push(d.lancado['13_1'] || d.lancado['13_unica']
+      ? '<strong>A 1ª parcela (ou a parcela única) já foi lançada.</strong>'
+      : '1ª parcela: a metade, <strong>sem descontos</strong>, paga até <strong>30 de novembro</strong>.');
+  } else if (tipo === '13_2') {
+    partes.push('2ª parcela: o que falta, paga até <strong>20 de dezembro</strong>. Lance o INSS e o IRRF do 13º em <strong>Descontos</strong>.');
+  } else {
+    partes.push('Parcela única: o 13º inteiro, até <strong>30 de novembro</strong>. Lance o INSS e o IRRF em <strong>Descontos</strong>.');
+  }
+  partes.push('Confira: salário que mudou no ano, média de horas extras e comissões entram no 13º e não estão nesta conta.');
+  aviso.innerHTML = partes.join(' ');
+}
+
 // O mesmo formulário lança e corrige: os campos são os mesmos, e ter dois
 // formulários iguais só criaria a chance de um ganhar campo que o outro não tem.
 async function onNovoLancamentoFolha(ev) {
@@ -7759,6 +7850,7 @@ async function onNovoLancamentoFolha(ev) {
       body: JSON.stringify({
         funcionario_id: id,
         nome: funcionario ? funcionario.nome : '',
+        tipo: fd.get('tipo') || null,
         data_ref: fd.get('data_ref'),
         salario: fd.get('salario') || 0,
         bonificacao: fd.get('bonificacao') || 0,
