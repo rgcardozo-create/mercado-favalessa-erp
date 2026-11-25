@@ -39,6 +39,7 @@ router.post('/calculo-rescisao', asyncHandler(folha.calculoRescisao));
 router.get('/parametros', asyncHandler(parametros.listar));
 router.put('/parametros', asyncHandler(parametros.salvar));
 
+router.get('/decimo-terceiro', asyncHandler(folha.decimoTerceiro));
 router.get('/', asyncHandler(folha.listar));
 router.post('/', asyncHandler(folha.criar));
 router.put('/:id', asyncHandler(folha.atualizar));
